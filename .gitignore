@@ -1,0 +1,9 @@
+# 로컬 캔들 캐시 (SQLite) — 재생성 가능하므로 커밋 안 함
+data/
+*.db
+
+# 파이썬
+__pycache__/
+*.pyc
+.venv/
+venv/

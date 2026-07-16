@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "1.0",
+  "name": "MACD 골든/데드 크로스 양방향",
+  "description": "MACD가 signal 상향돌파 시 롱, 하향돌파는 청산 조건으로. ATR 기반 손절.",
+  "market": {
+    "exchange": "binance-futures",
+    "symbol": "ETHUSDT",
+    "timeframe": "1h",
+    "direction": "both"
+  },
+  "entry": {
+    "cross": "crossOver",
+    "left": { "indicator": "MACD", "params": { "fast": 12, "slow": 26, "signal": 9 } },
+    "right": { "indicator": "MACD_signal", "params": { "fast": 12, "slow": 26, "signal": 9 } }
+  },
+  "exit": {
+    "stopLoss": { "type": "atrMultiple", "value": 2.0 },
+    "condition": {
+      "cross": "crossUnder",
+      "left": { "indicator": "MACD", "params": { "fast": 12, "slow": 26, "signal": 9 } },
+      "right": { "indicator": "MACD_signal", "params": { "fast": 12, "slow": 26, "signal": 9 } }
+    },
+    "timeStop": { "maxBars": 48 }
+  },
+  "sizing": {
+    "leverage": 3,
+    "marginMode": "cross",
+    "size": { "type": "equityPercent", "value": 15 },
+    "minLiquidationBuffer": 20
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "1.0",
+  "name": "전저점 손절 + 리스크 사이징",
+  "description": "상승추세(200EMA 위)에서 RSI 35 눌림목 진입. 손절은 최근 20봉 전저점 아래(버퍼 0.05%), 익절은 ATR 3배. 트레이드당 자본 1%만 리스크.",
+  "market": {
+    "exchange": "binance-futures",
+    "symbol": "BTCUSDT",
+    "timeframe": "15m",
+    "direction": "long"
+  },
+  "entry": {
+    "op": "AND",
+    "children": [
+      { "left": { "indicator": "RSI", "period": 14 }, "cmp": "<", "right": 35 },
+      { "left": { "source": "close" }, "cmp": ">", "right": { "indicator": "EMA", "period": 200 } }
+    ]
+  },
+  "exit": {
+    "stopLoss": { "type": "swingLow", "lookback": 20, "bufferPercent": 0.05 },
+    "takeProfit": { "type": "atrMultiple", "value": 3.0 }
+  },
+  "sizing": {
+    "leverage": 5,
+    "marginMode": "isolated",
+    "size": { "type": "riskPercent", "value": 1.0 },
+    "minLiquidationBuffer": 5,
+    "maxConcurrentPositions": 1
+  },
+  "filter": {
+    "cooldownBars": 2,
+    "avoidFundingWindowMinutes": 5
+  }
+}

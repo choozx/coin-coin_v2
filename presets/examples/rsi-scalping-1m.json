@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "1.0",
+  "name": "1분봉 RSI 스켈핑",
+  "description": "1분봉 초단타. RSI 20 미만 과매도에서 롱, 짧은 익절 0.4% / 손절 0.3% + 트레일링. 10배 격리.",
+  "market": {
+    "exchange": "binance-futures",
+    "symbol": "BTCUSDT",
+    "timeframe": "1m",
+    "direction": "long"
+  },
+  "entry": {
+    "left": { "indicator": "RSI", "period": 14 },
+    "cmp": "<",
+    "right": 20
+  },
+  "exit": {
+    "takeProfit": { "type": "percent", "value": 0.4 },
+    "stopLoss": { "type": "percent", "value": 0.3 },
+    "trailing": { "enabled": true, "callbackPercent": 0.15, "activationPercent": 0.2 }
+  },
+  "sizing": {
+    "leverage": 10,
+    "marginMode": "isolated",
+    "size": { "type": "equityPercent", "value": 10 },
+    "minLiquidationBuffer": 3,
+    "maxConcurrentPositions": 1
+  },
+  "filter": {
+    "cooldownBars": 3,
+    "avoidFundingWindowMinutes": 2
+  }
+}

@@ -1,0 +1,8 @@
+# 캔들 수집 워치리스트 예시
+# 한 줄에 심볼 하나. # 뒤는 주석. 빈 줄 무시.
+# 사용: python3 -m engine.collector --watchlist watchlist.example.txt --loop 60
+
+BTCUSDT
+ETHUSDT
+SOLUSDT
+# XRPUSDT      # 주석으로 잠시 제외

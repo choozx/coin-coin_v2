@@ -1,0 +1,268 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://auto-trading/preset.schema.json",
+  "title": "매매 프리셋 (바이낸스 선물)",
+  "description": "유저가 UI 블록으로 조립한 매매기법의 직렬화 형태. 백테스트/페이퍼/실거래 엔진이 공유하는 공통 스키마.",
+  "type": "object",
+  "required": ["schemaVersion", "name", "market", "entry", "exit", "sizing"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "description": { "type": "string", "maxLength": 500 },
+
+    "market": {
+      "type": "object",
+      "required": ["symbol", "timeframe"],
+      "additionalProperties": false,
+      "properties": {
+        "exchange": { "const": "binance-futures" },
+        "symbol": { "type": "string", "examples": ["BTCUSDT", "ETHUSDT"] },
+        "timeframe": {
+          "type": "string",
+          "enum": ["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d"]
+        },
+        "direction": {
+          "type": "string",
+          "enum": ["long", "short", "both"],
+          "default": "both",
+          "description": "이 프리셋이 열 수 있는 포지션 방향"
+        }
+      }
+    },
+
+    "entry": {
+      "$ref": "#/$defs/condition",
+      "description": "진입 조건 트리. true가 되는 순간 sizing 규칙대로 진입."
+    },
+
+    "entryRules": {
+      "type": "array",
+      "description": "방향별 진입 규칙. 있으면 이걸 우선 사용(entry는 폴백/표시용). 순서대로 평가해 먼저 참인 규칙의 side로 진입. 각 규칙(AND 그룹)은 한 방향만.",
+      "items": {
+        "type": "object",
+        "required": ["side", "when"],
+        "additionalProperties": false,
+        "properties": {
+          "side": { "type": "string", "enum": ["long", "short"] },
+          "when": { "$ref": "#/$defs/condition" }
+        }
+      }
+    },
+
+    "exit": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "청산 규칙. 여러 개가 동시에 걸려있으면 먼저 충족되는 것이 발동.",
+      "properties": {
+        "takeProfit": { "$ref": "#/$defs/priceTarget" },
+        "stopLoss":   { "$ref": "#/$defs/priceTarget" },
+        "trailing": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["callbackPercent"],
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "callbackPercent": {
+              "type": "number", "exclusiveMinimum": 0, "maximum": 50,
+              "description": "고점(롱)/저점(숏) 대비 되돌림 % 도달 시 청산"
+            },
+            "activationPercent": {
+              "type": "number", "minimum": 0,
+              "description": "이 수익률 도달 후부터 트레일링 활성화 (0=즉시)"
+            }
+          }
+        },
+        "condition": {
+          "$ref": "#/$defs/condition",
+          "description": "지표 기반 청산 (예: RSI>70). 조건 만족 시 청산."
+        },
+        "timeStop": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["maxBars"],
+          "properties": {
+            "maxBars": { "type": "integer", "minimum": 1,
+              "description": "N개 캔들 지나도 안 닫히면 강제 청산" }
+          }
+        }
+      }
+    },
+
+    "sizing": {
+      "type": "object",
+      "required": ["leverage", "marginMode", "size"],
+      "additionalProperties": false,
+      "description": "레버리지 매매의 절반. 얼마나 크게, 얼마나 위험하게 진입할지.",
+      "properties": {
+        "leverage": { "type": "integer", "minimum": 1, "maximum": 125 },
+        "marginMode": { "type": "string", "enum": ["isolated", "cross"], "default": "isolated" },
+        "size": {
+          "type": "object",
+          "required": ["type", "value"],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["equityPercent", "fixedQuote", "fixedBase", "riskPercent"],
+              "description": "equityPercent=계정자본%를 증거금으로, fixedQuote=고정USDT, fixedBase=고정코인수량, riskPercent=손절까지 자본의 X%만 잃도록 역산(손절 필수)"
+            },
+            "value": { "type": "number", "exclusiveMinimum": 0 }
+          }
+        },
+        "minLiquidationBuffer": {
+          "type": "number", "minimum": 0, "maximum": 100,
+          "description": "진입가~청산가 사이 최소 여유 %. 이보다 좁으면 진입 스킵 (안전장치)"
+        },
+        "maxConcurrentPositions": {
+          "type": "integer", "minimum": 1, "default": 1,
+          "description": "이 프리셋이 동시에 유지할 수 있는 포지션 수"
+        },
+        "pyramiding": {
+          "type": "boolean", "default": false,
+          "description": "같은 방향 추가 진입(불타기) 허용 여부"
+        }
+      }
+    },
+
+    "filter": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "언제 아예 매매를 안 할지. 있으면 진입 신호가 떠도 막는다.",
+      "properties": {
+        "maxSpreadPercent": { "type": "number", "minimum": 0,
+          "description": "호가 스프레드가 이보다 크면 진입 안 함" },
+        "avoidFundingWindowMinutes": { "type": "integer", "minimum": 0,
+          "description": "펀딩 정산 N분 전부터는 신규 진입 회피" },
+        "maxFundingRate": { "type": "number",
+          "description": "펀딩비가 불리하게 이 값 넘으면 진입 스킵" },
+        "cooldownBars": { "type": "integer", "minimum": 0,
+          "description": "직전 청산 후 N개 캔들 동안 재진입 금지" },
+        "tradingHoursUTC": {
+          "type": "array",
+          "description": "진입 허용 시간대(UTC). 비면 24시간. 예: [{from:'00:00',to:'08:00'}]",
+          "items": {
+            "type": "object",
+            "required": ["from", "to"],
+            "additionalProperties": false,
+            "properties": {
+              "from": { "type": "string", "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$" },
+              "to":   { "type": "string", "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$" }
+            }
+          }
+        }
+      }
+    }
+  },
+
+  "$defs": {
+    "priceTarget": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "description": "익절/손절 목표가. type에 따라 value 또는 lookback 사용.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["percent", "atrMultiple", "price", "swingLow", "swingHigh"],
+          "description": "percent=진입가대비%, atrMultiple=ATR배수, price=절대가격, swingLow=전저점(롱손절/숏익절), swingHigh=전고점(롱익절/숏손절)"
+        },
+        "value": { "type": "number", "exclusiveMinimum": 0 },
+        "lookback": { "type": "integer", "minimum": 2,
+          "description": "swing 타입: 전저/전고를 찾을 과거 봉 개수" },
+        "bufferPercent": { "type": "number", "minimum": 0,
+          "description": "swing 타입: 스탑사냥 회피용 버퍼 %. 전저점 -buffer%, 전고점 +buffer%" }
+      },
+      "allOf": [
+        { "if": { "properties": { "type": { "enum": ["percent", "atrMultiple", "price"] } } },
+          "then": { "required": ["value"] } },
+        { "if": { "properties": { "type": { "enum": ["swingLow", "swingHigh"] } } },
+          "then": { "required": ["lookback"] } }
+      ]
+    },
+
+    "condition": {
+      "description": "조건 트리. 논리 노드(AND/OR/NOT) 또는 잎 노드(비교/교차) 중 하나.",
+      "oneOf": [
+        { "$ref": "#/$defs/logicNode" },
+        { "$ref": "#/$defs/compareNode" },
+        { "$ref": "#/$defs/crossNode" }
+      ]
+    },
+
+    "logicNode": {
+      "type": "object",
+      "required": ["op", "children"],
+      "additionalProperties": false,
+      "properties": {
+        "op": { "type": "string", "enum": ["AND", "OR", "NOT"] },
+        "children": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/condition" }
+        }
+      }
+    },
+
+    "compareNode": {
+      "type": "object",
+      "required": ["left", "cmp", "right"],
+      "additionalProperties": false,
+      "description": "두 값 비교. 예: RSI(14) < 30, price > EMA(200)",
+      "properties": {
+        "left":  { "$ref": "#/$defs/operand" },
+        "cmp":   { "type": "string", "enum": ["<", "<=", ">", ">=", "==", "!="] },
+        "right": { "$ref": "#/$defs/operand" }
+      }
+    },
+
+    "crossNode": {
+      "type": "object",
+      "required": ["cross", "left", "right"],
+      "additionalProperties": false,
+      "description": "교차 감지. 예: MACD가 signal을 상향 돌파(crossOver)",
+      "properties": {
+        "cross": { "type": "string", "enum": ["crossOver", "crossUnder"] },
+        "left":  { "$ref": "#/$defs/operand" },
+        "right": { "$ref": "#/$defs/operand" }
+      }
+    },
+
+    "operand": {
+      "description": "값 하나. 상수, 시세(price/volume), 또는 지표.",
+      "oneOf": [
+        { "type": "number" },
+        {
+          "type": "object",
+          "required": ["source"],
+          "additionalProperties": false,
+          "properties": {
+            "source": { "type": "string", "enum": ["open", "high", "low", "close", "price", "volume"] }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["indicator"],
+          "additionalProperties": false,
+          "properties": {
+            "indicator": {
+              "type": "string",
+              "enum": ["SMA", "EMA", "RSI", "MACD", "MACD_signal", "MACD_hist",
+                       "BB_upper", "BB_lower", "BB_mid", "ATR", "STOCH_K", "STOCH_D",
+                       "STOCHRSI_K", "STOCHRSI_D", "CCI", "MFI", "RVOL", "VWAP",
+                       "CDL_BULLREV", "CDL_BEARREV", "CDL_ENGULFING", "CDL_HAMMER",
+                       "CDL_HANGINGMAN", "CDL_MORNINGSTAR", "CDL_EVENINGSTAR",
+                       "CDL_PIERCING", "CDL_DARKCLOUDCOVER"]
+            },
+            "period": { "type": "integer", "minimum": 1 },
+            "params": {
+              "type": "object",
+              "description": "지표별 추가 파라미터 (예: MACD의 fast/slow/signal, BB의 stddev)",
+              "additionalProperties": { "type": "number" }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

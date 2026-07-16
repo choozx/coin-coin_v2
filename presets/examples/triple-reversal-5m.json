@@ -1,0 +1,128 @@
+{
+  "schemaVersion": "1.0",
+  "name": "3층 반전 롱 (EMA50·RSI·VWAP·StochRSI)",
+  "market": {
+    "exchange": "binance-futures",
+    "symbol": "BTCUSDT",
+    "timeframe": "5m",
+    "direction": "long"
+  },
+  "entry": {
+    "op": "AND",
+    "children": [
+      {
+        "left": {
+          "source": "close"
+        },
+        "cmp": ">",
+        "right": {
+          "indicator": "EMA",
+          "period": 50
+        }
+      },
+      {
+        "left": {
+          "indicator": "RSI",
+          "period": 14
+        },
+        "cmp": "<",
+        "right": 45
+      },
+      {
+        "left": {
+          "source": "close"
+        },
+        "cmp": "<",
+        "right": {
+          "indicator": "VWAP"
+        }
+      },
+      {
+        "cross": "crossOver",
+        "left": {
+          "indicator": "STOCHRSI_K",
+          "period": 14
+        },
+        "right": {
+          "indicator": "STOCHRSI_D",
+          "period": 14
+        }
+      }
+    ]
+  },
+  "entryRules": [
+    {
+      "side": "long",
+      "when": {
+        "op": "AND",
+        "children": [
+          {
+            "left": {
+              "source": "close"
+            },
+            "cmp": ">",
+            "right": {
+              "indicator": "EMA",
+              "period": 50
+            }
+          },
+          {
+            "left": {
+              "indicator": "RSI",
+              "period": 14
+            },
+            "cmp": "<",
+            "right": 45
+          },
+          {
+            "left": {
+              "source": "close"
+            },
+            "cmp": "<",
+            "right": {
+              "indicator": "VWAP"
+            }
+          },
+          {
+            "cross": "crossOver",
+            "left": {
+              "indicator": "STOCHRSI_K",
+              "period": 14
+            },
+            "right": {
+              "indicator": "STOCHRSI_D",
+              "period": 14
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "exit": {
+    "stopLoss": {
+      "type": "atrMultiple",
+      "value": 1.5
+    },
+    "takeProfit": {
+      "type": "atrMultiple",
+      "value": 2.5
+    },
+    "timeStop": {
+      "maxBars": 24
+    }
+  },
+  "sizing": {
+    "leverage": 3,
+    "marginMode": "isolated",
+    "size": {
+      "type": "equityPercent",
+      "value": 15.0
+    },
+    "minLiquidationBuffer": 8.0
+  },
+  "filter": {
+    "cooldownBars": 3,
+    "avoidFundingWindowMinutes": 5
+  },
+  "description": "방향필터(가격>EMA50) & 진입구역(RSI<45 눌림 & 가격<VWAP) & 방아쇠(StochRSI 골든크로스). ATR 1.5x 손절 / 2.5x 익절 / 24봉 시간청산, 3배 격리, 5m. A&B&C&D 단일 그룹."
+}

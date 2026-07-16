@@ -1,0 +1,1192 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>백테스트 스튜디오</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --line:#2a2f3a;
+          --fg:#e6e9ef; --mut:#8b93a3; --accent:#4f9dff; --up:#26d07c; --down:#ff5c6c; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+         background:var(--bg); color:var(--fg); font-size:14px; }
+  header { padding:14px 20px; border-bottom:1px solid var(--line); display:flex;
+           align-items:baseline; gap:12px; }
+  header h1 { font-size:16px; margin:0; font-weight:600; }
+  header .sub { color:var(--mut); font-size:12px; }
+  .wrap { display:grid; grid-template-columns:360px 1fr; gap:0; min-height:calc(100vh - 50px); }
+  .panel { padding:16px 18px; }
+  .controls { border-right:1px solid var(--line); overflow-y:auto; }
+  .group { margin-bottom:18px; }
+  .group h3 { font-size:11px; text-transform:uppercase; letter-spacing:.06em;
+              color:var(--mut); margin:0 0 10px; font-weight:600; }
+  /* 전략 구획 밴드 (진입 전략 / 청산 전략 / 포지션·리스크) */
+  .band { display:flex; align-items:center; gap:8px; margin:22px 0 12px; padding-bottom:7px;
+          border-bottom:2px solid var(--accent); color:var(--fg); font-size:13px; font-weight:700; }
+  .band:first-of-type { margin-top:6px; }
+  .band .bnum { background:var(--accent); color:#fff; border-radius:5px; padding:1px 7px; font-size:11px; }
+  .band .bsub { color:var(--mut); font-weight:400; font-size:11px; margin-left:auto; }
+  .row { display:flex; align-items:center; justify-content:space-between; margin-bottom:9px; gap:8px; }
+  .row label { color:var(--fg); flex:1; }
+  .row .hint { color:var(--mut); font-size:11px; }
+  input[type=number], input[type=text], select {
+    background:var(--panel2); color:var(--fg); border:1px solid var(--line);
+    border-radius:6px; padding:6px 8px; width:120px; font-size:13px; }
+  input[type=text].sym { width:130px; }
+  input[type=checkbox] { width:16px; height:16px; accent-color:var(--accent); }
+  button { background:var(--accent); color:#fff; border:0; border-radius:7px;
+           padding:11px; width:100%; font-size:14px; font-weight:600; cursor:pointer; margin-top:6px; }
+  button:disabled { opacity:.5; cursor:wait; }
+  .presets { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:14px; }
+  .presets button { width:auto; padding:6px 10px; font-size:12px; background:var(--panel2);
+                    border:1px solid var(--line); font-weight:500; margin:0; }
+  .results { overflow-y:auto; }
+  .metrics { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:18px; }
+  .metric { background:var(--panel); border:1px solid var(--line); border-radius:9px; padding:12px 14px; }
+  .metric .k { color:var(--mut); font-size:11px; margin-bottom:5px; }
+  .metric .v { font-size:20px; font-weight:600; }
+  .v.up { color:var(--up); } .v.down { color:var(--down); }
+  .chartbox { background:var(--panel); border:1px solid var(--line); border-radius:9px;
+              padding:14px; margin-bottom:16px; }
+  .chartbox h3 { margin:0 0 10px; font-size:12px; color:var(--mut); font-weight:600; }
+  canvas { width:100%; height:240px; display:block; }
+  .bars { display:flex; flex-direction:column; gap:6px; }
+  .bar { display:flex; align-items:center; gap:10px; }
+  .bar .name { width:100px; color:var(--mut); font-size:12px; }
+  .bar .track { flex:1; background:var(--panel2); border-radius:4px; height:16px; overflow:hidden; }
+  .bar .fill { height:100%; background:var(--accent); }
+  .bar .cnt { width:44px; text-align:right; font-size:12px; }
+  .empty { color:var(--mut); text-align:center; padding:60px 20px; }
+  .err { color:var(--down); background:#2a1418; border:1px solid #4a2028;
+         padding:12px; border-radius:8px; margin-bottom:14px; }
+  .note { color:var(--mut); font-size:11px; margin:-4px 0 8px; }
+  details { margin-top:10px; } summary { cursor:pointer; color:var(--mut); font-size:12px; }
+  pre { background:var(--panel2); padding:12px; border-radius:8px; overflow:auto; font-size:12px; }
+  .mini { width:64px; padding:6px 7px; font-size:13px; }
+  /* 인라인 스윕 토글 — 백테스트 폼의 각 파라미터 옆 "범위" 체크박스 */
+  .swtog { display:inline-flex; align-items:center; gap:3px; font-size:11px; color:var(--mut);
+           cursor:pointer; white-space:nowrap; margin-left:6px; }
+  .swtog input[type=checkbox] { width:14px; height:14px; }
+  .swrange { display:none; gap:6px; margin:3px 0 8px; padding:6px 8px; background:var(--panel2);
+             border:1px solid var(--accent); border-radius:6px; align-items:center; }
+  .swrange.on { display:flex; flex-wrap:wrap; }
+  .swrange input.r { width:56px; }
+  .swrange input.r::placeholder { color:var(--mut); font-size:10px; }
+  /* 진입 조건 인라인 편집 */
+  .cond-item2 { background:var(--panel2); border:1px solid var(--line); border-radius:6px;
+                padding:7px 10px; margin-bottom:6px; }
+  .ci-head { display:flex; align-items:center; gap:8px; }
+  .ci-head select { flex:1; font-weight:600; }
+  .ci-head button { width:auto; margin:0; padding:0 6px; background:transparent; border:0;
+                    color:var(--down); font-size:14px; }
+  .ci-body { display:flex; flex-direction:column; gap:5px; margin-top:7px;
+             border-top:1px dashed var(--line); padding-top:7px; }
+  .ci-body .ci-desc { color:var(--accent); font-size:12px; font-weight:600; margin-bottom:2px; }
+  .addcond { width:auto; margin:2px 0 0; padding:5px 10px; font-size:12px; font-weight:500;
+             background:var(--panel2); border:1px dashed var(--line); color:var(--fg); }
+  .pfld { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  .pfld .pl { color:var(--mut); font-size:11px; min-width:54px; }
+  .pfld .mini, .pfld select { width:74px; }
+  #comboCount { margin-top:10px; padding:8px 10px; background:var(--panel2); border-radius:6px;
+                font-size:12px; color:var(--fg); }
+  .opt-tab { border-collapse:collapse; width:100%; font-size:12px; }
+  .opt-tab th, .opt-tab td { padding:5px 8px; text-align:right; border-bottom:1px solid var(--line); white-space:nowrap; }
+  .opt-tab th { color:var(--mut); font-weight:600; }
+  .opt-tab tr.rob td { background:rgba(38,208,124,.09); }
+  .opt-tab tr.bad td { background:rgba(255,92,108,.06); }
+  .apply { padding:3px 9px; font-size:11px; background:var(--panel2); border:1px solid var(--line);
+           width:auto; margin:0; color:var(--fg); }
+  #heat { height:auto; }
+  .tabs { margin-left:auto; display:flex; gap:4px; }
+  .tab { padding:6px 14px; font-size:13px; background:var(--panel2); border:1px solid var(--line);
+         border-radius:7px; cursor:pointer; color:var(--mut); }
+  .tab.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+  input[type=date] { background:var(--panel2); color:var(--fg); border:1px solid var(--line);
+                     border-radius:6px; padding:5px 8px; font-size:13px; }
+  .cache-row { display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid var(--line);
+               font-size:12px; }
+  .cache-row .cs { color:var(--fg); font-weight:600; } .cache-row .cr { color:var(--mut); }
+  .progress { height:10px; background:var(--panel2); border-radius:5px; overflow:hidden; margin:12px 0 6px; }
+  .progress .pfill { height:100%; width:0%; background:var(--accent); transition:width .2s; }
+  .combo { position:relative; }
+  .dropdown { position:absolute; top:100%; right:0; min-width:170px; z-index:30; margin-top:3px;
+    background:var(--panel); border:1px solid var(--line); border-radius:7px; max-height:250px;
+    overflow-y:auto; box-shadow:0 6px 20px rgba(0,0,0,.4); }
+  .dropdown .opt { padding:7px 10px; cursor:pointer; font-size:13px; display:flex;
+    justify-content:space-between; gap:10px; align-items:center; }
+  .dropdown .opt:hover, .dropdown .opt.active { background:var(--panel2); }
+  .dropdown .opt .r { color:var(--mut); font-size:10px; white-space:nowrap; }
+  .dropdown .empty2 { padding:9px 10px; color:var(--mut); font-size:12px; }
+  .ghead { display:flex; align-items:center; gap:6px; cursor:pointer; user-select:none; margin:0 0 10px; }
+  .ghead .chev { color:var(--mut); font-size:10px; transition:transform .15s; }
+  .group.open .ghead .chev { transform:rotate(90deg); }
+  .ghead .ghint { margin-left:auto; color:var(--accent); font-size:11px; font-weight:500;
+                  text-transform:none; letter-spacing:0; }
+  .group-body { display:none; }
+  .group.open .group-body { display:block; }
+  .cond-item { display:flex; justify-content:space-between; align-items:center; gap:8px;
+    background:var(--panel2); border:1px solid var(--line); border-radius:6px;
+    padding:6px 10px; margin-bottom:6px; font-size:12px; }
+  .cond-item button { width:auto; margin:0; padding:0 6px; background:transparent; border:0;
+    color:var(--down); font-size:14px; }
+  #addGroup { font-weight:500; }
+  .cgroup { border:1px solid var(--line); border-radius:8px; padding:8px 10px 4px; margin-bottom:2px; }
+  .cgroup .gt { color:var(--mut); font-size:10px; margin-bottom:6px; text-transform:uppercase; letter-spacing:.04em; }
+  .or-sep { text-align:center; color:var(--accent); font-size:11px; font-weight:700; margin:5px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>백테스트 스튜디오</h1>
+  <span class="sub">바이낸스 USDⓈ-M 선물 · API 키 불필요</span>
+  <div class="tabs">
+    <div class="tab active" data-tab="backtest">📊 백테스트</div>
+    <div class="tab" data-tab="collect">📥 데이터 수집</div>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="panel controls">
+   <div id="pane-backtest">
+    <div class="presets">
+      <button data-preset="scalp">1m 스켈핑</button>
+      <button data-preset="rsi15">15m RSI 반등</button>
+      <button data-preset="meanrevert">RSI 역추세</button>
+      <button data-preset="swing">전저점+리스크</button>
+      <button data-preset="macd">MACD 추세</button>
+      <button data-preset="triple">3층 반전(EMA·RSI·VWAP·StochRSI)</button>
+    </div>
+
+    <div class="group">
+      <h3>시장 / 데이터</h3>
+      <div class="row"><label>심볼</label>
+        <div class="combo">
+          <input type="text" class="sym" id="symbol" value="BTCUSDT" autocomplete="off" placeholder="수집된 심볼">
+          <div class="dropdown" id="symDrop" style="display:none"></div>
+        </div>
+      </div>
+      <div class="note" id="availInfo" style="margin:-2px 0 8px">보유 기간 확인 중...</div>
+      <div class="row"><label>타임프레임</label>
+        <select id="timeframe">
+          <option>1m</option><option>3m</option><option>5m</option>
+          <option selected>15m</option><option>30m</option><option>1h</option>
+        </select></div>
+      <div class="row"><label>기간(일)</label><input type="number" id="days" value="14" min="1" max="365" step="1"></div>
+      <div class="row"><label>초기자본</label><input type="number" id="equity" value="10000" step="1000"></div>
+    </div>
+
+    <div class="band"><span class="bnum">1</span> 진입 전략 <span class="bsub">언제 들어갈까</span></div>
+    <div class="group">
+      <h3>진입 (조건 조합)</h3>
+      <div class="note"><b>진입 그룹</b>을 만들고 그 안에 조건을 쌓아. <b>그룹 안 = 모두 만족(AND)</b>, <b>그룹 간 = 하나만 만족(OR)</b>. 그룹마다 방향(롱/숏).<br>예: (A 그리고 B) <b>또는</b> (C 그리고 D)</div>
+      <div id="groupsView"></div>
+      <button id="addGroup" style="background:var(--panel2); border:1px solid var(--line); color:var(--fg)">+ 진입 그룹 만들기</button>
+    </div>
+
+    <div class="band"><span class="bnum">2</span> 청산 전략 <span class="bsub">언제·어떻게 나올까</span></div>
+    <div class="note" style="margin:-4px 0 10px">손절·익절·지표/시간 청산·트레일링 중 <b>먼저 닿는 것</b>이 발동. 아무것도 안 켜면 강제청산까지 보유.</div>
+    <div class="group">
+      <h3>손절 (Stop Loss)</h3>
+      <div class="row"><label>방식</label>
+        <select id="slType">
+          <option value="off">없음</option>
+          <option value="percent" selected>고정 %</option>
+          <option value="atrMultiple">ATR 배수</option>
+          <option value="swingLow">전저점</option>
+        </select></div>
+      <div class="row" data-when="sl-value"><label id="slValueLabel">손절 % (가격)</label>
+        <input type="number" id="slValue" value="1.5" step="0.1" min="0"></div>
+      <div class="row" data-when="sl-swing"><label>전저점 룩백(봉)</label>
+        <input type="number" id="slLookback" value="20" min="2"></div>
+      <div class="row" data-when="sl-swing"><label>버퍼 %</label>
+        <input type="number" id="slBuffer" value="0.05" step="0.05" min="0"></div>
+    </div>
+
+    <div class="group">
+      <h3>익절 (Take Profit)</h3>
+      <div class="row"><label>방식</label>
+        <select id="tpType">
+          <option value="off">없음</option>
+          <option value="percent" selected>고정 %</option>
+          <option value="atrMultiple">ATR 배수</option>
+          <option value="swingHigh">전고점</option>
+        </select></div>
+      <div class="row" data-when="tp-value"><label id="tpValueLabel">익절 % (가격)</label>
+        <input type="number" id="tpValue" value="3" step="0.1" min="0"></div>
+      <div class="row" data-when="tp-swing"><label>전고점 룩백(봉)</label>
+        <input type="number" id="tpLookback" value="20" min="2"></div>
+      <div class="row" data-when="tp-swing"><label>버퍼 %</label>
+        <input type="number" id="tpBuffer" value="0.05" step="0.05" min="0"></div>
+    </div>
+
+    <div class="group">
+      <h3>지표 / 시간 청산</h3>
+      <div class="row"><label><input type="checkbox" id="exitCondEnabled"> 지표 복귀 청산</label>
+        <select id="exitCondInd"><option value="RSI" selected>RSI</option>
+          <option value="STOCH_K">스토캐스틱 %K</option>
+          <option value="CCI">CCI</option>
+          <option value="MFI">MFI</option></select></div>
+      <div class="row"><label class="hint">지표 기간</label>
+        <input type="number" id="exitCondPeriod" value="14" min="1" max="200"></div>
+      <div class="row"><label class="hint">복귀 조건</label>
+        <select id="exitCondCmp"><option value="&gt;" selected>&gt; 초과</option>
+          <option value="&lt;">&lt; 미만</option></select></div>
+      <div class="row"><label class="hint">기준값 (복귀 목표)</label>
+        <input type="number" id="exitCondValue" value="55" min="1" max="99"></div>
+      <div class="note">역추세(과매도 진입)엔 지표가 평균으로 복귀하면 청산이 정석 (RSI&gt;55, Stoch%K&gt;80 등)</div>
+      <div class="row"><label>시간 청산 (봉, 0=끄기)</label>
+        <input type="number" id="timeStopBars" value="0" min="0"></div>
+    </div>
+
+    <div class="group">
+      <h3>트레일링</h3>
+      <div class="row"><label><input type="checkbox" id="trailingEnabled"> 사용 (콜백 %)</label>
+        <input type="number" id="trailingCallback" value="0.8" step="0.05" min="0"></div>
+      <div class="row"><label class="hint">활성화 %</label>
+        <input type="number" id="trailingActivation" value="1" step="0.05" min="0"></div>
+    </div>
+
+    <div class="band"><span class="bnum">3</span> 포지션 · 리스크 <span class="bsub">수량 · 레버리지 · 필터</span></div>
+    <div class="group">
+      <h3>사이징 (레버리지)</h3>
+      <div class="row"><label>레버리지 (배)</label><input type="number" id="leverage" value="5" min="1" max="125"></div>
+      <div class="row"><label>사이징 방식</label>
+        <select id="sizeType">
+          <option value="equityPercent" selected>증거금 %</option>
+          <option value="riskPercent">리스크 %</option>
+        </select></div>
+      <div class="row"><label id="sizeValueLabel">증거금 비중 %</label>
+        <input type="number" id="sizeValue" value="10" min="0.1" step="0.5"></div>
+      <div class="note" id="sizeNote"></div>
+      <div class="row"><label>청산 안전버퍼 %</label><input type="number" id="minLiqBuffer" value="5" step="1" min="0"></div>
+    </div>
+
+    <div class="group">
+      <h3>필터</h3>
+      <div class="row"><label>재진입 쿨다운(봉)</label><input type="number" id="cooldownBars" value="3" min="0"></div>
+      <div class="row"><label>펀딩 회피(분)</label><input type="number" id="avoidFundingMin" value="2" min="0"></div>
+    </div>
+
+    <button id="run">▶ 백테스트 실행</button>
+
+    <div class="group opt" style="margin-top:22px; border-top:1px solid var(--line); padding-top:16px;">
+      <h3>🔍 파라미터 최적화</h3>
+      <div class="note">위 설정에서 값 옆의 <b>"범위" 체크박스</b>를 켜면 그 값을 <b>최소~최대</b>를 <b>단위</b>씩 옮겨가며 전 조합 테스트해.<br>
+        진입 지표·손절·레버리지 등 <b>지금 구성한 그대로</b> 최적화 — 체크한 것만 동적으로 바뀜. Calmar(수익÷MDD) 기준 · 앞 70% 최적화 → 뒤 30% 검증.</div>
+      <div id="comboCount"></div>
+      <div class="row" style="margin-top:12px"><label>최소 트레이드 수</label><input type="number" id="minTrades" value="15" min="1"></div>
+      <div class="row"><label><input type="checkbox" id="useOOS" checked> OOS 검증 (과최적화 방어)</label></div>
+      <button id="optimize" style="background:#7c5cff">🔍 최적화 실행</button>
+    </div>
+   </div><!-- /pane-backtest -->
+
+   <div id="pane-collect" style="display:none">
+    <div class="group">
+      <h3>📥 캔들 수집</h3>
+      <div class="note">과거 시작일부터 <b>지금까지</b>의 1분봉을 <b>최신→과거 순</b>으로 수집.
+        이미 있는 구간은 스킵, 중간에 <b>중지</b>해도 최신 구간은 빈틈없이 채워져.</div>
+      <div class="row"><label>심볼</label><input type="text" class="sym" id="colSymbol" value="BTCUSDT"></div>
+      <div class="row"><label>시작일 (UTC · 과거)</label><input type="date" id="colStart"></div>
+      <div class="row"><label>종료</label><span class="cr">지금(now) 고정</span></div>
+      <div id="colProgWrap" style="display:none">
+        <div class="progress"><div class="pfill" id="colProg"></div></div>
+        <div class="note" id="colProgText"></div>
+      </div>
+      <button id="collect">📥 수집 시작</button>
+      <button id="colStop" style="display:none; background:var(--down)">■ 중지</button>
+      <div class="note" id="colInfo" style="margin-top:10px"></div>
+    </div>
+    <div class="group">
+      <h3>캐시 현황</h3>
+      <div id="cacheInfo" class="note">불러오는 중...</div>
+    </div>
+   </div><!-- /pane-collect -->
+  </div>
+
+  <div class="panel results">
+    <div id="err"></div>
+    <div id="out"><div class="empty">왼쪽에서 값을 조절하고 <b>백테스트 실행</b>을 눌러봐.<br>
+      상단 프리셋 버튼으로 시작점을 불러올 수 있어.</div></div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const FIELDS = ["symbol","timeframe","days","equity",
+  "slType","slValue","slLookback","slBuffer",
+  "tpType","tpValue","tpLookback","tpBuffer",
+  "exitCondEnabled","exitCondInd","exitCondPeriod","exitCondCmp","exitCondValue","timeStopBars",
+  "trailingEnabled","trailingCallback","trailingActivation",
+  "leverage","sizeType","sizeValue","minLiqBuffer","cooldownBars","avoidFundingMin"];
+
+function collect() {
+  const p = {};
+  for (const f of FIELDS) {
+    const el = $(f);
+    p[f] = el.type === "checkbox" ? el.checked : el.value;
+  }
+  p.entryGroups = entryGroups.map(g => ({ side: g.side, conditions: g.conds.map(c => c.node) }));
+  return p;   // ((A&B)→롱) or ((C&D)→숏)
+}
+
+// ---- 진입 조건 빌더 ----
+// 숫자 필드에 sweep:{path,def} 를 달면 → 그 조건 옆에 "범위" 체크박스가 생겨 최적화 스윕 대상이 됨.
+// path=노드 내 경로(서버 @entry 오버라이드용), def=[최소,최대,단위] 기본 범위.
+// 지표 하나당 한 항목. 비교 방식(가격대비/크로스 등)은 조건 안에서 선택.
+// fields는 배열 또는 (f)=>배열(모드에 따라 필드셋이 바뀌는 EMA·StochRSI). reflow:true면 그 값 바뀔 때 폼 재렌더.
+const _MODE_MA = {k:"mode",label:"방식",type:"select",opts:[["price","가격 대비"],["cross","크로스"]],v:"price",reflow:true};
+const _MODE_OSC = {k:"mode",label:"방식",type:"select",opts:[["level","기준값 비교"],["cross","크로스(K·D)"]],v:"level",reflow:true};
+const COND_TYPES = {
+  rsi: { label:"RSI",
+    fields:[{k:"period",label:"기간",v:14,sweep:{path:"left.period",def:[7,21,7]}},{k:"cmp",label:"조건",type:"cmp"},{k:"value",label:"기준값",v:30,sweep:{path:"right",def:[15,35,5]}}],
+    build:f=>({left:{indicator:"RSI",period:+f.period},cmp:f.cmp,right:+f.value}),
+    desc:n=>`RSI(${n.left.period}) ${n.cmp} ${n.right}` },
+  ema: { label:"EMA",
+    fields:f=> f.mode==="cross"
+      ? [_MODE_MA, {k:"cross",label:"방향",type:"cross"},
+         {k:"fast",label:"단기 기간",v:20,sweep:{path:"left.period",def:[10,30,10]}},
+         {k:"slow",label:"장기 기간",v:50,sweep:{path:"right.period",def:[40,80,20]}}]
+      : [_MODE_MA, {k:"cmp",label:"조건",type:"cmp",v:">"},
+         {k:"period",label:"기간",v:200,sweep:{path:"right.period",def:[50,250,50]}}],
+    build:f=> f.mode==="cross"
+      ? {cross:f.cross,left:{indicator:"EMA",period:+f.fast},right:{indicator:"EMA",period:+f.slow}}
+      : {left:{source:"close"},cmp:f.cmp,right:{indicator:"EMA",period:+f.period}},
+    desc:n=> n.cross!==undefined
+      ? `EMA(${n.left.period}) ${n.cross==="crossOver"?"▲골든":"▼데드"} EMA(${n.right.period})`
+      : `가격 ${n.cmp} EMA(${n.right.period})` },
+  sma: { label:"SMA",
+    fields:[{k:"cmp",label:"조건",type:"cmp",v:">"},{k:"period",label:"기간",v:50,sweep:{path:"right.period",def:[20,100,20]}}],
+    build:f=>({left:{source:"close"},cmp:f.cmp,right:{indicator:"SMA",period:+f.period}}),
+    desc:n=>`가격 ${n.cmp} SMA(${n.right.period})` },
+  macd: { label:"MACD",
+    fields:[{k:"cross",label:"방향",type:"cross"},{k:"fast",label:"fast",v:12},{k:"slow",label:"slow",v:26},{k:"signal",label:"signal",v:9}],
+    build:f=>({cross:f.cross,left:{indicator:"MACD",params:{fast:+f.fast,slow:+f.slow,signal:+f.signal}},
+               right:{indicator:"MACD_signal",params:{fast:+f.fast,slow:+f.slow,signal:+f.signal}}}),
+    desc:n=>`MACD ${n.cross==="crossOver"?"▲골든크로스":"▼데드크로스"}` },
+  vwap: { label:"VWAP",
+    fields:[{k:"cmp",label:"조건",type:"cmp",v:"<"}],
+    build:f=>({left:{source:"close"},cmp:f.cmp,right:{indicator:"VWAP"}}),
+    desc:n=>`가격 ${n.cmp} VWAP` },
+  bb: { label:"볼린저밴드",
+    fields:[{k:"band",label:"밴드",type:"select",opts:[["lower","하단(과매도)"],["upper","상단(과매수)"]],v:"lower"},
+            {k:"period",label:"기간",v:20,sweep:{path:"right.period",def:[10,30,10]}},{k:"stddev",label:"표준편차",v:2,sweep:{path:"right.params.stddev",def:[1.5,3,0.5]}}],
+    build:f=>({left:{source:"close"},cmp:f.band==="lower"?"<":">",
+               right:{indicator:f.band==="lower"?"BB_lower":"BB_upper",period:+f.period,params:{stddev:+f.stddev}}}),
+    desc:n=>`가격 ${n.cmp} BB ${n.right.indicator==="BB_lower"?"하단":"상단"}(${n.right.period})` },
+  stoch: { label:"스토캐스틱",
+    fields:[{k:"period",label:"기간",v:14,sweep:{path:"left.period",def:[7,21,7]}},{k:"cmp",label:"조건",type:"cmp"},{k:"value",label:"기준값",v:20,sweep:{path:"right",def:[10,30,10]}}],
+    build:f=>({left:{indicator:"STOCH_K",period:+f.period},cmp:f.cmp,right:+f.value}),
+    desc:n=>`Stoch %K(${n.left.period}) ${n.cmp} ${n.right}` },
+  stochRsi: { label:"StochRSI",
+    fields:f=> f.mode==="cross"
+      ? [_MODE_OSC, {k:"cross",label:"방향",type:"cross"}, {k:"period",label:"기간",v:14}]
+      : [_MODE_OSC, {k:"period",label:"기간",v:14,sweep:{path:"left.period",def:[7,21,7]}},
+         {k:"cmp",label:"조건",type:"cmp",v:"<"}, {k:"value",label:"기준값",v:20,sweep:{path:"right",def:[10,30,10]}}],
+    build:f=> f.mode==="cross"
+      ? {cross:f.cross,left:{indicator:"STOCHRSI_K",period:+f.period},right:{indicator:"STOCHRSI_D",period:+f.period}}
+      : {left:{indicator:"STOCHRSI_K",period:+f.period},cmp:f.cmp,right:+f.value},
+    desc:n=> n.cross!==undefined
+      ? `StochRSI %K ${n.cross==="crossOver"?"▲골든":"▼데드"} %D(${n.left.period})`
+      : `StochRSI %K(${n.left.period}) ${n.cmp} ${n.right}` },
+  cci: { label:"CCI",
+    fields:[{k:"period",label:"기간",v:20,sweep:{path:"left.period",def:[14,28,7]}},{k:"cmp",label:"조건",type:"cmp",v:"<"},{k:"value",label:"기준값",v:-100,sweep:{path:"right",def:[-150,-50,50]}}],
+    build:f=>({left:{indicator:"CCI",period:+f.period},cmp:f.cmp,right:+f.value}),
+    desc:n=>`CCI(${n.left.period}) ${n.cmp} ${n.right}` },
+  mfi: { label:"MFI",
+    fields:[{k:"period",label:"기간",v:14,sweep:{path:"left.period",def:[7,21,7]}},{k:"cmp",label:"조건",type:"cmp",v:"<"},{k:"value",label:"기준값",v:20,sweep:{path:"right",def:[10,30,10]}}],
+    build:f=>({left:{indicator:"MFI",period:+f.period},cmp:f.cmp,right:+f.value}),
+    desc:n=>`MFI(${n.left.period}) ${n.cmp} ${n.right}` },
+  volume: { label:"거래량(RVOL)",
+    fields:[{k:"period",label:"평균기간",v:20,sweep:{path:"left.period",def:[10,40,10]}},{k:"cmp",label:"조건",type:"cmp",v:">"},{k:"value",label:"배수",v:1.5,sweep:{path:"right",def:[1.2,2.5,0.3]}}],
+    build:f=>({left:{indicator:"RVOL",period:+f.period},cmp:f.cmp,right:+f.value}),
+    desc:n=>`거래량 ${n.cmp} 평균×${n.right} (${n.left.period})` },
+  reversal: { label:"반전 캔들(패턴)",
+    fields:[{k:"dir",label:"방향",type:"select",opts:[["bull","상승 반전"],["bear","하락 반전"]],v:"bull"},
+            {k:"pattern",label:"패턴",type:"select",opts:[["rev","종합(주요 반전)"],["engulf","장악형"],["hammer","해머/교수형"],["star","샛별/저녁별"],["pierce","관통/먹구름"]],v:"rev"}],
+    build:f=>{ const bull=f.dir==="bull";
+      const ind={rev:bull?"CDL_BULLREV":"CDL_BEARREV", engulf:"CDL_ENGULFING",
+        hammer:bull?"CDL_HAMMER":"CDL_HANGINGMAN", star:bull?"CDL_MORNINGSTAR":"CDL_EVENINGSTAR",
+        pierce:bull?"CDL_PIERCING":"CDL_DARKCLOUDCOVER"}[f.pattern];
+      return {left:{indicator:ind}, cmp:bull?">":"<", right:0}; },
+    desc:n=>{ const P={CDL_BULLREV:"반전(종합)",CDL_BEARREV:"반전(종합)",CDL_ENGULFING:"장악형",
+        CDL_HAMMER:"해머",CDL_HANGINGMAN:"교수형",CDL_MORNINGSTAR:"샛별",CDL_EVENINGSTAR:"저녁별",
+        CDL_PIERCING:"관통형",CDL_DARKCLOUDCOVER:"먹구름"};
+      return `${n.cmp===">"?"↑상승":"↓하락"} ${P[n.left.indicator]||"반전"} 캔들`; } },
+};
+let entryGroups = [];   // [{side, conds:[{type,node}...AND]}, ...(OR)]  →  ((A&B)→롱) or ((C&D)→숏)
+
+// fields는 배열 또는 (f)=>배열. 현재 값 f 기준으로 필드셋 반환.
+function getFields(type, f) {
+  const spec = COND_TYPES[type].fields;
+  return typeof spec === "function" ? spec(f || {}) : spec;
+}
+function defVal(fld) {
+  if (fld.v !== undefined) return fld.v;
+  if (fld.type === "cmp") return "<";
+  if (fld.type === "cross") return "crossOver";
+  if (fld.type === "select") return fld.opts[0][0];
+  return "";
+}
+// 현재 필드셋에 없는 값은 기본값으로 채움 (모드 전환 시 새 필드 초기화)
+function seedDefaults(type, f) {
+  getFields(type, f).forEach(fld => { if (f[fld.k] === undefined) f[fld.k] = defVal(fld); });
+  return f;
+}
+// 기본값으로 채운 새 조건 객체 (지표 종류 기준)
+function newCond(type) {
+  const f = {}; seedDefaults(type, f);
+  const clean = {}; getFields(type, f).forEach(x => clean[x.k] = f[x.k]);
+  return { type, f: clean, node: COND_TYPES[type].build(clean) };
+}
+function addGroup() {                          // + 그룹 추가 (OR 새 그룹). 기본 조건 하나로 시작
+  entryGroups.push({ side: "long", conds: [newCond("rsi")] });
+  renderGroups();
+}
+function addCondToGroup(gi) {                  // + 조건 추가 (그룹 안 AND)
+  if (entryGroups[gi]) { entryGroups[gi].conds.push(newCond("rsi")); renderGroups(); }
+}
+// 조건마다 붙는 지표 종류 드롭다운
+function condTypeSel(gi, ci, type) {
+  return `<select class="ctype" data-g="${gi}" data-c="${ci}">`
+    + Object.entries(COND_TYPES).map(([k, v]) => `<option value="${k}"${k===type?" selected":""}>${v.label}</option>`).join("")
+    + `</select>`;
+}
+// 조건 하나를 인라인 편집 폼(지표 선택 + 값 입력 + "범위" 스윕 토글)으로 렌더
+function condItemHtml(gi, ci, c) {
+  const t = COND_TYPES[c.type];
+  const body = getFields(c.type, c.f).map(fld => {
+    const fid = `ef_${gi}_${ci}_${fld.k}`;
+    let ctrl;
+    if (fld.type === "cmp") ctrl = miniSel(fid, gi, ci, fld.k, [["<","< 미만"],[">","> 초과"]], c.f[fld.k]);
+    else if (fld.type === "cross") ctrl = miniSel(fid, gi, ci, fld.k, [["crossOver","▲ 골든"],["crossUnder","▼ 데드"]], c.f[fld.k]);
+    else if (fld.type === "select") ctrl = miniSel(fid, gi, ci, fld.k, fld.opts, c.f[fld.k]);
+    else ctrl = `<input class="mini efld" id="${fid}" data-g="${gi}" data-c="${ci}" data-k="${fld.k}" value="${c.f[fld.k]}">`;
+    const sw = fld.sweep ? swToggle(`@entry:${gi}:${ci}:${fld.sweep.path}`, fld.sweep.def) : "";
+    return `<div class="pfld"><span class="pl">${fld.label}</span>${ctrl}${sw}</div>`;
+  }).join("");
+  return `<div class="cond-item2"><div class="ci-head">${condTypeSel(gi, ci, c.type)}`
+    + `<button class="rmc" data-g="${gi}" data-c="${ci}" title="조건 삭제">✕</button></div>`
+    + `<div class="ci-body"><div class="ci-desc" id="desc_${gi}_${ci}">${t.desc(c.node)}</div>${body}</div></div>`;
+}
+function miniSel(id, gi, ci, k, opts, val) {
+  return `<select class="efsel" id="${id}" data-g="${gi}" data-c="${ci}" data-k="${k}">`
+    + opts.map(([v,t]) => `<option value="${v}"${String(v)===String(val)?" selected":""}>${t}</option>`).join("") + `</select>`;
+}
+// "범위" 스윕 토글 + (체크 시) 최소/최대/단위 편집기. key=@entry:.. 또는 폼 필드 id
+function swToggle(key, def) {
+  return `<label class="swtog"><input type="checkbox" class="swcb" data-key="${key}" data-def="${def.join(",")}">범위</label>`
+    + `<span class="swrange" data-key="${key}">`
+    + `<input class="mini r" data-key="${key}" data-r="min" placeholder="최소">`
+    + `<input class="mini r" data-key="${key}" data-r="max" placeholder="최대">`
+    + `<input class="mini r" data-key="${key}" data-r="step" placeholder="단위"></span>`;
+}
+function renderGroups() {
+  const addBtn = $("addGroup");
+  if (addBtn) addBtn.textContent = entryGroups.length ? "+ 그룹 추가 (OR)" : "+ 진입 그룹 만들기";
+  if (!entryGroups.length) {
+    $("groupsView").innerHTML = '<div class="note" style="color:var(--mut)">아직 진입 그룹이 없어. 아래 <b>+ 진입 그룹 만들기</b>를 눌러 시작해.</div>';
+    updateHints(); if (typeof updateComboCount === "function") updateComboCount(); return;
+  }
+  $("groupsView").innerHTML = entryGroups.map((g, gi) =>
+    (gi > 0 ? '<div class="or-sep">— 또는 (OR) —</div>' : '')
+    + `<div class="cgroup"><div class="gt" style="display:flex;justify-content:space-between;align-items:center">`
+    + `<span>그룹 ${gi+1} · 모두 만족(AND) → 진입</span>`
+    + `<select class="gside" data-g="${gi}" style="width:auto;padding:2px 5px;font-size:11px">`
+    + `<option value="long"${g.side==="long"?" selected":""}>롱 long</option>`
+    + `<option value="short"${g.side==="short"?" selected":""}>숏 short</option></select></div>`
+    + g.conds.map((c, ci) => condItemHtml(gi, ci, c)).join("")
+    + `<button class="addcond" data-g="${gi}">+ 조건 추가 (AND)</button>`
+    + `</div>`).join("");
+  document.querySelectorAll(".rmc").forEach(b => b.onclick = () => {
+    entryGroups[+b.dataset.g].conds.splice(+b.dataset.c, 1);
+    entryGroups = entryGroups.filter(g => g.conds.length);   // 빈 그룹 제거
+    renderGroups();
+  });
+  document.querySelectorAll(".addcond").forEach(b => b.onclick = () => addCondToGroup(+b.dataset.g));
+  document.querySelectorAll(".gside").forEach(s => s.onchange = () => {
+    entryGroups[+s.dataset.g].side = s.value; updateHints();
+  });
+  // 지표 종류 변경 → 그 조건을 새 지표 기본값으로 교체
+  document.querySelectorAll("#groupsView .ctype").forEach(s => s.onchange = () => {
+    const gi = +s.dataset.g, ci = +s.dataset.c;
+    entryGroups[gi].conds[ci] = newCond(s.value);
+    renderGroups();
+  });
+  // 조건 값 인라인 편집 → 노드 재빌드 + 요약 갱신 (재렌더 없이 = 스윕 체크 유지)
+  document.querySelectorAll("#groupsView .efld").forEach(el =>
+    el.addEventListener("input", () => updateCond(+el.dataset.g, +el.dataset.c)));
+  document.querySelectorAll("#groupsView .efsel").forEach(el =>
+    el.addEventListener("change", () => updateCond(+el.dataset.g, +el.dataset.c)));
+  if (typeof restoreSweepUI === "function") restoreSweepUI();   // 스윕 체크 상태 복원
+  updateHints();
+  if (typeof updateComboCount === "function") updateComboCount();
+}
+function updateCond(gi, ci) {
+  const c = entryGroups[gi] && entryGroups[gi].conds[ci]; if (!c) return;
+  const t = COND_TYPES[c.type];
+  const prevKeys = getFields(c.type, c.f).map(f => f.k).join(",");
+  getFields(c.type, c.f).forEach(fld => { const el = $(`ef_${gi}_${ci}_${fld.k}`); if (el) c.f[fld.k] = el.value; });
+  seedDefaults(c.type, c.f);
+  c.node = t.build(c.f);
+  if (getFields(c.type, c.f).map(f => f.k).join(",") !== prevKeys) { renderGroups(); return; }  // 모드 전환 → 재렌더
+  const d = $(`desc_${gi}_${ci}`); if (d) d.textContent = t.desc(c.node);
+  updateHints();
+}
+$("addGroup").onclick = addGroup;
+function setEntryGroups(groups) {
+  entryGroups = (groups || []).map(g => ({
+    side: g.side || "long",
+    conds: (g.conds || []).map(s => {
+      const f = { ...s }; delete f.type;
+      seedDefaults(s.type, f);                                  // 프리셋에 빠진 필드는 기본값
+      const clean = {}; getFields(s.type, f).forEach(x => clean[x.k] = f[x.k]);
+      return { type: s.type, f: clean, node: COND_TYPES[s.type].build(clean) };
+    }),
+  }));
+  renderGroups();
+}
+
+// 방식 드롭다운에 따라 관련 입력만 표시 + 라벨 갱신
+function sync() {
+  const slT = $("slType").value, tpT = $("tpType").value;
+  const show = (sel, on) => document.querySelectorAll(`[data-when="${sel}"]`)
+                                    .forEach(e => e.style.display = on ? "" : "none");
+  show("sl-value", slT === "percent" || slT === "atrMultiple");
+  show("sl-swing", slT === "swingLow");
+  show("tp-value", tpT === "percent" || tpT === "atrMultiple");
+  show("tp-swing", tpT === "swingHigh");
+  $("slValueLabel").textContent = slT === "atrMultiple" ? "손절 ATR 배수" : "손절 % (가격)";
+  $("tpValueLabel").textContent = tpT === "atrMultiple" ? "익절 ATR 배수" : "익절 % (가격)";
+
+  const risk = $("sizeType").value === "riskPercent";
+  $("sizeValueLabel").textContent = risk ? "트레이드당 리스크 %" : "증거금 비중 %";
+  $("sizeNote").textContent = risk
+    ? (slT === "off" ? "⚠️ 리스크%는 손절이 필요해 — 손절 방식을 켜줘" : "손절 거리로 수량 역산 → 매 트레이드 리스크 일정")
+    : "";
+  if (typeof updateHints === "function") updateHints();
+}
+["slType","tpType","sizeType"].forEach(id => $(id).addEventListener("change", sync));
+
+const PRESETS = {
+  scalp: { symbol:"BTCUSDT", timeframe:"1m", direction:"long",
+    entry:[{side:"long",conds:[{type:"rsi",period:14,cmp:"<",value:20}]}],
+    slType:"percent", slValue:0.3, tpType:"percent", tpValue:0.6,
+    exitCondEnabled:false, timeStopBars:0, trailingEnabled:true, trailingCallback:0.15, trailingActivation:0.2,
+    leverage:10, sizeType:"equityPercent", sizeValue:10, minLiqBuffer:3, cooldownBars:3, avoidFundingMin:2 },
+  rsi15: { symbol:"BTCUSDT", timeframe:"15m", direction:"long",
+    entry:[{side:"long",conds:[{type:"rsi",period:14,cmp:"<",value:30},{type:"ema",mode:"price",cmp:">",period:200}]}],
+    slType:"percent", slValue:1.5, tpType:"percent", tpValue:3,
+    exitCondEnabled:false, trailingEnabled:true, trailingCallback:0.8, trailingActivation:1,
+    leverage:5, sizeType:"equityPercent", sizeValue:10, minLiqBuffer:15, cooldownBars:3, avoidFundingMin:10 },
+  meanrevert: { symbol:"BTCUSDT", timeframe:"15m", direction:"long",
+    entry:[{side:"long",conds:[{type:"rsi",period:14,cmp:"<",value:30}]}],
+    slType:"atrMultiple", slValue:1.5, tpType:"off",
+    exitCondEnabled:true, exitCondInd:"RSI", exitCondPeriod:14, exitCondCmp:">", exitCondValue:55, timeStopBars:12,
+    trailingEnabled:false, leverage:3, sizeType:"equityPercent", sizeValue:20,
+    minLiqBuffer:8, cooldownBars:2, avoidFundingMin:5 },
+  swing: { symbol:"BTCUSDT", timeframe:"15m", direction:"long",
+    entry:[{side:"long",conds:[{type:"rsi",period:14,cmp:"<",value:35},{type:"ema",mode:"price",cmp:">",period:200}]}],
+    slType:"swingLow", slLookback:20, slBuffer:0.05,
+    tpType:"atrMultiple", tpValue:3, exitCondEnabled:false, timeStopBars:0, trailingEnabled:false,
+    leverage:5, sizeType:"riskPercent", sizeValue:1, minLiqBuffer:5, cooldownBars:2, avoidFundingMin:5 },
+  macd: { symbol:"ETHUSDT", timeframe:"1h", direction:"long",
+    entry:[{side:"long",conds:[{type:"macd",cross:"crossOver",fast:12,slow:26,signal:9}]}],
+    slType:"atrMultiple", slValue:2, tpType:"off",
+    exitCondEnabled:false, timeStopBars:0, trailingEnabled:false, leverage:3, sizeType:"equityPercent", sizeValue:15,
+    minLiqBuffer:20, cooldownBars:0, avoidFundingMin:0 },
+  // 3층 구조: 방향필터(EMA50) & 진입구역(RSI눌림 & VWAP이격) & 방아쇠(StochRSI 골든크로스). A&B&C&D 단일 그룹.
+  // RSI<45(완화한 눌림)·5m: 엄격 과매도(RSI<35)는 상승추세와 안 겹쳐 캐시데이터서 0건 → 눌림값으로 완화.
+  triple: { symbol:"BTCUSDT", timeframe:"5m", direction:"long",
+    entry:[{side:"long",conds:[
+      {type:"ema", mode:"price", cmp:">", period:50},          // A 방향 필터: EMA50 위에서만
+      {type:"rsi", period:14, cmp:"<", value:45},      // B 진입 구역: RSI 눌림(과매도 완화)
+      {type:"vwap", cmp:"<"},                     // C 진입 구역: VWAP 하단 이격
+      {type:"stochRsi", mode:"cross", cross:"crossOver", period:14},  // D 방아쇠: StochRSI 골든크로스
+    ]}],
+    slType:"atrMultiple", slValue:1.5, tpType:"atrMultiple", tpValue:2.5,
+    exitCondEnabled:false, timeStopBars:24, trailingEnabled:false,
+    leverage:3, sizeType:"equityPercent", sizeValue:15,
+    minLiqBuffer:8, cooldownBars:3, avoidFundingMin:5 },
+};
+
+document.querySelectorAll(".presets button").forEach(b => b.onclick = () => {
+  const p = PRESETS[b.dataset.preset];
+  for (const [k,v] of Object.entries(p)) {
+    if (k === "entry") continue;
+    const el = $(k); if (!el) continue;
+    if (el.type === "checkbox") el.checked = v; else el.value = v;
+  }
+  setEntryGroups(p.entry);
+  sync();
+});
+
+$("run").onclick = async () => {
+  if (!entryGroups.length) { $("err").innerHTML = '<div class="err">진입 조건을 하나 이상 추가해줘 (진입 섹션)</div>'; return; }
+  const btn = $("run"); btn.disabled = true; btn.textContent = "실행 중...";
+  $("err").innerHTML = "";
+  try {
+    const res = await fetch("/api/backtest", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify(collect())});
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    render(data);
+  } catch (e) {
+    $("err").innerHTML = `<div class="err">에러: ${e.message}</div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = "▶ 백테스트 실행";
+  }
+};
+
+function fmtDate(ms){ return new Date(ms).toISOString().slice(0,16).replace("T"," "); }
+
+function render(d) {
+  const m = d.metrics;
+  const sign = v => v > 0 ? "up" : (v < 0 ? "down" : "");
+  const cards = [
+    ["총수익률", (m.totalReturnPct>0?"+":"")+m.totalReturnPct+"%", sign(m.totalReturnPct)],
+    ["최종자본", m.finalEquity.toLocaleString(), sign(m.finalEquity-m.initialEquity)],
+    ["트레이드", m.numTrades+"건", ""],
+    ["승률", m.winRatePct+"%", ""],
+    ["손익비 PF", m.profitFactor===null?"∞":m.profitFactor, sign((m.profitFactor||1)-1)],
+    ["MDD", m.maxDrawdownPct+"%", "down"],
+    ["샤프", m.sharpe, sign(m.sharpe)],
+    ["청산", m.numLiquidations+"건", m.numLiquidations>0?"down":""],
+    ["펀딩비 누적", m.totalFunding, sign(m.totalFunding)],
+    ["수수료 누적", m.totalFees, "down"],
+  ];
+  let html = '<div class="metrics">';
+  for (const [k,v,c] of cards)
+    html += `<div class="metric"><div class="k">${k}</div><div class="v ${c}">${v}</div></div>`;
+  html += '</div>';
+
+  html += `<div class="chartbox"><h3>자산 곡선 · ${d.preset.market.symbol} ${fmtDate(d.dataRange[0])} ~ ${fmtDate(d.dataRange[1])} UTC · 1분봉 ${d.candles.toLocaleString()}개 · 펀딩 ${(d.fundingRate*100).toFixed(4)}%/8h</h3><canvas id="chart"></canvas></div>`;
+
+  const total = Object.values(d.exitReasons).reduce((a,b)=>a+b,0) || 1;
+  const RN = {take_profit:"익절", stop_loss:"손절", trailing:"트레일링", signal:"신호청산", time:"시간청산", liquidation:"청산 ⚠️"};
+  if (Object.keys(d.exitReasons).length) {
+    html += '<div class="chartbox"><h3>청산 사유 분포</h3><div class="bars">';
+    for (const [k,v] of Object.entries(d.exitReasons).sort((a,b)=>b[1]-a[1]))
+      html += `<div class="bar"><span class="name">${RN[k]||k}</span><div class="track"><div class="fill" style="width:${100*v/total}%"></div></div><span class="cnt">${v}</span></div>`;
+    html += '</div></div>';
+  } else {
+    html += '<div class="chartbox"><h3>트레이드 없음</h3><div class="note">진입 신호가 없거나 필터·사이징 조건에 다 막혔어. RSI 기준값을 풀거나(예 &lt;35), 리스크%인데 손절이 꺼져있지 않은지 확인해봐.</div></div>';
+  }
+
+  html += `<details><summary>생성된 프리셋 JSON 보기</summary><pre>${JSON.stringify(d.preset,null,2)}</pre></details>`;
+  $("out").innerHTML = html;
+  drawChart(d.equityCurve, m.initialEquity);
+}
+
+function drawChart(curve, base) {
+  const cv = $("chart"); if (!cv) return;
+  const dpr = window.devicePixelRatio||1;
+  const w = cv.clientWidth, h = 240;
+  cv.width = w*dpr; cv.height = h*dpr;
+  const ctx = cv.getContext("2d"); ctx.scale(dpr,dpr);
+  if (!curve.length) return;
+  const ys = curve.map(p=>p[1]);
+  let lo = Math.min(...ys, base), hi = Math.max(...ys, base);
+  if (hi===lo){ hi+=1; lo-=1; }
+  const pad = (hi-lo)*0.1; lo-=pad; hi+=pad;
+  const X = i => (i/(curve.length-1))*(w-8)+4;
+  const Y = v => h-8 - ((v-lo)/(hi-lo))*(h-16);
+  ctx.strokeStyle="#3a3f4b"; ctx.setLineDash([4,4]); ctx.beginPath();
+  ctx.moveTo(4,Y(base)); ctx.lineTo(w-4,Y(base)); ctx.stroke(); ctx.setLineDash([]);
+  const last = ys[ys.length-1];
+  ctx.strokeStyle = last>=base ? "#26d07c" : "#ff5c6c"; ctx.lineWidth=1.8; ctx.beginPath();
+  curve.forEach((p,i)=>{ const x=X(i), y=Y(p[1]); i?ctx.lineTo(x,y):ctx.moveTo(x,y); });
+  ctx.stroke();
+}
+
+// ---- 파라미터 최적화 (백테스트 폼의 각 파라미터 옆 "범위" 체크박스로 스윕) ----
+// 청산 지표 조건: 라벨 + 기본 기준값(def) + 기준값 스윕범위(vrange). 지표마다 스케일이 달라 분리.
+const EXIT_INDS = {
+  RSI:     { label:"RSI",     def:55,  vrange:[50,70,5] },
+  STOCH_K: { label:"Stoch%K", def:80,  vrange:[70,90,5] },
+  CCI:     { label:"CCI",     def:100, vrange:[0,150,50] },
+  MFI:     { label:"MFI",     def:55,  vrange:[50,70,5] },
+};
+const EXIT_IND_LABEL = Object.fromEntries(Object.entries(EXIT_INDS).map(([k,v]) => [k, v.label]));
+// 진입이 아닌 고정 폼 필드의 기본 스윕 범위 (exitCondValue는 지표별 vrange 사용 → 주입 시 결정)
+const FIXED_SWEEP = { slValue:[0.5,2.5,0.5], tpValue:[0.5,3,0.5],
+  exitCondPeriod:[7,21,7], timeStopBars:[6,24,6], leverage:[2,10,1], sizeValue:[10,40,10] };
+const FIXED_LABEL = { slValue:"손절 값", tpValue:"익절 값", exitCondValue:"청산 기준값",
+  exitCondPeriod:"청산 기간", timeStopBars:"시간청산", leverage:"레버리지", sizeValue:"사이징 값" };
+let sweepState = {};   // key → {min,max,step} : 체크된(범위 탐색) 파라미터만 담김
+
+// 백테스트 폼의 고정 필드 옆에 "범위" 토글 + 범위 편집기를 1회 주입
+function injectFixedSweeps() {
+  const add = (id, def) => {
+    const inp = $(id); if (!inp || inp.dataset.swInjected) return;
+    inp.dataset.swInjected = "1";
+    inp.closest(".row").insertAdjacentHTML("beforeend",
+      `<label class="swtog"><input type="checkbox" class="swcb" data-key="${id}" data-def="${def.join(",")}">범위</label>`);
+    inp.closest(".row").insertAdjacentHTML("afterend",
+      `<span class="swrange" data-key="${id}">`
+      + `<input class="mini r" data-key="${id}" data-r="min" placeholder="최소">`
+      + `<input class="mini r" data-key="${id}" data-r="max" placeholder="최대">`
+      + `<input class="mini r" data-key="${id}" data-r="step" placeholder="단위"></span>`);
+  };
+  Object.entries(FIXED_SWEEP).forEach(([id, def]) => add(id, def));
+  add("exitCondValue", (EXIT_INDS[$("exitCondInd").value] || {}).vrange || [50,70,5]);
+}
+
+// sweepState → UI 동기화 (재렌더/아코디언 접힘에도 체크·범위값 유지)
+function restoreSweepUI() {
+  document.querySelectorAll(".swcb").forEach(cb => {
+    const key = cb.dataset.key, st = sweepState[key];
+    cb.checked = !!st;
+    const rng = document.querySelector(`.swrange[data-key="${key}"]`);
+    if (!rng) return;
+    rng.classList.toggle("on", !!st);
+    if (st) ["min","max","step"].forEach(r => {
+      const el = rng.querySelector(`[data-r="${r}"]`);
+      if (el && document.activeElement !== el) el.value = st[r];
+    });
+  });
+}
+
+// 델리게이션: "범위" 체크 토글 / 범위 입력 (진입 조건은 재렌더되므로 델리게이션이 안전)
+document.addEventListener("change", e => {
+  const cb = e.target;
+  if (!(cb.classList && cb.classList.contains("swcb"))) return;
+  const key = cb.dataset.key;
+  if (cb.checked) {
+    if (!sweepState[key]) { const d = (cb.dataset.def || "").split(",").map(Number); sweepState[key] = {min:d[0], max:d[1], step:d[2]}; }
+  } else delete sweepState[key];
+  restoreSweepUI(); updateComboCount();
+});
+document.addEventListener("input", e => {
+  const el = e.target;
+  if (!(el.classList && el.classList.contains("r"))) return;
+  const st = sweepState[el.dataset.key]; if (!st) return;
+  st[el.dataset.r] = +el.value; updateComboCount();
+});
+
+function labelFor(key) {
+  if (key.startsWith("@entry:")) {
+    const [, gi, ci, path] = key.split(":");
+    const c = entryGroups[+gi] && entryGroups[+gi].conds[+ci];
+    if (!c) return key;
+    const fld = getFields(c.type, c.f).find(f => f.sweep && f.sweep.path === path);
+    return `G${+gi+1} ${COND_TYPES[c.type].label} ${fld ? fld.label : path}`;
+  }
+  return FIXED_LABEL[key] || key;
+}
+
+// 현재 유효한(적용 가능한) 스윕만 추림 — 진입 조건이 지워졌거나 방식이 off면 제외
+function sweepApplicable(key) {
+  if (key.startsWith("@entry:")) {
+    const [, gi, ci, path] = key.split(":");
+    const c = entryGroups[+gi] && entryGroups[+gi].conds[+ci];
+    return !!(c && getFields(c.type, c.f).some(f => f.sweep && f.sweep.path === path));
+  }
+  if (key === "slValue") return ["percent","atrMultiple"].includes($("slType").value);
+  if (key === "tpValue") return ["percent","atrMultiple"].includes($("tpType").value);
+  if (key === "exitCondValue" || key === "exitCondPeriod") return $("exitCondEnabled").checked;
+  return true;   // timeStopBars · leverage · sizeValue
+}
+function collectSweep() {
+  const sweep = {};
+  for (const [key, s] of Object.entries(sweepState)) {
+    if (!sweepApplicable(key)) continue;
+    sweep[key] = { min:s.min, max:s.max, step:s.step };
+  }
+  return sweep;
+}
+function comboCountOf(sweep) {
+  return Object.values(sweep).reduce((a,s) => {
+    const n = (s.step > 0 && s.max >= s.min) ? Math.floor((s.max - s.min) / s.step) + 1 : 1;
+    return a * Math.max(1, n);
+  }, 1);
+}
+function updateComboCount() {
+  const sweep = collectSweep();
+  const keys = Object.keys(sweep);
+  if (!keys.length) { $("comboCount").textContent = '탐색할 값 옆의 "범위" 체크박스를 켜줘'; return; }
+  const combos = comboCountOf(sweep);
+  const est = Math.max(1, Math.ceil(combos * 0.4));
+  $("comboCount").innerHTML = `선택 ${keys.length}개 (${keys.map(labelFor).join(", ")}) → <b>총 ${combos.toLocaleString()}조합</b> · 예상 ~${est}초`
+    + (combos > 400 ? ' <span style="color:var(--down)">(많음 — 범위/단위 조정 권장)</span>' : '');
+}
+// 청산 지표 변경 → 기준값 리셋 + exitCondValue 범위 기본치 갱신
+$("exitCondInd").addEventListener("change", () => {
+  const cfg = EXIT_INDS[$("exitCondInd").value]; if (!cfg) return;
+  $("exitCondValue").value = cfg.def;
+  const cb = document.querySelector('.swcb[data-key="exitCondValue"]');
+  if (cb) cb.dataset.def = cfg.vrange.join(",");
+  if (sweepState.exitCondValue) { sweepState.exitCondValue = {min:cfg.vrange[0], max:cfg.vrange[1], step:cfg.vrange[2]}; restoreSweepUI(); }
+  updateHints(); updateComboCount();
+});
+// 방식/사용여부가 바뀌면 스윕 적용 가능성이 달라짐 → 조합수 갱신
+["exitCondEnabled","slType","tpType"].forEach(id => $(id).addEventListener("change", updateComboCount));
+
+$("optimize").onclick = async () => {
+  if (!entryGroups.length) { $("err").innerHTML = '<div class="err">진입 조건을 하나 이상 추가해줘 (진입 섹션)</div>'; return; }
+  const sweep = collectSweep();
+  if (!Object.keys(sweep).length) {
+    $("err").innerHTML = '<div class="err">탐색할 값 옆의 "범위" 체크박스를 하나 이상 켜줘</div>'; return;
+  }
+  const combos = comboCountOf(sweep);
+  if (combos > 400 && !confirm(`총 ${combos.toLocaleString()}개 조합을 백테스트해. 시간이 걸릴 수 있어. 계속?`)) return;
+  const btn = $("optimize"); btn.disabled = true; btn.textContent = "최적화 중...";
+  $("err").innerHTML = "";
+  const started = performance.now();
+  try {
+    const body = { ...collect(), sweep, objective:"calmar",
+                   minTrades:+$("minTrades").value, useOOS:$("useOOS").checked };
+    const res = await fetch("/api/optimize", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify(body)});
+    if (!res.ok || !res.body) throw new Error("서버 응답 오류 (" + res.status + ")");
+    // NDJSON 스트림 파싱 — 조합이 끝나는 대로 이벤트 도착
+    const reader = res.body.getReader(), dec = new TextDecoder();
+    const live = { rows: [], passed: 0, total: combos, objName: "calmar", started };
+    let buf = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
+        if (line) handleOptEvent(JSON.parse(line), live);
+      }
+    }
+  } catch (e) {
+    $("err").innerHTML = `<div class="err">에러: ${e.message}</div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = "🔍 최적화 실행";
+  }
+};
+
+// 스트림 이벤트 처리: 진행률 바 + 실시간 결과 (통과 조합을 obj 내림차순으로 즉시 표시)
+function handleOptEvent(ev, live) {
+  if (ev.type === "error") { $("err").innerHTML = `<div class="err">에러: ${ev.error}</div>`; return; }
+  if (ev.type === "start") {
+    live.total = ev.total; live.objName = "calmar";
+    $("out").innerHTML = `<div class="chartbox"><h3>🔍 최적화 진행 · ${ev.workers}개 프로세스 병렬</h3>`
+      + `<div class="progress"><div class="pfill" id="optProg" style="width:0%"></div></div>`
+      + `<div class="note" id="optProgText">준비 중...</div>`
+      + `<div id="optLive"></div></div>`;
+    return;
+  }
+  if (ev.type === "combo") {
+    const pct = Math.round(100 * ev.done / ev.total);
+    const p = $("optProg"); if (p) p.style.width = pct + "%";
+    if (ev.passed && ev.is) { live.passed++; live.rows.push({ params: ev.params, is: ev.is, obj: ev.obj }); }
+    const el = $("optProgText");
+    const secs = ((performance.now() - live.started) / 1000).toFixed(1);
+    if (el) el.textContent = `${pct}% · ${ev.done}/${ev.total} 조합 · 통과 ${live.passed}개 · ${secs}s`
+      + (ev.done >= ev.total ? " · OOS 검증 중..." : "");
+    renderOptLive(live);
+    return;
+  }
+  if (ev.type === "done") { renderOpt(ev); }
+}
+function renderOptLive(live) {
+  const box = $("optLive"); if (!box) return;
+  const rows = live.rows.slice().sort((a,b) => b.obj - a.obj).slice(0, 12);
+  if (!rows.length) { box.innerHTML = '<div class="note">아직 최소 트레이드를 넘긴 조합이 없어...</div>'; return; }
+  const names = Object.keys(rows[0].params);
+  let h = '<div class="note" style="margin-top:8px">실시간 상위 (완료되는 대로 · 최종 순위는 아래에서 OOS까지 반영)</div>';
+  h += '<div style="overflow-x:auto"><table class="opt-tab"><thead><tr>';
+  names.forEach(n => h += `<th>${labelFor(n)}</th>`);
+  h += '<th>IS수익</th><th>Calmar</th><th>건</th></tr></thead><tbody>';
+  rows.forEach(r => {
+    h += '<tr>' + names.map(n => `<td>${r.params[n]}</td>`).join("")
+      + `<td>${r.is.return}%</td><td>${r.is.calmar}</td><td>${r.is.trades}</td></tr>`;
+  });
+  h += '</tbody></table></div>';
+  box.innerHTML = h;
+}
+
+function renderOpt(d) {
+  const names = d.names;
+  let html = `<div class="chartbox"><h3>최적화 결과 · ${d.objective.toUpperCase()} 기준 · `
+    + `총 ${d.totalCombos}조합 중 ${d.passed}개 통과 (최소 ${d.minTrades}트레이드)`
+    + `${d.truncated ? " · ⚠️상한 초과, 일부만" : ""}</h3>`;
+  html += '<div class="note">IS=최적화(앞70%) · OOS=검증(뒤30%). '
+    + '<b style="color:var(--up)">✅ 둘 다 수익=견고</b>, <b style="color:var(--down)">❌ OOS 실패=과최적화 의심</b>. '
+    + '견고한 값을 골라야 실거래에서 안 무너져.</div>';
+  html += '<div style="overflow-x:auto"><table class="opt-tab"><thead><tr><th>#</th>';
+  names.forEach(n => html += `<th>${labelFor(n)}</th>`);
+  html += '<th>IS수익</th><th>IS Calmar</th><th>IS건</th><th>OOS수익</th><th>OOS Calmar</th><th>견고</th><th></th></tr></thead><tbody>';
+  d.top.forEach((r, idx) => {
+    const o = r.oos || {};
+    const cls = r.robust === undefined ? "" : (r.robust ? "rob" : "bad");
+    html += `<tr class="${cls}"><td>${idx+1}</td>`;
+    names.forEach(n => html += `<td>${r.params[n]}</td>`);
+    html += `<td>${r.is.return}%</td><td>${r.is.calmar}</td><td>${r.is.trades}</td>`;
+    html += `<td>${o.return ?? "-"}%</td><td>${o.calmar ?? "-"}</td>`;
+    html += `<td>${r.robust === undefined ? "-" : (r.robust ? "✅" : "❌")}</td>`;
+    html += `<td><button class="apply" data-i="${idx}">적용</button></td></tr>`;
+  });
+  html += '</tbody></table></div></div>';
+  if (d.heatmap) html += `<div class="chartbox"><h3>히트맵 · IS ${d.objective} (밝을수록 우수, 넓은 밝은 구역=견고한 봉우리)</h3><canvas id="heat"></canvas><div class="note" id="heatlbl"></div></div>`;
+  $("out").innerHTML = html;
+  document.querySelectorAll(".apply").forEach(b => b.onclick = () => applyParams(d.top[+b.dataset.i].params));
+  if (d.heatmap) drawHeat(d.heatmap);
+}
+
+function setNodePath(node, path, value) {
+  let d = node;
+  for (let i = 0; i < path.length - 1; i++) { if (!d[path[i]]) d[path[i]] = {}; d = d[path[i]]; }
+  d[path[path.length - 1]] = value;
+}
+function applyParams(params) {
+  let entryChanged = false;
+  for (const [k,v] of Object.entries(params)) {
+    if (k.startsWith("@entry:")) {
+      const [, gi, ci, path] = k.split(":");
+      const g = entryGroups[+gi]; if (!g) continue;
+      const c = g.conds[+ci]; if (!c) continue;
+      const fld = getFields(c.type, c.f).find(f => f.sweep && f.sweep.path === path);
+      if (fld) c.f[fld.k] = v;                       // 원본값 갱신 → 인라인 입력에 반영
+      c.node = COND_TYPES[c.type].build(c.f);        // 노드 재빌드
+      entryChanged = true;
+    } else { const el = $(k); if (el) el.value = v; }
+  }
+  if (entryChanged) renderGroups();
+  sync();
+  window.scrollTo(0,0);
+  $("err").innerHTML = '<div class="err" style="color:var(--up);background:#132a1c;border-color:#1d4a2f">'
+    + '최적값을 폼에 적용했어. [백테스트 실행]으로 전체 기간 성과를 확인해봐.</div>';
+}
+
+function drawHeat(hm) {
+  const cv = $("heat"); if (!cv) return;
+  const rows = hm.yVals.length, cols = hm.xVals.length;
+  const cell = 34, padL = 46, padB = 26, padT = 6, padR = 6;
+  const w = padL + cols*cell + padR, h = padT + rows*cell + padB;
+  const dpr = window.devicePixelRatio||1;
+  cv.style.width = w+"px"; cv.width = w*dpr; cv.height = h*dpr;
+  const ctx = cv.getContext("2d"); ctx.scale(dpr,dpr);
+  ctx.font = "10px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  const flat = hm.grid.flat().filter(v => v !== null);
+  const lo = Math.min(...flat), hi = Math.max(...flat);
+  const col = v => {
+    if (v === null) return "#22262e";
+    const t = hi === lo ? 0.5 : (v - lo)/(hi - lo);
+    const r = Math.round(30 + t*(38-30)), g = Math.round(40 + t*(208-40)), b = Math.round(70 + t*(124-70));
+    return `rgb(${r},${g},${b})`;
+  };
+  for (let i=0;i<rows;i++) for (let j=0;j<cols;j++) {
+    const v = hm.grid[i][j];
+    ctx.fillStyle = col(v);
+    ctx.fillRect(padL + j*cell, padT + i*cell, cell-1, cell-1);
+    if (v !== null) { ctx.fillStyle = "#0b0d11"; ctx.fillText(v.toFixed(1), padL + j*cell + cell/2, padT + i*cell + cell/2); }
+  }
+  ctx.fillStyle = "#8b93a3";
+  hm.yVals.forEach((y,i) => ctx.fillText(y, padL/2, padT + i*cell + cell/2));
+  hm.xVals.forEach((x,j) => ctx.fillText(x, padL + j*cell + cell/2, padT + rows*cell + 12));
+  $("heatlbl").textContent = `세로축: ${labelFor(hm.yLabel)}  ·  가로축: ${labelFor(hm.xLabel)}`;
+}
+
+// ---- 탭 전환 ----
+document.querySelectorAll(".tab").forEach(t => t.onclick = () => {
+  document.querySelectorAll(".tab").forEach(x => x.classList.toggle("active", x === t));
+  const isCol = t.dataset.tab === "collect";
+  $("pane-backtest").style.display = isCol ? "none" : "";
+  $("pane-collect").style.display = isCol ? "" : "none";
+  if (isCol) { loadCache(true); if (!$("colStart").value) initDates(); }
+  else { updateAvail(true); }
+});
+
+// 캐시 현황 공유 (짧은 TTL로 서버 호출 절약)
+let _cacheData = null, _cacheAt = 0;
+async function getCache(force) {
+  if (!force && _cacheData && Date.now() - _cacheAt < 4000) return _cacheData;
+  _cacheData = ((await (await fetch("/api/cache")).json()).symbols) || [];
+  _cacheAt = Date.now();
+  return _cacheData;
+}
+
+// 심볼별 테스트 가능 기간 표시
+async function updateAvail(force) {
+  const sym = $("symbol").value.trim().toUpperCase();
+  const el = $("availInfo");
+  el.textContent = "보유 기간 확인 중...";
+  let list;
+  try { list = await getCache(force); }
+  catch { el.textContent = "현황 로드 실패"; return; }
+  const s = list.find(x => x.symbol === sym);
+  if (!s) {
+    el.innerHTML = `<span style="color:var(--down)">⚠️ '${sym}' 캐시 없음 — 📥 데이터 수집 탭에서 먼저 수집해줘</span>`;
+    return;
+  }
+  const f = ms => new Date(ms).toISOString().slice(0,10);
+  const days = Math.floor((s.max - s.min) / 86400000);
+  el.innerHTML = `📅 테스트 가능: <b>${f(s.min)} ~ ${f(s.max)}</b> · ${days}일 · ${s.count.toLocaleString()}개`
+    + `<br><span style="color:var(--mut)">기간(일)은 최신 기준. 최대 ${days}일까지.</span>`;
+}
+// 심볼 자동완성 콤보박스 — 수집된(캐시) 심볼만 제시
+const symInput = $("symbol"), symDrop = $("symDrop");
+let symActive = -1;
+
+async function showSymDrop(all) {
+  let list;
+  try { list = await getCache(); } catch { return; }
+  const q = all ? "" : symInput.value.trim().toUpperCase();
+  const matches = list.filter(s => s.symbol.includes(q));
+  const f = ms => new Date(ms).toISOString().slice(0,10);
+  if (!matches.length) {
+    symDrop.innerHTML = `<div class="empty2">${list.length
+      ? "일치하는 수집 심볼 없음" : "수집된 심볼이 없어 — 📥 데이터 수집 탭에서 먼저 수집"}</div>`;
+  } else {
+    symDrop.innerHTML = matches.map(s =>
+      `<div class="opt" data-sym="${s.symbol}"><span>${s.symbol}</span>`
+      + `<span class="r">${f(s.min)}~${f(s.max)} · ${s.count.toLocaleString()}</span></div>`).join("");
+    symDrop.querySelectorAll(".opt").forEach(o =>
+      o.addEventListener("mousedown", e => { e.preventDefault(); pickSym(o.dataset.sym); }));
+  }
+  symActive = -1;
+  symDrop.style.display = "";
+}
+function pickSym(sym) { symInput.value = sym; symDrop.style.display = "none"; updateAvail(true); }
+
+symInput.addEventListener("focus", () => showSymDrop(true));
+symInput.addEventListener("input", () => { showSymDrop(false); updateAvail(false); });
+symInput.addEventListener("blur", () => setTimeout(() => { symDrop.style.display = "none"; }, 150));
+symInput.addEventListener("keydown", e => {
+  const opts = [...symDrop.querySelectorAll(".opt")];
+  if (symDrop.style.display === "none" || !opts.length) return;
+  if (e.key === "ArrowDown") { symActive = Math.min(symActive+1, opts.length-1); e.preventDefault(); }
+  else if (e.key === "ArrowUp") { symActive = Math.max(symActive-1, 0); e.preventDefault(); }
+  else if (e.key === "Enter") { if (symActive >= 0) { e.preventDefault(); pickSym(opts[symActive].dataset.sym); } return; }
+  else if (e.key === "Escape") { symDrop.style.display = "none"; return; }
+  else return;
+  opts.forEach((o,i) => o.classList.toggle("active", i === symActive));
+  opts[symActive].scrollIntoView({ block:"nearest" });
+});
+
+function initDates() {
+  const today = new Date();
+  const iso = d => d.toISOString().slice(0,10);
+  $("colStart").value = iso(new Date(today.getTime() - 30*86400000));
+  $("colStart").max = iso(today);   // 미래 선택 방지 (과거만)
+}
+
+async function loadCache(force) {
+  try {
+    const list = await getCache(!!force);
+    if (!list.length) { $("cacheInfo").textContent = "아직 캐시된 캔들이 없어."; return; }
+    const f = ms => new Date(ms).toISOString().slice(0,10);
+    $("cacheInfo").innerHTML = list.map(s =>
+      `<div class="cache-row"><span class="cs">${s.symbol}</span>`
+      + `<span class="cr">${s.count.toLocaleString()}개 · ${f(s.min)}~${f(s.max)}</span></div>`).join("");
+  } catch(e) { $("cacheInfo").textContent = "현황 로드 실패: " + e.message; }
+}
+
+let colStop = false;
+const CHUNK_MS = 1500 * 60000;   // 1500분 = 요청 1회 분량
+
+$("colStop").onclick = () => { colStop = true; $("colStop").textContent = "중지 중..."; };
+
+$("collect").onclick = async () => {
+  const symbol = $("colSymbol").value.trim().toUpperCase();
+  const s = $("colStart").value;
+  if (!symbol || !s) { alert("심볼·시작일을 정해줘"); return; }
+  const startMs = Date.parse(s + "T00:00:00Z");
+  const endMs = Date.now();
+  if (startMs >= endMs) { alert("시작일은 과거여야 해"); return; }
+
+  const totalChunks = Math.ceil((endMs - startMs) / CHUNK_MS);
+  colStop = false;
+  $("collect").style.display = "none";
+  $("colStop").style.display = ""; $("colStop").textContent = "■ 중지";
+  $("colProgWrap").style.display = ""; $("colInfo").textContent = "";
+  $("colProg").style.width = "0%";
+
+  let cursor = endMs, done = 0, totalFetched = 0;
+  try {
+    while (cursor > startMs && !colStop) {
+      const from = Math.max(startMs, cursor - CHUNK_MS);
+      const res = await fetch("/api/collect_chunk", {method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ symbol, fromMs: from, toMs: cursor })});
+      const d = await res.json();
+      if (d.error) throw new Error(d.error);
+      totalFetched += d.fetched;
+      done++;
+      cursor = from - 60000;   // 다음 청크는 더 과거로 (최신→과거)
+      const pct = Math.min(100, Math.round(100*done/totalChunks));
+      $("colProg").style.width = pct + "%";
+      $("colProgText").textContent = `${pct}% · ${done}/${totalChunks} 청크 · `
+        + `신규 ${totalFetched.toLocaleString()}개 · ${new Date(from).toISOString().slice(0,10)}까지 내려감`;
+      if (done % 8 === 0) loadCache(true);
+    }
+    if (colStop) {
+      $("colInfo").innerHTML = `⏹ 중지됨 · 신규 <b>${totalFetched.toLocaleString()}</b>개 저장. `
+        + `최신 구간은 빈틈없이 확보됨 — 나중에 이어받으면 돼.`;
+    } else {
+      $("colProg").style.width = "100%";
+      $("colInfo").innerHTML = `✅ 완료 · 신규 <b>${totalFetched.toLocaleString()}</b>개 저장.`;
+    }
+  } catch (err) {
+    $("colInfo").innerHTML = `<span style="color:var(--down)">에러: ${err.message} (지금까지 신규 ${totalFetched.toLocaleString()}개는 저장됨)</span>`;
+  } finally {
+    $("collect").style.display = ""; $("colStop").style.display = "none";
+    loadCache(true);
+  }
+};
+
+// ---- 백테스트 컨트롤을 접이식(아코디언)으로 ----
+const SEC = {"시장":"market","진입":"entry","손절":"sl","익절":"tp","지표":"cond",
+             "트레일링":"trail","사이징":"sizing","필터":"filter","최적화":"opt"};
+const OPEN_DEFAULT = ["market","entry"];   // 기본 펼침
+
+document.querySelectorAll("#pane-backtest .group").forEach(g => {
+  const h = g.querySelector("h3");
+  if (!h) return;
+  const body = document.createElement("div");
+  body.className = "group-body";
+  while (h.nextSibling) body.appendChild(h.nextSibling);
+  g.appendChild(body);
+  const t = h.textContent;
+  const key = Object.keys(SEC).find(k => t.includes(k));
+  if (key) g.dataset.sec = SEC[key];
+  h.classList.add("ghead");
+  h.insertAdjacentHTML("beforeend", '<span class="ghint"></span><span class="chev">▸</span>');
+  h.addEventListener("click", () => g.classList.toggle("open"));
+  if (key && OPEN_DEFAULT.includes(SEC[key])) g.classList.add("open");
+});
+
+function updateHints() {
+  const v = id => $(id).value;
+  const setH = (sec, txt) => {
+    const el = document.querySelector(`#pane-backtest .group[data-sec="${sec}"] .ghint`);
+    if (el) el.textContent = txt;
+  };
+  if (!entryGroups.length) setH("entry", "조건 없음");
+  else {
+    const full = entryGroups.map(g => "(" + g.conds.map(c => COND_TYPES[c.type].desc(c.node)).join(" & ")
+      + ")" + (g.side==="short" ? "→숏" : "→롱")).join(" OR ");
+    const nCond = entryGroups.reduce((a,g) => a+g.conds.length, 0);
+    setH("entry", full.length <= 42 ? full : `${entryGroups.length}그룹 · ${nCond}조건`);
+  }
+  const slT = v("slType");
+  setH("sl", slT==="off" ? "없음" : slT==="percent" ? `${v("slValue")}%`
+        : slT==="atrMultiple" ? `ATR×${v("slValue")}` : `전저점${v("slLookback")}`);
+  const tpT = v("tpType");
+  setH("tp", tpT==="off" ? "없음" : tpT==="percent" ? `${v("tpValue")}%`
+        : tpT==="atrMultiple" ? `ATR×${v("tpValue")}` : `전고점${v("tpLookback")}`);
+  const parts = [];
+  if ($("exitCondEnabled").checked) parts.push(`${EXIT_IND_LABEL[v("exitCondInd")]||v("exitCondInd")}${v("exitCondCmp")}${v("exitCondValue")}`);
+  if (+v("timeStopBars") > 0) parts.push(`${v("timeStopBars")}봉`);
+  setH("cond", parts.join(" · ") || "없음");
+  setH("trail", $("trailingEnabled").checked ? `${v("trailingCallback")}%` : "없음");
+  setH("sizing", `${v("leverage")}x · ${v("sizeType")==="riskPercent"?"리스크":"증거금"} ${v("sizeValue")}%`);
+  setH("filter", `쿨다운 ${v("cooldownBars")} · 펀딩 ${v("avoidFundingMin")}분`);
+}
+$("pane-backtest").addEventListener("input", updateHints);
+$("pane-backtest").addEventListener("change", updateHints);
+
+injectFixedSweeps();                                    // 폼 고정 필드에 "범위" 토글 주입
+setEntryGroups([{side:"long",conds:[{type:"rsi",period:14,cmp:"<",value:30}]}]);   // 기본 진입 그룹 1개
+sync();
+updateHints();
+updateComboCount();  // 초기 조합수 안내
+updateAvail(true);   // 초기 보유 기간 표시
+</script>
+</body>
+</html>

@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "1.0",
+  "name": "RSI 과매도 반등 롱",
+  "description": "상승 추세(200EMA 위)에서 RSI 과매도 진입, 3% 익절 / 1.5% 손절, 5배 격리",
+  "market": {
+    "exchange": "binance-futures",
+    "symbol": "BTCUSDT",
+    "timeframe": "15m",
+    "direction": "long"
+  },
+  "entry": {
+    "op": "AND",
+    "children": [
+      { "left": { "indicator": "RSI", "period": 14 }, "cmp": "<", "right": 30 },
+      { "left": { "source": "close" }, "cmp": ">", "right": { "indicator": "EMA", "period": 200 } }
+    ]
+  },
+  "exit": {
+    "takeProfit": { "type": "percent", "value": 3.0 },
+    "stopLoss": { "type": "percent", "value": 1.5 },
+    "trailing": { "enabled": true, "callbackPercent": 0.8, "activationPercent": 1.0 }
+  },
+  "sizing": {
+    "leverage": 5,
+    "marginMode": "isolated",
+    "size": { "type": "equityPercent", "value": 10 },
+    "minLiquidationBuffer": 15,
+    "maxConcurrentPositions": 1,
+    "pyramiding": false
+  },
+  "filter": {
+    "maxSpreadPercent": 0.05,
+    "avoidFundingWindowMinutes": 10,
+    "cooldownBars": 3
+  }
+}
