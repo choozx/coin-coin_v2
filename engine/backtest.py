@@ -19,7 +19,7 @@ import numpy as np
 
 from . import indicators as ind
 from . import binance_math as bm
-from .candles import Candles, resample, signal_close_index, TIMEFRAME_MINUTES
+from .candles import Candles, resample, signal_close_index, TIMEFRAME_MINUTES, MINUTE_MS
 from .conditions import SeriesResolver, evaluate
 from .metrics import Metrics, Trade
 from .preset import Preset
@@ -87,8 +87,10 @@ def _size_position(sizing: dict, equity: float, price: float, leverage: int, sto
 def _exit_level(cfg: dict, entry: float, side: int, atr_val: float, signal, sb: int):
     """익절/손절 목표가. cfg 없으면 nan.
 
-    side: percent/atrMultiple의 방향 부호(롱 익절은 위, 손절은 아래). 호출부에서 조정.
-    swing 타입은 side 무관 — 전저(low)/전고(high) 자체를 사용.
+    side: 진입가 기준 목표가의 방향 부호(+1 위 / -1 아래). 호출부에서 조정.
+          롱 손절 -1 · 롱 익절 +1 · 숏 손절 +1 · 숏 익절 -1.
+    swing: side 부호대로 전저(아래)/전고(위)를 자동 선택 → 롱 손절=전저점, 숏 손절=전고점.
+    swingLow/swingHigh: 방향을 명시적으로 고정 (레거시 프리셋 호환).
     """
     if cfg is None:
         return float("nan")
@@ -101,14 +103,27 @@ def _exit_level(cfg: dict, entry: float, side: int, atr_val: float, signal, sb: 
         return entry + side * cfg["value"] * atr_val
     if t == "price":
         return cfg["value"]
-    if t in ("swingLow", "swingHigh"):
+    if t in ("swing", "swingLow", "swingHigh"):
         lb = int(cfg["lookback"])
         buf = cfg.get("bufferPercent", 0.0) / 100.0
         s = max(0, sb - lb + 1)
-        if t == "swingLow":
+        use_low = (side < 0) if t == "swing" else (t == "swingLow")
+        if use_low:
             return signal.low[s:sb + 1].min() * (1 - buf)     # 전저점 아래
         return signal.high[s:sb + 1].max() * (1 + buf)        # 전고점 위
     return float("nan")
+
+
+def _valid_level(level: float, entry: float, side: int) -> float:
+    """목표가가 진입가 기준 의도한 방향에 있는지 검사. 아니면 nan(=해당 레벨 없음).
+
+    안전장치: 숏에 전저점 손절을 걸면 손절가가 진입가 아래에 잡히는데, 숏 손절 검사는
+    hi >= stop 이라 진입 직후 즉시 '손절' 체결되며 오히려 이익이 난다(가짜 수익).
+    방향이 뒤집힌 레벨은 무효로 만들어 그런 결과가 나오지 않게 한다.
+    """
+    if np.isnan(level):
+        return float("nan")
+    return level if (level - entry) * side > 0 else float("nan")
 
 
 def _minutes_to_next_funding(open_time_ms: int) -> int:
@@ -173,6 +188,7 @@ def run(base: Candles, preset: Preset, cfg: BacktestConfig = None) -> Metrics:
             side=pos.side, entry_time=pos.entry_time, entry_price=pos.entry_price,
             exit_time=exit_time, exit_price=exit_price, qty=pos.qty, leverage=pos.leverage,
             pnl=pnl, fees=fees, funding=pos.funding_accum, exit_reason=reason,
+            stop_price=pos.stop_price, tp_price=pos.tp_price,
         ))
         equity_curve.append((int(exit_time), equity))
         pos = None
@@ -222,20 +238,25 @@ def run(base: Candles, preset: Preset, cfg: BacktestConfig = None) -> Metrics:
         if is_close[t]:
             sb = int(bar_of[t])
             sig_close = signal.close[sb]
+            # 체결 시각 = 이 1분봉이 '닫히는' 순간 = ot + 1분. (ot 는 봉의 시작)
+            # 예: 5m 11:00 봉의 마지막 1분봉은 ot=11:04 이고 11:05:00 에 닫힘 → 체결은 11:05.
+            # ot 를 그대로 쓰면 체결이 1분 이르게 기록돼 차트 마커가 신호봉 위에 찍힌다.
+            fill_time = ot + MINUTE_MS
 
             # 청산 신호 (조건/시간)
             if pos is not None:
                 cond = ex.get("condition")
                 time_stop = ex.get("timeStop")
                 if cond is not None and evaluate(cond, resolver, sb):
-                    close_position(sig_close, ot, "signal")
+                    close_position(sig_close, fill_time, "signal")
                 elif time_stop is not None:
                     bars_held = sb - pos.entry_signal_idx
                     if bars_held >= time_stop["maxBars"]:
-                        close_position(sig_close, ot, "time")
+                        close_position(sig_close, fill_time, "time")
 
             # 진입 신호
-            if pos is None and _entry_allowed(sb, ot, filt, last_exit_signal_idx, cfg):
+            # 펀딩 임박·거래시간 필터는 '체결 순간' 기준이어야 하므로 fill_time 으로 판정
+            if pos is None and _entry_allowed(sb, fill_time, filt, last_exit_signal_idx, cfg):
                 side = None
                 if entry_rules:
                     for rule in entry_rules:               # 순서대로 평가, 먼저 참인 규칙의 방향
@@ -245,7 +266,7 @@ def run(base: Candles, preset: Preset, cfg: BacktestConfig = None) -> Metrics:
                 elif evaluate(preset.entry, resolver, sb):
                     side = entry_side
                 if side is not None:
-                    p = _open_position(preset, sizing, ex, sig_close, ot, sb,
+                    p = _open_position(preset, sizing, ex, sig_close, fill_time, sb,
                                        side, lev, equity, cfg, atr_series, signal)
                     if p is not None:
                         pos = p
@@ -254,9 +275,9 @@ def run(base: Candles, preset: Preset, cfg: BacktestConfig = None) -> Metrics:
         if pos is None and is_close[t]:
             equity_curve.append((ot, equity))
 
-    # 종료 시 잔여 포지션 청산(마지막 종가)
+    # 종료 시 잔여 포지션 청산(마지막 종가 → 그 봉이 닫히는 순간)
     if pos is not None:
-        close_position(base.close[-1], int(base.open_time[-1]), "signal")
+        close_position(base.close[-1], int(base.open_time[-1]) + MINUTE_MS, "signal")
 
     m = Metrics(cfg.initial_equity, equity, trades, equity_curve)
     return m
@@ -301,7 +322,14 @@ def _open_position(preset, sizing, ex, price, ot, sb, side, lev, equity, cfg, at
     # 롱 손절은 아래(-side), 익절은 위(+side). swing 타입은 side 무시.
     sl_cfg, tp_cfg = ex.get("stopLoss"), ex.get("takeProfit")
     stop_price = _exit_level(sl_cfg, price, -side, atr_val, signal, sb) if sl_cfg else float("nan")
-    tp_price = _exit_level(tp_cfg, price, side, atr_val, signal, sb) if tp_cfg else float("nan")
+    stop_price = _valid_level(stop_price, price, -side)      # 방향 뒤집힌 손절 무효화
+    if tp_cfg and tp_cfg.get("type") == "riskReward":
+        # 손익비(R:R): 익절 거리 = 손절 거리 × value. 손절 없으면 익절도 없음(nan).
+        tp_price = (price + side * float(tp_cfg["value"]) * abs(price - stop_price)
+                    if not np.isnan(stop_price) else float("nan"))
+    else:
+        tp_price = _exit_level(tp_cfg, price, side, atr_val, signal, sb) if tp_cfg else float("nan")
+        tp_price = _valid_level(tp_price, price, side)       # 방향 뒤집힌 익절 무효화
 
     qty, margin = _size_position(sizing, equity, price, lev, stop_price)
     if qty is None or qty <= 0 or margin is None or margin <= 0:

@@ -40,6 +40,13 @@
   .presets { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:14px; }
   .presets button { width:auto; padding:6px 10px; font-size:12px; background:var(--panel2);
                     border:1px solid var(--line); font-weight:500; margin:0; }
+  #savePreset { border-style:dashed; }
+  .cpreset { display:inline-flex; align-items:stretch; }
+  .cpreset .cp-load { border-top-right-radius:0; border-bottom-right-radius:0; }
+  .cpreset .cp-del { padding:6px 7px; border-left:0; border-top-left-radius:0; border-bottom-left-radius:0;
+                     opacity:.55; font-size:11px; }
+  .cpreset .cp-del:hover { opacity:1; color:#e5534b; }
+  .cp-empty { font-size:11px; color:var(--mut); align-self:center; }
   .results { overflow-y:auto; }
   .metrics { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:18px; }
   .metric { background:var(--panel); border:1px solid var(--line); border-radius:9px; padding:12px 14px; }
@@ -50,6 +57,11 @@
               padding:14px; margin-bottom:16px; }
   .chartbox h3 { margin:0 0 10px; font-size:12px; color:var(--mut); font-weight:600; }
   canvas { width:100%; height:240px; display:block; }
+  #priceChart { height:380px; position:relative; }   /* Lightweight Charts 가 내부를 채움 */
+  .chartlegend { display:flex; flex-wrap:wrap; gap:12px; margin-top:8px; font-size:11px; color:var(--mut); }
+  .chartlegend span { display:inline-flex; align-items:center; gap:4px; }
+  .chartlegend i { width:14px; height:0; border-top-width:2px; border-top-style:solid; display:inline-block; }
+  .chartlegend b { font-style:normal; }
   .bars { display:flex; flex-direction:column; gap:6px; }
   .bar { display:flex; align-items:center; gap:10px; }
   .bar .name { width:100px; color:var(--mut); font-size:12px; }
@@ -134,6 +146,8 @@
   .cgroup .gt { color:var(--mut); font-size:10px; margin-bottom:6px; text-transform:uppercase; letter-spacing:.04em; }
   .or-sep { text-align:center; color:var(--accent); font-size:11px; font-weight:700; margin:5px 0; }
 </style>
+<!-- TradingView Lightweight Charts (Apache 2.0). engine/vendor/ 에 벤더링 → 오프라인 동작. -->
+<script src="/vendor/lightweight-charts.js"></script>
 </head>
 <body>
 <header>
@@ -155,6 +169,11 @@
       <button data-preset="swing">전저점+리스크</button>
       <button data-preset="macd">MACD 추세</button>
       <button data-preset="triple">3층 반전(EMA·RSI·VWAP·StochRSI)</button>
+    </div>
+
+    <div class="presets" id="customPresets">
+      <button id="savePreset" title="현재 폼·진입 조건을 이름 붙여 저장 (이 브라우저에 보관)">💾 현재 설정 저장</button>
+      <span id="cpList" style="display:contents"></span>
     </div>
 
     <div class="group">
@@ -192,14 +211,15 @@
           <option value="off">없음</option>
           <option value="percent" selected>고정 %</option>
           <option value="atrMultiple">ATR 배수</option>
-          <option value="swingLow">전저점</option>
+          <option value="swing">스윙 고저점 (롱=전저점 / 숏=전고점)</option>
         </select></div>
       <div class="row" data-when="sl-value"><label id="slValueLabel">손절 % (가격)</label>
         <input type="number" id="slValue" value="1.5" step="0.1" min="0"></div>
-      <div class="row" data-when="sl-swing"><label>전저점 룩백(봉)</label>
+      <div class="row" data-when="sl-swing"><label>룩백(봉)</label>
         <input type="number" id="slLookback" value="20" min="2"></div>
       <div class="row" data-when="sl-swing"><label>버퍼 %</label>
         <input type="number" id="slBuffer" value="0.05" step="0.05" min="0"></div>
+      <div class="note" id="slNote" style="color:var(--mut)"></div>
     </div>
 
     <div class="group">
@@ -209,11 +229,13 @@
           <option value="off">없음</option>
           <option value="percent" selected>고정 %</option>
           <option value="atrMultiple">ATR 배수</option>
-          <option value="swingHigh">전고점</option>
+          <option value="riskReward">손익비 (손절 거리×n)</option>
+          <option value="swing">스윙 고저점 (롱=전고점 / 숏=전저점)</option>
         </select></div>
       <div class="row" data-when="tp-value"><label id="tpValueLabel">익절 % (가격)</label>
         <input type="number" id="tpValue" value="3" step="0.1" min="0"></div>
-      <div class="row" data-when="tp-swing"><label>전고점 룩백(봉)</label>
+      <div class="note" id="tpNote" style="color:var(--mut)"></div>
+      <div class="row" data-when="tp-swing"><label>룩백(봉)</label>
         <input type="number" id="tpLookback" value="20" min="2"></div>
       <div class="row" data-when="tp-swing"><label>버퍼 %</label>
         <input type="number" id="tpBuffer" value="0.05" step="0.05" min="0"></div>
@@ -552,11 +574,19 @@ function sync() {
   const show = (sel, on) => document.querySelectorAll(`[data-when="${sel}"]`)
                                     .forEach(e => e.style.display = on ? "" : "none");
   show("sl-value", slT === "percent" || slT === "atrMultiple");
-  show("sl-swing", slT === "swingLow");
-  show("tp-value", tpT === "percent" || tpT === "atrMultiple");
-  show("tp-swing", tpT === "swingHigh");
+  show("sl-swing", slT === "swing");
+  show("tp-value", tpT === "percent" || tpT === "atrMultiple" || tpT === "riskReward");
+  show("tp-swing", tpT === "swing");
   $("slValueLabel").textContent = slT === "atrMultiple" ? "손절 ATR 배수" : "손절 % (가격)";
-  $("tpValueLabel").textContent = tpT === "atrMultiple" ? "익절 ATR 배수" : "익절 % (가격)";
+  $("slNote").textContent = slT === "swing"
+    ? "룩백 구간(현재 봉 포함)의 최저/최고가 ± 버퍼%. 방향은 자동 — 롱은 전저점 아래, 숏은 전고점 위."
+    : "";
+  $("tpValueLabel").textContent = tpT === "atrMultiple" ? "익절 ATR 배수"
+    : tpT === "riskReward" ? "손익비 (손절 거리 × 배수)" : "익절 % (가격)";
+  $("tpNote").textContent = tpT === "riskReward"
+    ? (slT === "off" ? "⚠️ 손익비는 손절이 필요해 — 손절 방식을 켜줘 (안 켜면 익절 없음)"
+                     : "익절 거리 = 손절 거리 × 배수 (예: 2 → 손절 1% 시 익절 2%)")
+    : "";
 
   const risk = $("sizeType").value === "riskPercent";
   $("sizeValueLabel").textContent = risk ? "트레이드당 리스크 %" : "증거금 비중 %";
@@ -586,7 +616,7 @@ const PRESETS = {
     minLiqBuffer:8, cooldownBars:2, avoidFundingMin:5 },
   swing: { symbol:"BTCUSDT", timeframe:"15m", direction:"long",
     entry:[{side:"long",conds:[{type:"rsi",period:14,cmp:"<",value:35},{type:"ema",mode:"price",cmp:">",period:200}]}],
-    slType:"swingLow", slLookback:20, slBuffer:0.05,
+    slType:"swing", slLookback:20, slBuffer:0.05,
     tpType:"atrMultiple", tpValue:3, exitCondEnabled:false, timeStopBars:0, trailingEnabled:false,
     leverage:5, sizeType:"riskPercent", sizeValue:1, minLiqBuffer:5, cooldownBars:2, avoidFundingMin:5 },
   macd: { symbol:"ETHUSDT", timeframe:"1h", direction:"long",
@@ -609,16 +639,62 @@ const PRESETS = {
     minLiqBuffer:8, cooldownBars:3, avoidFundingMin:5 },
 };
 
-document.querySelectorAll(".presets button").forEach(b => b.onclick = () => {
-  const p = PRESETS[b.dataset.preset];
-  for (const [k,v] of Object.entries(p)) {
+// 레거시 저장값 호환: swingLow/swingHigh 는 방향 자동인 swing 하나로 합쳐짐.
+// 그대로 두면 드롭다운에 없는 값이라 select 가 빈칸이 된다.
+const LEGACY_SWING = { swingLow:"swing", swingHigh:"swing" };
+function migrate(k, v) {
+  return (k === "slType" || k === "tpType") && LEGACY_SWING[v] ? LEGACY_SWING[v] : v;
+}
+
+function applyPreset(p) {
+  if (!p) return;
+  for (const [k,v0] of Object.entries(p)) {
     if (k === "entry") continue;
     const el = $(k); if (!el) continue;
+    const v = migrate(k, v0);
     if (el.type === "checkbox") el.checked = v; else el.value = v;
   }
   setEntryGroups(p.entry);
   sync();
-});
+}
+document.querySelectorAll("[data-preset]").forEach(b => b.onclick = () => applyPreset(PRESETS[b.dataset.preset]));
+
+// ---- 커스텀 프리셋 (사용자가 만든 세팅을 이름 붙여 브라우저에 저장) ----
+// 빌트인 PRESETS와 같은 형태({...폼필드, entry:[{side,conds:[{type,...필드값}]}]})로 저장 →
+// applyPreset/setEntryGroups로 그대로 복원. localStorage라 서버 없이 이 브라우저에 유지됨.
+const CP_KEY = "autotrade.customPresets";
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => (
+  {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function cpLoad(){ try { return JSON.parse(localStorage.getItem(CP_KEY)) || {}; } catch(e){ return {}; } }
+function cpStore(obj){ localStorage.setItem(CP_KEY, JSON.stringify(obj)); }
+function cpSerialize(){
+  const p = {};
+  for (const f of FIELDS){ const el = $(f); p[f] = el.type === "checkbox" ? el.checked : el.value; }
+  p.entry = entryGroups.map(g => ({ side: g.side, conds: g.conds.map(c => ({ type: c.type, ...c.f })) }));
+  return p;
+}
+function cpRender(){
+  const all = cpLoad(), names = Object.keys(all);
+  $("cpList").innerHTML = names.length
+    ? names.map(n => `<span class="cpreset"><button class="cp-load" data-name="${escapeHtml(n)}">${escapeHtml(n)}</button>`
+        + `<button class="cp-del" data-name="${escapeHtml(n)}" title="삭제">✕</button></span>`).join("")
+    : `<span class="cp-empty">저장된 프리셋 없음 — 세팅 후 “💾 현재 설정 저장”</span>`;
+  document.querySelectorAll(".cp-load").forEach(b => b.onclick = () => applyPreset(cpLoad()[b.dataset.name]));
+  document.querySelectorAll(".cp-del").forEach(b => b.onclick = () => {
+    const n = b.dataset.name;
+    if (!confirm(`'${n}' 프리셋을 삭제할까?`)) return;
+    const all = cpLoad(); delete all[n]; cpStore(all); cpRender();
+  });
+}
+$("savePreset").onclick = () => {
+  if (!entryGroups.length){ alert("저장할 진입 조건이 없어 — 진입 그룹을 먼저 만들어줘."); return; }
+  const name = (prompt("프리셋 이름:", "") || "").trim();
+  if (!name) return;
+  const all = cpLoad();
+  if (all[name] && !confirm(`'${name}' 이(가) 이미 있어. 덮어쓸까?`)) return;
+  all[name] = cpSerialize(); cpStore(all); cpRender();
+};
+cpRender();
 
 $("run").onclick = async () => {
   if (!entryGroups.length) { $("err").innerHTML = '<div class="err">진입 조건을 하나 이상 추가해줘 (진입 섹션)</div>'; return; }
@@ -659,6 +735,16 @@ function render(d) {
     html += `<div class="metric"><div class="k">${k}</div><div class="v ${c}">${v}</div></div>`;
   html += '</div>';
 
+  const nTr = (d.trades||[]).length, detail = nTr <= 100;
+  const nBar = (d.ohlc||[]).length, barMin = d.ohlcBarMin||0;
+  html += `<div class="chartbox"><h3>캔들 · 진입/청산 · 손절·익절 · ${d.preset.market.symbol} ${d.preset.market.timeframe} · ${nBar}봉(1봉≈${barMin}분)</h3>`
+    + `<div id="priceChart"></div>`
+    + `<div class="chartlegend"><span><b style="color:#4c9be8">▲</b> 롱 진입</span><span><b style="color:#4c9be8">▼</b> 숏 진입</span>`
+    + `<span><b style="color:#26d07c">●</b>/<b style="color:#ff5c6c">●</b> 청산(이익/손실)</span>`
+    + `<span><i style="border-color:#ff5c6c"></i> 손절</span><span><i style="border-color:#26d07c"></i> 익절</span>`
+    + `<span style="margin-left:auto">휠=줌 · 드래그=이동 · 더블클릭=전체보기</span>`
+    + (detail ? "" : `<span style="color:#e0a030">⚠️ ${nTr}건 → 손절/익절 라인 생략, 마커만</span>`) + `</div></div>`;
+
   html += `<div class="chartbox"><h3>자산 곡선 · ${d.preset.market.symbol} ${fmtDate(d.dataRange[0])} ~ ${fmtDate(d.dataRange[1])} UTC · 1분봉 ${d.candles.toLocaleString()}개 · 펀딩 ${(d.fundingRate*100).toFixed(4)}%/8h</h3><canvas id="chart"></canvas></div>`;
 
   const total = Object.values(d.exitReasons).reduce((a,b)=>a+b,0) || 1;
@@ -674,6 +760,7 @@ function render(d) {
 
   html += `<details><summary>생성된 프리셋 JSON 보기</summary><pre>${JSON.stringify(d.preset,null,2)}</pre></details>`;
   $("out").innerHTML = html;
+  drawPriceChart(d.ohlc || [], d.trades || [], d.dataRange, d.ohlcBarMin || 1);
   drawChart(d.equityCurve, m.initialEquity);
 }
 
@@ -696,6 +783,83 @@ function drawChart(curve, base) {
   ctx.strokeStyle = last>=base ? "#26d07c" : "#ff5c6c"; ctx.lineWidth=1.8; ctx.beginPath();
   curve.forEach((p,i)=>{ const x=X(i), y=Y(p[1]); i?ctx.lineTo(x,y):ctx.moveTo(x,y); });
   ctx.stroke();
+}
+
+// 캔들스틱(백테스트 타임프레임 그대로) — TradingView Lightweight Charts.
+// 줌/팬/크로스헤어/툴팁은 라이브러리가 처리. 우리는 진입·청산 마커와 트레이드별 손절/익절 구간선만 얹는다.
+// ohlc: [[time_ms, open, high, low, close], ...]
+let priceChartObj = null;   // 결과 갱신 때 이전 차트 정리용
+
+function drawPriceChart(ohlc, trades, range, barMin) {
+  const box = $("priceChart");
+  if (!box || !ohlc.length || !window.LightweightCharts) return;
+  if (priceChartObj) { priceChartObj.remove(); priceChartObj = null; }
+  const LC = window.LightweightCharts;
+
+  // fitContent 는 minBarSpacing(기본 0.5px/봉) 하한에 걸려, 폭÷0.5 봉까지만 한 화면에 담는다.
+  // 예: 1200px → 2400봉. 그 이상이면 최근분만 보이고 나머지가 왼쪽으로 잘린다.
+  // 데이터가 많을수록 하한을 낮춰, 초기 뷰가 항상 전체 구간을 담게 한다(줌인하면 개별 봉 선명).
+  const boxW = box.clientWidth || 1000;
+  const minBarSpacing = Math.min(0.5, Math.max(0.004, boxW / ohlc.length));
+
+  const chart = LC.createChart(box, {
+    autoSize: true,                                   // ResizeObserver 내장 → 창 크기 따라감
+    layout: { background: { color: "transparent" }, textColor: "#8a90a0",
+              fontFamily: "system-ui, sans-serif", attributionLogo: false },
+    grid: { vertLines: { color: "rgba(255,255,255,.05)" },
+            horzLines: { color: "rgba(255,255,255,.05)" } },
+    crosshair: { mode: LC.CrosshairMode.Normal },
+    rightPriceScale: { borderColor: "rgba(255,255,255,.10)" },
+    timeScale: { borderColor: "rgba(255,255,255,.10)", timeVisible: true, secondsVisible: false,
+                 minBarSpacing },
+    localization: { timeFormatter: s => fmtDate(s*1000) },   // 라이브러리는 초, fmtDate 는 ms
+  });
+  priceChartObj = chart;
+
+  const candles = chart.addSeries(LC.CandlestickSeries, {
+    upColor: "#3aa76d", downColor: "#cf5b5b", borderVisible: false,
+    wickUpColor: "#3aa76d", wickDownColor: "#cf5b5b",
+  });
+  // 라이브러리 시각 단위는 초. 봉 시각이 곧 x좌표 기준점이 된다.
+  candles.setData(ohlc.map(b => ({ time: b[0]/1000, open: b[1], high: b[2], low: b[3], close: b[4] })));
+
+  // 트레이드 시각 → 그 시각을 담고 있는 봉의 시각. 마커·구간선이 봉 격자에 맞아떨어져야 해서 스냅한다.
+  const n = ohlc.length;
+  const snap = t => { let a=0,b=n-1,r=0; while(a<=b){ const m=(a+b)>>1;
+    if(ohlc[m][0]<=t){ r=m; a=m+1; } else b=m-1; } return ohlc[r][0]/1000; };
+
+  const markers = [];
+  for (const t of trades) {
+    const win = t.pnl > 0;
+    markers.push({ time: snap(t.entryTime), position: t.side>0 ? "belowBar" : "aboveBar",
+                   color: "#4c9be8", shape: t.side>0 ? "arrowUp" : "arrowDown",
+                   text: t.side>0 ? "롱" : "숏" });   // 가격은 크로스헤어 툴팁에 나오니 생략
+    markers.push({ time: snap(t.exitTime), position: t.side>0 ? "aboveBar" : "belowBar",
+                   color: win ? "#26d07c" : "#ff5c6c", shape: "circle",
+                   text: (t.pnl>0?"+":"") + t.pnl.toFixed(0) });
+  }
+  markers.sort((a,b) => a.time - b.time);            // 라이브러리가 시각 오름차순을 요구
+  LC.createSeriesMarkers(candles, markers);
+
+  // 손절/익절: createPriceLine 은 차트 전체를 가로지르므로, 트레이드 구간에만 걸치는
+  // 2점짜리 라인 시리즈로 그린다. 건수가 많으면 시리즈 폭증하니 생략(범례에 안내).
+  if (trades.length <= 100) {
+    for (const t of trades) {
+      const t0 = snap(t.entryTime), t1 = snap(t.exitTime);
+      if (t1 <= t0) continue;                        // 같은 봉에서 진입·청산 → 그릴 구간 없음
+      for (const [lvl, color] of [[t.stop, "rgba(255,92,108,.6)"], [t.tp, "rgba(38,208,124,.6)"]]) {
+        if (lvl == null) continue;
+        const s = chart.addSeries(LC.LineSeries, {
+          color, lineWidth: 1, lineStyle: LC.LineStyle.Dashed,
+          priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+        });
+        s.setData([{ time: t0, value: lvl }, { time: t1, value: lvl }]);
+      }
+    }
+  }
+
+  chart.timeScale().fitContent();
+  box.ondblclick = () => chart.timeScale().fitContent();   // 더블클릭 = 전체보기 복귀
 }
 
 // ---- 파라미터 최적화 (백테스트 폼의 각 파라미터 옆 "범위" 체크박스로 스윕) ----
@@ -782,7 +946,7 @@ function sweepApplicable(key) {
     return !!(c && getFields(c.type, c.f).some(f => f.sweep && f.sweep.path === path));
   }
   if (key === "slValue") return ["percent","atrMultiple"].includes($("slType").value);
-  if (key === "tpValue") return ["percent","atrMultiple"].includes($("tpType").value);
+  if (key === "tpValue") return ["percent","atrMultiple","riskReward"].includes($("tpType").value);
   if (key === "exitCondValue" || key === "exitCondPeriod") return $("exitCondEnabled").checked;
   return true;   // timeStopBars · leverage · sizeValue
 }
@@ -1166,10 +1330,11 @@ function updateHints() {
   }
   const slT = v("slType");
   setH("sl", slT==="off" ? "없음" : slT==="percent" ? `${v("slValue")}%`
-        : slT==="atrMultiple" ? `ATR×${v("slValue")}` : `전저점${v("slLookback")}`);
+        : slT==="atrMultiple" ? `ATR×${v("slValue")}` : `스윙${v("slLookback")}봉`);
   const tpT = v("tpType");
   setH("tp", tpT==="off" ? "없음" : tpT==="percent" ? `${v("tpValue")}%`
-        : tpT==="atrMultiple" ? `ATR×${v("tpValue")}` : `전고점${v("tpLookback")}`);
+        : tpT==="atrMultiple" ? `ATR×${v("tpValue")}`
+        : tpT==="riskReward" ? `R:R ${v("tpValue")}` : `스윙${v("tpLookback")}봉`);
   const parts = [];
   if ($("exitCondEnabled").checked) parts.push(`${EXIT_IND_LABEL[v("exitCondInd")]||v("exitCondInd")}${v("exitCondCmp")}${v("exitCondValue")}`);
   if (+v("timeStopBars") > 0) parts.push(`${v("timeStopBars")}봉`);

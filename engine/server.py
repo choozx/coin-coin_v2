@@ -15,9 +15,13 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .backtest import BacktestConfig, run
+from .candles import resample, TIMEFRAME_MINUTES
 from .preset import Preset
 
 _HTML = os.path.join(os.path.dirname(__file__), "gui.html")
+# 차트 라이브러리(TradingView Lightweight Charts, Apache 2.0). 벤더링해서 오프라인에서도 동작.
+_CHARTS_JS = os.path.join(os.path.dirname(__file__), "vendor",
+                          "lightweight-charts.standalone.production.js")
 
 
 def _get_candles(symbol, days):
@@ -39,10 +43,10 @@ def _price_target(p: dict, prefix: str):
     t = p.get(prefix + "Type", "off")
     if t in ("off", "", None):
         return None
-    if t in ("percent", "atrMultiple", "price"):
+    if t in ("percent", "atrMultiple", "price", "riskReward"):
         v = float(p.get(prefix + "Value", 0) or 0)
         return {"type": t, "value": v} if v > 0 else None
-    if t in ("swingLow", "swingHigh"):
+    if t in ("swing", "swingLow", "swingHigh"):
         d = {"type": t, "lookback": int(p.get(prefix + "Lookback", 20))}
         buf = float(p.get(prefix + "Buffer", 0) or 0)
         if buf > 0:
@@ -151,6 +155,27 @@ def _downsample(curve, n=400):
     return [curve[int(i * step)] for i in range(n)] + [curve[-1]]
 
 
+def _ohlc_for_chart(base, tf_min: int, max_bars: int = 200000):
+    """차트용 캔들스틱 OHLC. 백테스트 타임프레임 그대로 리샘플(무압축)해 반환하되,
+    max_bars 초과 시에만 연속 봉을 묶어 압축(응답 크기 방어).
+    open=첫 open, high=max, low=min, close=마지막 close."""
+    import math
+    cs = resample(base, tf_min)
+    n = len(cs)
+    k = 1 if n <= max_bars else math.ceil(n / max_bars)
+    out = []
+    for s in range(0, n, k):
+        e = min(s + k, n)
+        out.append([
+            int(cs.open_time[s]),
+            round(float(cs.open[s]), 2),
+            round(float(cs.high[s:e].max()), 2),
+            round(float(cs.low[s:e].min()), 2),
+            round(float(cs.close[e - 1]), 2),
+        ])
+    return out, (k * tf_min)   # (캔들목록, 캔들 1개가 나타내는 분)
+
+
 def _run_backtest(p: dict) -> dict:
     base, fr_rate = _get_candles(p["symbol"], float(p["days"]))
     preset_dict = _build_preset(p)
@@ -159,12 +184,28 @@ def _run_backtest(p: dict) -> dict:
     m = run(base, preset, cfg)
 
     from collections import Counter
+    import math
     reasons = Counter(t.exit_reason for t in m.trades)
+
+    def _px(x):   # nan → None, 그 외 round
+        return None if x is None or (isinstance(x, float) and math.isnan(x)) else round(float(x), 2)
+
+    ohlc, bar_min = _ohlc_for_chart(base, TIMEFRAME_MINUTES[p["timeframe"]])
+    trades_out = [{
+        "side": t.side,
+        "entryTime": int(t.entry_time), "entryPrice": round(float(t.entry_price), 2),
+        "exitTime": int(t.exit_time), "exitPrice": round(float(t.exit_price), 2),
+        "stop": _px(t.stop_price), "tp": _px(t.tp_price),
+        "pnl": round(float(t.pnl), 2), "reason": t.exit_reason,
+    } for t in m.trades]
     return {
         "preset": preset_dict,
         "dataRange": [int(base.open_time[0]), int(base.open_time[-1])],
         "candles": len(base),
         "fundingRate": fr_rate,
+        "ohlc": ohlc,
+        "ohlcBarMin": bar_min,
+        "trades": trades_out,
         "metrics": {
             "totalReturnPct": round(m.total_return_pct, 3),
             "initialEquity": m.initial_equity,
@@ -276,6 +317,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.path in ("/", "/index.html"):
             with open(_HTML, "rb") as f:
                 self._send(200, f.read(), "text/html; charset=utf-8")
+        elif self.path == "/vendor/lightweight-charts.js":
+            with open(_CHARTS_JS, "rb") as f:
+                self._send(200, f.read(), "application/javascript; charset=utf-8")
         elif self.path == "/api/cache":
             self._send(200, json.dumps(_cache_list()))
         else:

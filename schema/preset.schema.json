@@ -164,19 +164,19 @@
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["percent", "atrMultiple", "price", "swingLow", "swingHigh"],
-          "description": "percent=진입가대비%, atrMultiple=ATR배수, price=절대가격, swingLow=전저점(롱손절/숏익절), swingHigh=전고점(롱익절/숏손절)"
+          "enum": ["percent", "atrMultiple", "price", "swing", "swingLow", "swingHigh", "riskReward"],
+          "description": "percent=진입가대비%, atrMultiple=ATR배수, price=절대가격, swing=스윙 고저점(방향 자동: 롱손절·숏익절=전저점, 숏손절·롱익절=전고점), swingLow/swingHigh=방향 고정(레거시), riskReward=손익비(익절 거리=손절 거리×value, 익절 전용·손절 필수)"
         },
         "value": { "type": "number", "exclusiveMinimum": 0 },
         "lookback": { "type": "integer", "minimum": 2,
-          "description": "swing 타입: 전저/전고를 찾을 과거 봉 개수" },
+          "description": "swing 타입: 전저/전고를 찾을 과거 봉 개수 (현재 신호봉 포함)" },
         "bufferPercent": { "type": "number", "minimum": 0,
           "description": "swing 타입: 스탑사냥 회피용 버퍼 %. 전저점 -buffer%, 전고점 +buffer%" }
       },
       "allOf": [
-        { "if": { "properties": { "type": { "enum": ["percent", "atrMultiple", "price"] } } },
+        { "if": { "properties": { "type": { "enum": ["percent", "atrMultiple", "price", "riskReward"] } } },
           "then": { "required": ["value"] } },
-        { "if": { "properties": { "type": { "enum": ["swingLow", "swingHigh"] } } },
+        { "if": { "properties": { "type": { "enum": ["swing", "swingLow", "swingHigh"] } } },
           "then": { "required": ["lookback"] } }
       ]
     },
