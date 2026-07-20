@@ -398,6 +398,12 @@ const COND_TYPES = {
     fields:[{k:"cross",label:"방향",type:"cross"},{k:"period",label:"EMA기간",v:20,sweep:{path:"right.period",def:[10,40,10]}}],
     build:f=>({cross:f.cross,left:{indicator:"CVD"},right:{indicator:"CVD_EMA",period:+f.period}}),
     desc:n=>`CVD ${n.cross==="crossOver"?"▲상승(매수유입)":"▼하락(매도유입)"} EMA(${n.right.period})` },
+  hawkeye: { label:"HawkEye 볼륨(VSA)",
+    fields:[{k:"dir",label:"신호",type:"select",opts:[["bull","강세(초록=매수세)"],["bear","약세(빨강=매도세)"]],v:"bull"},
+            {k:"length",label:"기간",v:200,sweep:{path:"left.period",def:[100,300,50]}},
+            {k:"divisor",label:"divisor",v:3.6}],
+    build:f=>({left:{indicator:"HAWKEYE",period:+f.length,params:{divisor:+f.divisor}},cmp:f.dir==="bull"?">":"<",right:0}),
+    desc:n=>`HawkEye ${n.cmp===">"?"↑강세(매수세)":"↓약세(매도세)"} 볼륨(${n.left.period})` },
   superTrend: { label:"SuperTrend",
     fields:f=> f.mode==="flip"
       ? [_MODE_ST, {k:"cross",label:"방향",type:"cross"},

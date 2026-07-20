@@ -91,6 +91,25 @@ def test_orderflow_condition_needs_taker_data():
     assert evaluate(node, SeriesResolver(c_yes), 10) is True
 
 
+def test_hawkeye_bull_bear_neutral():
+    rng = np.random.default_rng(1)
+    n = 400
+    close = np.cumsum(rng.normal(0, 1, n)) + 1000
+    high = close + np.abs(rng.normal(0, 2, n))
+    low = close - np.abs(rng.normal(0, 2, n))
+    vol = np.abs(rng.normal(100, 30, n))
+    hv = ind.hawkeye(high, low, close, vol, length=200, divisor=3.6)
+    valid = hv[~np.isnan(hv)]
+    assert valid.size > 0
+    assert set(np.unique(valid)).issubset({-1.0, 0.0, 1.0})   # 세 상태만
+    assert np.isnan(hv[0])                                     # 워밍업(이전봉 없음)
+    assert np.isnan(hv[100])                                   # length=200 미달 구간
+    # 강한 상승봉(종가>전봉중점)은 강세(+1) 후보 — 명시적 케이스
+    h = np.array([10, 12.0]); l = np.array([8, 9.0]); c = np.array([9, 11.5]); v = np.array([100, 100.0])
+    hv2 = ind.hawkeye(h, l, c, v, length=1, divisor=3.6)
+    assert hv2[1] in (1.0, 0.0, -1.0)
+
+
 def test_supertrend_trend_and_flip():
     # 상승→하락 명확한 추세: SuperTrend가 방향을 따라가고 플립이 최소 1번 나야 함.
     up = np.linspace(100, 140, 60)

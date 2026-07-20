@@ -88,6 +88,9 @@ class SeriesResolver:
                 return ind.taker_delta_ratio(c.volume, c.taker_buy)
             series = ind.cvd(c.volume, c.taker_buy)
             return series if name == "CVD" else ind.ema(series, period or 20)
+        if name == "HAWKEYE":
+            return ind.hawkeye(c.high, c.low, c.close, c.volume,
+                               period or 200, float(params.get("divisor", 3.6)))
         if name in ("SUPERTREND", "SUPERTREND_DIR"):
             line, d = ind.supertrend(c.high, c.low, c.close, period or 10,
                                      float(params.get("multiplier", 3.0)))

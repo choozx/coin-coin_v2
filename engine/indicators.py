@@ -170,6 +170,43 @@ def cvd(volume, taker_buy) -> np.ndarray:
     return np.cumsum(d)
 
 
+def hawkeye(high, low, close, volume, length: int = 200, divisor: float = 3.6) -> np.ndarray:
+    """HawkEye Volume Indicator (LazyBear) — VSA식 봉 분류.
+
+    각 봉을 강세(초록, 매수세 유입)/약세(빨강, 매도세)/중립(회색·기본)으로 나눠
+    +1(강세) / -1(약세) / 0(중립) 신호로 반환한다. OHLCV만 사용.
+    원본 색 우선순위(gray > green > red > blue)를 그대로 따름.
+    """
+    h, l, c, v = _d(high), _d(low), _d(close), _d(volume)
+    rng = h - l
+    range_avg = talib.SMA(rng, length)
+    volume_avg = talib.SMA(v, length)
+
+    high1 = np.roll(h, 1); low1 = np.roll(l, 1); vol1 = np.roll(v, 1)
+    high1[0] = low1[0] = vol1[0] = np.nan          # 첫 봉엔 이전 봉 없음
+    mid1 = (high1 + low1) / 2.0
+    u1 = mid1 + (high1 - low1) / divisor
+    d1 = mid1 - (high1 - low1) / divisor
+
+    # 빨강(매도세)
+    r = ((rng > range_avg) & (c < d1) & (v > volume_avg)) | (c < mid1)
+    # 초록(매수세)
+    g = ((c > mid1)
+         | ((rng > range_avg) & (c > u1) & (v > volume_avg))
+         | ((h > high1) & (rng < range_avg / 1.5) & (v < volume_avg))
+         | ((l < low1) & (rng < range_avg / 1.5) & (v > volume_avg)))
+    # 회색(중립/노디맨드)
+    gr = (((rng > range_avg) & (c > d1) & (c < u1) & (v > volume_avg)
+           & (v < volume_avg * 1.5) & (v > vol1))
+          | ((rng < range_avg / 1.5) & (v < volume_avg / 1.5))
+          | ((c > d1) & (c < u1)))
+
+    # 우선순위: 회색(0) → 초록(+1) → 빨강(-1) → 파랑(0)
+    out = np.select([gr, g, r], [0.0, 1.0, -1.0], default=0.0)
+    warmup = np.isnan(range_avg) | np.isnan(volume_avg) | np.isnan(mid1)
+    return np.where(warmup, np.nan, out)
+
+
 # ---- 캔들스틱 반전 패턴 (TA-Lib CDL*) ----
 # 각 CDL 함수는 봉마다 +100/+200(강세) · -100/-200(약세) · 0(없음) 반환.
 # 종합 반전 = 아래 세트 중 하나라도 뜨면 신호(강세 +100 / 약세 -100).
