@@ -163,12 +163,8 @@ def _build_preset(p: dict) -> dict:
         "exit": exit_block,
         "sizing": sizing,
     }
-    if p.get("entryType") == "makerLimit":       # 지정가 maker 진입
-        preset["execution"] = {
-            "entryType": "makerLimit",
-            "makerOffsetPercent": float(p.get("makerOffset", 0) or 0),
-            "makerTimeoutBars": int(p.get("makerTimeout", 3) or 3),
-        }
+    if p.get("entryType") == "makerLimit":       # 지정가 maker 진입 (종가 체결, 수수료만 maker)
+        preset["execution"] = {"entryType": "makerLimit"}
     if filt:
         preset["filter"] = filt
     return preset

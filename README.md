@@ -144,11 +144,12 @@ vendor/         외부 JS. lightweight-charts.standalone.production.js
 - [ ] 리스크 가드레일 (일일 손실 한도, kill switch)
 - [ ] 페이퍼 트레이딩 (실시간 시세 + 같은 엔진)
 - [ ] direction "both" 롱·숏 동시 (스키마 v2: entryLong/entryShort 분리)
-- [ ] **maker→taker 폴백 체결 (passive-then-aggressive)** — 현재 `execution.entryType`은
-      `taker`(시장가 즉시)와 `makerLimit`(지정가, 미체결 시 스킵)만 지원. 실거래에서 흔히 쓰는
-      "post-only 지정가 먼저 → 타임아웃 내 미체결이면 시장가(taker)로 추격" 방식을 추가하면
-      **"반드시 진입"하는 모멘텀 전략의 진짜 순이익**(추격 슬리피지 포함)까지 정직하게 나온다.
-      구현: `makerLimit` 위에 타임아웃 폴백만 얹으면 됨(placeholder 주문이 timeout 도달 시
-      그 봉 종가로 taker 체결). 주의: 수수료 절감은 되돌아온(나쁜) 거래에 몰리고, 신호 방향으로
-      튄(좋은) 거래는 maker 미체결 후 더 비싼 taker로 잡히는 역선택이 있음. BTCUSDC(maker 0)
-      스캘핑에선 이게 실전 표준 체결 방식이 될 것. 백테스트↔실거래 동일 로직 원칙에 부합.
+- [ ] **지정가 체결 현실화 (미체결·슬리피지 모델)** — 현재 `execution.entryType`은
+      `taker`(시장가)와 `makerLimit`(지정가) 둘 다 **신호봉 종가에 체결됐다고 가정하고 수수료만
+      다르게** 적용(maker=지정가). 즉 지정가의 체결 불확실성은 모델링 안 함(낙관적). 실거래에선
+      지정가가 (a) 가격이 불리하게 올 때만 체결(역선택), (b) 신호 방향으로 튀면 미체결, 로 갈린다.
+      더 정직하게 하려면 두 방향: ① fill-if-touched + 타임아웃 미체결 스킵(패시브/역추세용),
+      ② **passive-then-aggressive** = post-only 지정가 먼저 → 타임아웃 내 미체결이면 시장가(taker)
+      추격(모멘텀용, 추격 슬리피지까지 반영). BTCUSDC(maker 0) 스캘핑의 실전 표준 체결 방식.
+      백테스트↔실거래 동일 로직 원칙에 부합. (fill-if-touched 상태머신은 커밋 eb4edcd에 있었으나
+      단순화하며 제거 — 필요 시 복구.)

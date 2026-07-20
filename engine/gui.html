@@ -306,10 +306,6 @@
           <option value="taker" selected>시장가 (taker)</option>
           <option value="makerLimit">지정가 (maker)</option>
         </select></div>
-      <div class="row" data-when="maker"><label>지정가 오프셋 %</label>
-        <input type="number" id="makerOffset" value="0" step="0.05" min="0"></div>
-      <div class="row" data-when="maker"><label>미체결 타임아웃(봉)</label>
-        <input type="number" id="makerTimeout" value="3" min="1"></div>
       <div class="note" id="entryTypeNote" style="color:var(--mut)"></div>
     </div>
 
@@ -371,7 +367,7 @@ const FIELDS = ["symbol","timeframe","days","equity",
   "exitStEnabled","exitStPeriod","exitStMult",
   "trailingEnabled","trailingCallback","trailingActivation",
   "leverage","sizeType","sizeValue","minLiqBuffer","cooldownBars","avoidFundingMin",
-  "entryType","makerOffset","makerTimeout"];
+  "entryType"];
 
 function collect() {
   const p = {};
@@ -653,10 +649,8 @@ function sync() {
   show("tp-swing", tpT === "swing");
   show("tp-st", tpT === "supertrend");
   show("exit-st", $("exitStEnabled").checked);
-  const maker = $("entryType").value === "makerLimit";
-  show("maker", maker);
-  $("entryTypeNote").textContent = maker
-    ? "지정가를 종가에서 오프셋만큼 불리한 쪽(롱=아래/숏=위)에 걸고, 가격이 닿아야만 maker 체결. 타임아웃 내 미체결이면 미진입(스킵). BTCUSDC maker 0이면 진입 수수료 0."
+  $("entryTypeNote").textContent = $("entryType").value === "makerLimit"
+    ? "지정가 진입 — 신호봉 종가에 체결됐다고 가정하고 maker 수수료 적용(BTCUSDC면 0). 미체결·슬리피지는 모델링 안 함."
     : "신호봉 종가에 즉시 시장가 체결(taker 수수료).";
   $("slValueLabel").textContent = slT === "atrMultiple" ? "손절 ATR 배수" : "손절 % (가격)";
   $("slNote").textContent = slT === "swing"

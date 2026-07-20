@@ -133,13 +133,13 @@ def test_maker_limit_entry():
 
     cfg = BacktestConfig(initial_equity=10000, taker_fee=0.0005, maker_fee=0.0, funding_rate=0.0)
     taker = run(base, preset(None), cfg)
-    maker = run(base, preset({"entryType": "makerLimit", "makerOffsetPercent": 0.2, "makerTimeoutBars": 2}), cfg)
+    maker = run(base, preset({"entryType": "makerLimit"}), cfg)
     assert taker.num_trades > 0
-    # 지정가+오프셋+짧은 타임아웃 → 일부 미체결(스킵) → 트레이드 수가 taker 이하
-    assert maker.num_trades <= taker.num_trades
-    # maker 진입 수수료 0 → 트레이드당 평균 수수료가 taker보다 작음
-    if maker.num_trades > 0:
-        assert maker.total_fees / maker.num_trades < taker.total_fees / taker.num_trades
+    # 지정가도 종가에 그냥 체결(미체결 모델 없음) → 트레이드 수 동일
+    assert maker.num_trades == taker.num_trades
+    # maker 진입 수수료 0 → 총 수수료는 taker보다 작고 수익은 더 좋음
+    assert maker.total_fees < taker.total_fees
+    assert maker.total_return_pct >= taker.total_return_pct
 
 
 def test_supertrend_flip_exit_side_aware():
