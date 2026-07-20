@@ -95,8 +95,8 @@
             "period": { "type": "integer", "minimum": 1, "default": 10 },
             "multiplier": { "type": "number", "exclusiveMinimum": 0 },
             "as": {
-              "type": "string", "enum": ["takeProfit", "stopLoss"], "default": "takeProfit",
-              "description": "청산 사유 분류 — 익절 슬롯이면 takeProfit, 손절 슬롯이면 stopLoss."
+              "type": "string", "enum": ["takeProfit", "stopLoss", "exit"], "default": "takeProfit",
+              "description": "청산 사유 분류 — 익절 슬롯=takeProfit, 손절 슬롯=stopLoss, 지표/시간 청산=exit(사유 supertrend)."
             }
           }
         }

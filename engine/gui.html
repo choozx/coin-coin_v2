@@ -266,6 +266,12 @@
       <div class="row"><label class="hint">기준값 (복귀 목표)</label>
         <input type="number" id="exitCondValue" value="55" min="1" max="99"></div>
       <div class="note">역추세(과매도 진입)엔 지표가 평균으로 복귀하면 청산이 정석 (RSI&gt;55, Stoch%K&gt;80 등)</div>
+      <div class="row"><label><input type="checkbox" id="exitStEnabled"> SuperTrend 추세이탈 청산</label></div>
+      <div class="row" data-when="exit-st"><label class="hint">ATR기간</label>
+        <input type="number" id="exitStPeriod" value="10" min="1"></div>
+      <div class="row" data-when="exit-st"><label class="hint">배수</label>
+        <input type="number" id="exitStMult" value="3" step="0.5" min="0.1"></div>
+      <div class="note" data-when="exit-st">포지션 반대로 SuperTrend 전환 시 청산(사유=supertrend). 가격 익절·손절과 <b>동시에</b> 걸 수 있음.</div>
       <div class="row"><label>시간 청산 (봉, 0=끄기)</label>
         <input type="number" id="timeStopBars" value="0" min="0"></div>
     </div>
@@ -348,6 +354,7 @@ const FIELDS = ["symbol","timeframe","days","equity",
   "slType","slValue","slLookback","slBuffer","slStPeriod","slStMult",
   "tpType","tpValue","tpLookback","tpBuffer","tpStPeriod","tpStMult",
   "exitCondEnabled","exitCondInd","exitCondPeriod","exitCondCmp","exitCondValue","timeStopBars",
+  "exitStEnabled","exitStPeriod","exitStMult",
   "trailingEnabled","trailingCallback","trailingActivation",
   "leverage","sizeType","sizeValue","minLiqBuffer","cooldownBars","avoidFundingMin"];
 
@@ -630,6 +637,7 @@ function sync() {
   show("tp-value", tpT === "percent" || tpT === "atrMultiple" || tpT === "riskReward");
   show("tp-swing", tpT === "swing");
   show("tp-st", tpT === "supertrend");
+  show("exit-st", $("exitStEnabled").checked);
   $("slValueLabel").textContent = slT === "atrMultiple" ? "손절 ATR 배수" : "손절 % (가격)";
   $("slNote").textContent = slT === "swing"
     ? "룩백 구간(현재 봉 포함)의 최저/최고가 ± 버퍼%. 방향은 자동 — 롱은 전저점 아래, 숏은 전고점 위."
@@ -652,7 +660,7 @@ function sync() {
     : "";
   if (typeof updateHints === "function") updateHints();
 }
-["slType","tpType","sizeType"].forEach(id => $(id).addEventListener("change", sync));
+["slType","tpType","sizeType","exitStEnabled"].forEach(id => $(id).addEventListener("change", sync));
 
 const PRESETS = {
   scalp: { symbol:"BTCUSDT", timeframe:"1m", direction:"long",
@@ -1396,6 +1404,7 @@ function updateHints() {
         : tpT==="supertrend" ? `ST전환(${v("tpStPeriod")},×${v("tpStMult")})` : `스윙${v("tpLookback")}봉`);
   const parts = [];
   if ($("exitCondEnabled").checked) parts.push(`${EXIT_IND_LABEL[v("exitCondInd")]||v("exitCondInd")}${v("exitCondCmp")}${v("exitCondValue")}`);
+  if ($("exitStEnabled").checked) parts.push(`ST전환(${v("exitStPeriod")},×${v("exitStMult")})`);
   if (+v("timeStopBars") > 0) parts.push(`${v("timeStopBars")}봉`);
   setH("cond", parts.join(" · ") || "없음");
   setH("trail", $("trailingEnabled").checked ? `${v("trailingCallback")}%` : "없음");
