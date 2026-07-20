@@ -81,6 +81,50 @@ def mfi(high, low, close, volume, period: int = 14) -> np.ndarray:
     return talib.MFI(_d(high), _d(low), _d(close), _d(volume), timeperiod=period)
 
 
+def supertrend(high, low, close, period: int = 10, multiplier: float = 3.0):
+    """SuperTrend — ATR 기반 추세 추종 라인. 반환 (line, direction).
+
+    - line: 추세선. 상승추세엔 가격 아래(지지), 하락추세엔 가격 위(저항).
+    - direction: +1 상승추세 / -1 하락추세. -1→+1 전환이 강세 플립 신호.
+
+    상태가 있는(재귀) 지표라 봉을 순회하며 이전 밴드/방향을 이어받는다.
+    ATR 워밍업(NaN) 구간은 NaN으로 남긴다(conditions.py가 false 처리).
+    """
+    h, l, c = _d(high), _d(low), _d(close)
+    atr_ = talib.ATR(h, l, c, timeperiod=period)
+    hl2 = (h + l) / 2.0
+    basic_u = hl2 + multiplier * atr_       # 기본 상단 밴드
+    basic_l = hl2 - multiplier * atr_       # 기본 하단 밴드
+    n = len(c)
+    fu = np.full(n, np.nan)                 # 최종 상단 밴드
+    fl = np.full(n, np.nan)                 # 최종 하단 밴드
+    line = np.full(n, np.nan)
+    dir_ = np.full(n, np.nan)
+    started = False
+    for i in range(n):
+        if np.isnan(atr_[i]):
+            continue
+        if not started:                     # 첫 유효봉: 상단 밴드에서 하락추세로 시드(다음 봉부터 자기교정)
+            fu[i], fl[i] = basic_u[i], basic_l[i]
+            line[i], dir_[i] = fu[i], -1.0
+            started = True
+            continue
+        # 최종 밴드: 추세가 유지되는 한 밴드가 가격 쪽으로만 좁혀지도록 잠금
+        fu[i] = basic_u[i] if (basic_u[i] < fu[i-1] or c[i-1] > fu[i-1]) else fu[i-1]
+        fl[i] = basic_l[i] if (basic_l[i] > fl[i-1] or c[i-1] < fl[i-1]) else fl[i-1]
+        if line[i-1] == fu[i-1]:            # 직전 하락추세
+            if c[i] <= fu[i]:
+                line[i], dir_[i] = fu[i], -1.0
+            else:                           # 상단 상향 돌파 → 상승 플립
+                line[i], dir_[i] = fl[i], 1.0
+        else:                               # 직전 상승추세
+            if c[i] >= fl[i]:
+                line[i], dir_[i] = fl[i], 1.0
+            else:                           # 하단 하향 이탈 → 하락 플립
+                line[i], dir_[i] = fu[i], -1.0
+    return line, dir_
+
+
 # ---- TA-Lib에 없는 지표 (numpy 직접) ----
 def rvol(volume, period: int = 20) -> np.ndarray:
     """상대 거래량 = 현재 거래량 ÷ 최근 period 평균. 1.5 = 평균의 1.5배(거래량 실림)."""
@@ -99,6 +143,31 @@ def vwap(high, low, close, volume) -> np.ndarray:
     cum_pv = np.cumsum(tp * vol)
     cum_v = np.cumsum(vol)
     return np.where(cum_v > 0, cum_pv / cum_v, np.nan)
+
+
+# ---- 오더플로우: 테이커 매수/매도 델타 & CVD ----
+# klines의 taker_buy(테이커가 공격적으로 산 체결량)로 봉당 매수/매도 압력을 계산.
+# taker_sell = volume - taker_buy → delta = taker_buy - taker_sell = 2*taker_buy - volume.
+def taker_delta(volume, taker_buy) -> np.ndarray:
+    """봉당 테이커 순매수(base) = 2*taker_buy - volume. +면 공격 매수 우위."""
+    return 2.0 * _d(taker_buy) - _d(volume)
+
+
+def taker_delta_ratio(volume, taker_buy) -> np.ndarray:
+    """정규화 델타 = delta / volume, 범위 [-1, 1]. +0.2 ≈ 매수세 강함, -0.2 ≈ 매도세 강함."""
+    v = _d(volume)
+    d = 2.0 * _d(taker_buy) - v
+    out = np.full(len(v), np.nan)
+    nz = v > 0
+    out[nz] = d[nz] / v[nz]
+    return out
+
+
+def cvd(volume, taker_buy) -> np.ndarray:
+    """누적 볼륨 델타(CVD) = 델타 누적합. 결측(NaN) 봉은 0으로 보고 누적."""
+    d = 2.0 * _d(taker_buy) - _d(volume)
+    d = np.where(np.isnan(d), 0.0, d)
+    return np.cumsum(d)
 
 
 # ---- 캔들스틱 반전 패턴 (TA-Lib CDL*) ----

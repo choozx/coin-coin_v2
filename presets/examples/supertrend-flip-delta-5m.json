@@ -1,0 +1,59 @@
+{
+  "schemaVersion": "1.0",
+  "name": "SuperTrend 전환 + 오더플로우 확인 롱·숏 (5m)",
+  "description": "SuperTrend(10, ×3) 전환 봉에서 거래량(RVOL>1.5)에 더해 테이커 델타로 진짜 매수/매도세를 확인해야만 진입. 상향전환+델타비율>0.3이면 롱, 하향전환+델타비율<-0.3이면 숏. 오더플로우 확인이 가짜 flip(수수료만 내는 진입)을 걸러내 트레이드·수수료를 대폭 줄임(BTCUSDT 120일 실증: 필터 없음 489트레이드·수수료2608·-20% → 델타0.3 212트레이드·수수료1235·-6.6%). taker_buy 데이터 필요 — 캐시 백필(python3 -m engine.candle_store --backfill-taker SYMBOL).",
+  "market": {
+    "exchange": "binance-futures",
+    "symbol": "BTCUSDT",
+    "timeframe": "5m",
+    "direction": "both"
+  },
+  "entryRules": [
+    {
+      "side": "long",
+      "when": {
+        "op": "AND",
+        "children": [
+          { "cross": "crossOver", "left": { "indicator": "SUPERTREND_DIR", "period": 10, "params": { "multiplier": 3.0 } }, "right": 0 },
+          { "left": { "indicator": "RVOL", "period": 20 }, "cmp": ">", "right": 1.5 },
+          { "left": { "indicator": "TAKER_DELTA_RATIO" }, "cmp": ">", "right": 0.3 }
+        ]
+      }
+    },
+    {
+      "side": "short",
+      "when": {
+        "op": "AND",
+        "children": [
+          { "cross": "crossUnder", "left": { "indicator": "SUPERTREND_DIR", "period": 10, "params": { "multiplier": 3.0 } }, "right": 0 },
+          { "left": { "indicator": "RVOL", "period": 20 }, "cmp": ">", "right": 1.5 },
+          { "left": { "indicator": "TAKER_DELTA_RATIO" }, "cmp": "<", "right": -0.3 }
+        ]
+      }
+    }
+  ],
+  "entry": {
+    "op": "AND",
+    "children": [
+      { "cross": "crossOver", "left": { "indicator": "SUPERTREND_DIR", "period": 10, "params": { "multiplier": 3.0 } }, "right": 0 },
+      { "left": { "indicator": "RVOL", "period": 20 }, "cmp": ">", "right": 1.5 },
+      { "left": { "indicator": "TAKER_DELTA_RATIO" }, "cmp": ">", "right": 0.3 }
+    ]
+  },
+  "exit": {
+    "stopLoss": { "type": "atrMultiple", "value": 2.0 },
+    "takeProfit": { "type": "riskReward", "value": 2.0 },
+    "timeStop": { "maxBars": 30 }
+  },
+  "sizing": {
+    "leverage": 4,
+    "marginMode": "isolated",
+    "size": { "type": "equityPercent", "value": 15 },
+    "minLiquidationBuffer": 10,
+    "maxConcurrentPositions": 1
+  },
+  "filter": {
+    "cooldownBars": 2,
+    "avoidFundingWindowMinutes": 5
+  }
+}

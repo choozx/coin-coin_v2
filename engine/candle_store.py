@@ -36,6 +36,10 @@ def _conn(path=DB_PATH):
     c.execute("""CREATE TABLE IF NOT EXISTS funding(
         symbol TEXT, funding_time INTEGER, rate REAL,
         PRIMARY KEY(symbol, funding_time))""")
+    # 마이그레이션: 구버전 DB엔 taker_buy 컬럼이 없음 → 추가(기존 행은 NULL).
+    cols = [r[1] for r in c.execute("PRAGMA table_info(candle)")]
+    if "taker_buy" not in cols:
+        c.execute("ALTER TABLE candle ADD COLUMN taker_buy REAL")
     return c
 
 
@@ -66,8 +70,8 @@ def ensure(symbol: str, start_ms: int, end_ms: int, db_path=DB_PATH, verbose=Fal
         rows = binance_data.fetch_range_rows(symbol, "1m", s, e, verbose=verbose)
         if rows:
             conn.executemany(
-                "INSERT OR IGNORE INTO candle(symbol,open_time,open,high,low,close,volume) "
-                "VALUES(?,?,?,?,?,?,?)",
+                "INSERT OR IGNORE INTO candle(symbol,open_time,open,high,low,close,volume,taker_buy) "
+                "VALUES(?,?,?,?,?,?,?,?)",
                 [(symbol, *r) for r in rows])
             conn.commit()
             fetched += len(rows)
@@ -75,16 +79,16 @@ def ensure(symbol: str, start_ms: int, end_ms: int, db_path=DB_PATH, verbose=Fal
         print(f"  [캐시] {symbol} 신규 {fetched}개 저장")
 
     cur = conn.execute(
-        "SELECT open_time,open,high,low,close,volume FROM candle "
+        "SELECT open_time,open,high,low,close,volume,taker_buy FROM candle "
         "WHERE symbol=? AND open_time BETWEEN ? AND ? ORDER BY open_time",
         (symbol, start_ms, end_ms))
     data = cur.fetchall()
     conn.close()
     if not data:
         raise ValueError(f"{symbol} 캔들 없음 ({start_ms}~{end_ms})")
-    arr = np.array(data, dtype=float)
+    arr = np.array(data, dtype=float)   # NULL taker_buy는 numpy가 nan으로 변환
     return Candles(arr[:, 0].astype(np.int64), arr[:, 1], arr[:, 2], arr[:, 3],
-                   arr[:, 4], arr[:, 5], timeframe_min=1)
+                   arr[:, 4], arr[:, 5], timeframe_min=1, taker_buy=arr[:, 6])
 
 
 def ensure_days(symbol: str, days: float, end_ms: int = None, db_path=DB_PATH, verbose=False) -> Candles:
@@ -148,27 +152,53 @@ def fill_range(symbol: str, start_ms: int, end_ms: int, db_path=DB_PATH, verbose
         rows = binance_data.fetch_range_rows(symbol, "1m", s, e, verbose=verbose)
         if rows:
             conn.executemany(
-                "INSERT OR IGNORE INTO candle(symbol,open_time,open,high,low,close,volume) "
-                "VALUES(?,?,?,?,?,?,?)", [(symbol, *r) for r in rows])
+                "INSERT OR IGNORE INTO candle(symbol,open_time,open,high,low,close,volume,taker_buy) "
+                "VALUES(?,?,?,?,?,?,?,?)", [(symbol, *r) for r in rows])
             conn.commit()
             fetched += len(rows)
     conn.close()
     return fetched
 
 
+def backfill_taker(symbol: str, db_path=DB_PATH, verbose=False) -> int:
+    """기존 캐시 행의 taker_buy(NULL)를 klines 재수집으로 채운다.
+
+    구버전 캐시(OHLCV만)엔 taker_buy가 NULL이라 델타/CVD 지표가 NaN. 이 함수로
+    NULL 구간을 재수집해 UPDATE. 반환: 재수집한 행 수.
+    """
+    conn = _conn(db_path)
+    mn, mx, cnt = conn.execute(
+        "SELECT MIN(open_time), MAX(open_time), COUNT(*) FROM candle "
+        "WHERE symbol=? AND taker_buy IS NULL", (symbol,)).fetchone()
+    if not cnt:
+        conn.close()
+        if verbose:
+            print(f"  {symbol}: 채울 taker_buy 없음 (이미 최신)")
+        return 0
+    if verbose:
+        print(f"  {symbol}: taker_buy 미보유 {cnt:,}개 재수집 중...")
+    rows = binance_data.fetch_range_rows(symbol, "1m", mn, mx, verbose=verbose)
+    if rows:
+        conn.executemany("UPDATE candle SET taker_buy=? WHERE symbol=? AND open_time=?",
+                         [(r[6], symbol, r[0]) for r in rows])
+        conn.commit()
+    conn.close()
+    return len(rows)
+
+
 def load_range(symbol: str, start_ms: int, end_ms: int, db_path=DB_PATH) -> Candles:
     """캐시에서 [start,end] 구간을 읽기만 함 (네트워크 수집 없음)."""
     conn = _conn(db_path)
     data = conn.execute(
-        "SELECT open_time,open,high,low,close,volume FROM candle "
+        "SELECT open_time,open,high,low,close,volume,taker_buy FROM candle "
         "WHERE symbol=? AND open_time BETWEEN ? AND ? ORDER BY open_time",
         (symbol, start_ms, end_ms)).fetchall()
     conn.close()
     if not data:
         raise ValueError(f"{symbol} 캐시에 해당 구간 데이터 없음")
-    arr = np.array(data, dtype=float)
+    arr = np.array(data, dtype=float)   # NULL taker_buy는 numpy가 nan으로 변환
     return Candles(arr[:, 0].astype(np.int64), arr[:, 1], arr[:, 2], arr[:, 3],
-                   arr[:, 4], arr[:, 5], timeframe_min=1)
+                   arr[:, 4], arr[:, 5], timeframe_min=1, taker_buy=arr[:, 6])
 
 
 def load_recent(symbol: str, days: float, db_path=DB_PATH) -> Candles:
@@ -243,6 +273,12 @@ def main():
     args = sys.argv[1:]
     if not args or args[0] == "--info":
         info()
+        return
+    if args[0] == "--backfill-taker":       # taker_buy 백필: 인자 심볼 또는 전체
+        syms = [args[1].upper()] if len(args) > 1 else [s["symbol"] for s in list_stats()]
+        for sym in syms:
+            n = backfill_taker(sym, verbose=True)
+            print(f"{sym}: taker_buy {n:,}개 채움")
         return
     symbol = args[0].upper()
     days = float(args[1]) if len(args) > 1 else 30

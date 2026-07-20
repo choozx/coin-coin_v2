@@ -1,0 +1,34 @@
+{
+  "schemaVersion": "1.0",
+  "name": "SuperTrend 추세필터 + 눌림목 롱 (5m)",
+  "description": "SuperTrend(10, ×3)가 상승추세(가격이 SuperTrend선 위)일 때만 RSI 40 눌림목에서 롱. 손절 ATR 1.5배, 익절 손익비 1.8:1, 24봉 시간청산. SuperTrend를 EMA 대신 방향필터로 사용 — ATR 기반이라 변동성에 적응.",
+  "market": {
+    "exchange": "binance-futures",
+    "symbol": "BTCUSDT",
+    "timeframe": "5m",
+    "direction": "long"
+  },
+  "entry": {
+    "op": "AND",
+    "children": [
+      { "left": { "source": "close" }, "cmp": ">", "right": { "indicator": "SUPERTREND", "period": 10, "params": { "multiplier": 3.0 } } },
+      { "left": { "indicator": "RSI", "period": 14 }, "cmp": "<", "right": 40 }
+    ]
+  },
+  "exit": {
+    "stopLoss": { "type": "atrMultiple", "value": 1.5 },
+    "takeProfit": { "type": "riskReward", "value": 1.8 },
+    "timeStop": { "maxBars": 24 }
+  },
+  "sizing": {
+    "leverage": 4,
+    "marginMode": "isolated",
+    "size": { "type": "equityPercent", "value": 15 },
+    "minLiquidationBuffer": 10,
+    "maxConcurrentPositions": 1
+  },
+  "filter": {
+    "cooldownBars": 2,
+    "avoidFundingWindowMinutes": 5
+  }
+}

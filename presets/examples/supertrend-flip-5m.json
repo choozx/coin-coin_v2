@@ -1,0 +1,34 @@
+{
+  "schemaVersion": "1.0",
+  "name": "SuperTrend 상승전환 + 거래량 돌파 롱 (5m)",
+  "description": "SuperTrend(10, ×3)가 하락→상승으로 전환(플립)하는 봉에서 거래량이 실리면(RVOL>1.5) 롱 진입. 추세 시작을 잡는 돌파형. 손절 ATR 2배, 익절 손익비 2:1, 30봉 시간청산.",
+  "market": {
+    "exchange": "binance-futures",
+    "symbol": "BTCUSDT",
+    "timeframe": "5m",
+    "direction": "long"
+  },
+  "entry": {
+    "op": "AND",
+    "children": [
+      { "cross": "crossOver", "left": { "indicator": "SUPERTREND_DIR", "period": 10, "params": { "multiplier": 3.0 } }, "right": 0 },
+      { "left": { "indicator": "RVOL", "period": 20 }, "cmp": ">", "right": 1.5 }
+    ]
+  },
+  "exit": {
+    "stopLoss": { "type": "atrMultiple", "value": 2.0 },
+    "takeProfit": { "type": "riskReward", "value": 2.0 },
+    "timeStop": { "maxBars": 30 }
+  },
+  "sizing": {
+    "leverage": 4,
+    "marginMode": "isolated",
+    "size": { "type": "equityPercent", "value": 15 },
+    "minLiquidationBuffer": 10,
+    "maxConcurrentPositions": 1
+  },
+  "filter": {
+    "cooldownBars": 2,
+    "avoidFundingWindowMinutes": 5
+  }
+}

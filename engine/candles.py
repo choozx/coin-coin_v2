@@ -30,15 +30,19 @@ class Candles:
     close: np.ndarray
     volume: np.ndarray
     timeframe_min: int
+    # 테이커 매수 체결량(base). 오더플로우 델타/CVD 지표용. 구버전 캐시엔 없어 None 허용
+    # (None이면 델타/CVD 조건은 NaN → 항상 false, 나머지 지표엔 영향 없음).
+    taker_buy: np.ndarray = None
 
     def __len__(self) -> int:
         return len(self.open_time)
 
     @classmethod
     def from_rows(cls, rows, timeframe_min: int = 1) -> "Candles":
-        """rows: iterable of (open_time_ms, open, high, low, close, volume).
+        """rows: iterable of (open_time_ms, open, high, low, close, volume[, taker_buy]).
 
         (symbol, open_time) 중복 제거 + open_time 정렬을 수행한다.
+        7번째 컬럼(taker_buy)이 있으면 함께 실어 온다.
         """
         arr = np.array(sorted(set(map(tuple, rows))), dtype=float)
         if arr.size == 0:
@@ -52,6 +56,7 @@ class Candles:
             open=arr[:, 1], high=arr[:, 2], low=arr[:, 3],
             close=arr[:, 4], volume=arr[:, 5],
             timeframe_min=timeframe_min,
+            taker_buy=arr[:, 6] if arr.shape[1] > 6 else None,
         )
 
     def gap_report(self) -> list:
@@ -81,8 +86,10 @@ def resample(base: Candles, target_min: int) -> Candles:
     edges = np.concatenate(([0], np.where(np.diff(bucket) != 0)[0] + 1, [len(base)]))
     n = len(edges) - 1
 
+    has_tb = base.taker_buy is not None
     ot = np.empty(n, dtype=np.int64)
     o = np.empty(n); h = np.empty(n); l = np.empty(n); c = np.empty(n); v = np.empty(n)
+    tb = np.empty(n) if has_tb else None
     for k in range(n):
         s, e = edges[k], edges[k + 1]
         ot[k] = bucket[s]
@@ -91,7 +98,9 @@ def resample(base: Candles, target_min: int) -> Candles:
         l[k] = base.low[s:e].min()
         c[k] = base.close[e - 1]
         v[k] = base.volume[s:e].sum()
-    return Candles(ot, o, h, l, c, v, target_min)
+        if has_tb:
+            tb[k] = base.taker_buy[s:e].sum()          # 테이커 매수량도 합산
+    return Candles(ot, o, h, l, c, v, target_min, taker_buy=tb)
 
 
 def signal_close_index(base: Candles, target_min: int):
