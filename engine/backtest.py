@@ -176,9 +176,10 @@ def run(base: Candles, preset: Preset, cfg: BacktestConfig = None) -> Metrics:
     equity_curve = [(int(base.open_time[0]), equity)]
     last_exit_signal_idx = -10 ** 9
 
-    def close_position(exit_price, exit_time, reason):
+    def close_position(exit_price, exit_time, reason, is_maker=False):
+        # 지정가 익절(가격 도달 체결)만 maker, 나머지(손절·트레일링·신호·강제청산 등 시장가)는 taker.
         nonlocal equity, pos
-        exit_fee = bm.trade_fee(exit_price, pos.qty, taker=True,
+        exit_fee = bm.trade_fee(exit_price, pos.qty, taker=not is_maker,
                                 taker_fee=cfg.taker_fee, maker_fee=cfg.maker_fee)
         gross = pos.side * (exit_price - pos.entry_price) * pos.qty
         fees = pos.entry_fee + exit_fee
@@ -224,7 +225,7 @@ def run(base: Candles, preset: Preset, cfg: BacktestConfig = None) -> Metrics:
                 elif trailing and _trailing_hit(pos, trailing, lo, hi):
                     close_position(_trailing_stop(pos, trailing), ot, "trailing")
                 elif not np.isnan(pos.tp_price) and hi >= pos.tp_price:
-                    close_position(pos.tp_price, ot, "take_profit")
+                    close_position(pos.tp_price, ot, "take_profit", is_maker=True)
             else:
                 pos.peak = min(pos.peak, lo)
                 if not np.isnan(pos.stop_price) and hi >= pos.stop_price:
@@ -232,7 +233,7 @@ def run(base: Candles, preset: Preset, cfg: BacktestConfig = None) -> Metrics:
                 elif trailing and _trailing_hit(pos, trailing, lo, hi):
                     close_position(_trailing_stop(pos, trailing), ot, "trailing")
                 elif not np.isnan(pos.tp_price) and lo <= pos.tp_price:
-                    close_position(pos.tp_price, ot, "take_profit")
+                    close_position(pos.tp_price, ot, "take_profit", is_maker=True)
 
         # ---- 신호봉 종료 시점: 진입/청산 신호 판정 ----
         if is_close[t]:

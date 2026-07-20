@@ -15,6 +15,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .backtest import BacktestConfig, run
+from . import binance_math as bm
 from .candles import resample, TIMEFRAME_MINUTES
 from .preset import Preset
 
@@ -391,7 +392,9 @@ def _run_backtest(p: dict) -> dict:
     base, fr_rate = _get_candles(p["symbol"], float(p["days"]))
     preset_dict = _build_preset(p)
     preset = Preset.from_dict(preset_dict, validate=True)  # 스키마 검증
-    cfg = BacktestConfig(initial_equity=float(p["equity"]), funding_rate=fr_rate)
+    maker_fee, taker_fee = bm.fees_for_symbol(p["symbol"])
+    cfg = BacktestConfig(initial_equity=float(p["equity"]), funding_rate=fr_rate,
+                         maker_fee=maker_fee, taker_fee=taker_fee)
     m = run(base, preset, cfg)
 
     from collections import Counter
@@ -416,6 +419,8 @@ def _run_backtest(p: dict) -> dict:
         "dataRange": [int(base.open_time[0]), int(base.open_time[-1])],
         "candles": len(base),
         "fundingRate": fr_rate,
+        "makerFee": cfg.maker_fee,
+        "takerFee": cfg.taker_fee,
         "ohlc": ohlc,
         "ohlcBarMin": bar_min,
         "indicators": chart_inds,
@@ -446,7 +451,9 @@ def _run_optimize(p: dict, emit) -> None:
     """
     from . import optimize as opt
     base, fr_rate = _get_candles(p["symbol"], float(p["days"]))
-    cfg = BacktestConfig(initial_equity=float(p["equity"]), funding_rate=fr_rate)
+    maker_fee, taker_fee = bm.fees_for_symbol(p["symbol"])
+    cfg = BacktestConfig(initial_equity=float(p["equity"]), funding_rate=fr_rate,
+                         maker_fee=maker_fee, taker_fee=taker_fee)
     sweep = p.get("sweep", {})              # {param: {min,max,step}}
     if not sweep:
         emit({"type": "error", "error": "탐색할 파라미터를 하나 이상 체크해줘"})

@@ -13,6 +13,23 @@ from datetime import datetime, timezone
 DEFAULT_TAKER_FEE = 0.0005   # 0.05%
 DEFAULT_MAKER_FEE = 0.0002   # 0.02%
 
+# 견적통화별 VIP0(일반 등급, BNB할인 없음) 선물 수수료.
+# USDC는 maker 0 프로모션 반영(엄밀히 상시 tier 아님). taker는 보수적으로 USDT와 동일.
+FEES_BY_QUOTE = {
+    "USDT": {"maker": 0.0002, "taker": 0.0005},
+    "USDC": {"maker": 0.0000, "taker": 0.0005},
+}
+
+
+def fees_for_symbol(symbol: str):
+    """심볼 견적통화로 (maker_fee, taker_fee) 결정. 매칭 없으면 기본값."""
+    sym = (symbol or "").upper()
+    for quote in ("USDC", "USDT"):           # USDC 먼저(더 긴 접미사 우선)
+        if sym.endswith(quote):
+            f = FEES_BY_QUOTE[quote]
+            return f["maker"], f["taker"]
+    return DEFAULT_MAKER_FEE, DEFAULT_TAKER_FEE
+
 
 @dataclass
 class MarginBracket:

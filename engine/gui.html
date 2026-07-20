@@ -813,7 +813,10 @@ function render(d) {
     + (detail ? "" : `<span style="color:#e0a030">⚠️ ${nTr}건 → 손절/익절 라인 생략, 마커만</span>`) + `</div>`
     + indLegend + `</div>`;
 
-  html += `<div class="chartbox"><h3>자산 곡선 · ${d.preset.market.symbol} ${fmtDate(d.dataRange[0])} ~ ${fmtDate(d.dataRange[1])} UTC · 1분봉 ${d.candles.toLocaleString()}개 · 펀딩 ${(d.fundingRate*100).toFixed(4)}%/8h</h3><canvas id="chart"></canvas></div>`;
+  const feeInfo = (d.makerFee != null)
+    ? ` · 수수료 maker ${(d.makerFee*100).toFixed(4)}%${d.makerFee===0?"(USDC 0)":""}/taker ${(d.takerFee*100).toFixed(4)}%`
+    : "";
+  html += `<div class="chartbox"><h3>자산 곡선 · ${d.preset.market.symbol} ${fmtDate(d.dataRange[0])} ~ ${fmtDate(d.dataRange[1])} UTC · 1분봉 ${d.candles.toLocaleString()}개 · 펀딩 ${(d.fundingRate*100).toFixed(4)}%/8h${feeInfo}</h3><canvas id="chart"></canvas></div>`;
 
   const total = Object.values(d.exitReasons).reduce((a,b)=>a+b,0) || 1;
   const RN = {take_profit:"익절", stop_loss:"손절", trailing:"트레일링", signal:"신호청산", time:"시간청산", liquidation:"청산 ⚠️"};
