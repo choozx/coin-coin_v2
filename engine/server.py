@@ -195,6 +195,198 @@ def _ohlc_for_chart(base, tf_min: int, max_bars: int = 200000):
     return out, (k * tf_min)   # (캔들목록, 캔들 1개가 나타내는 분)
 
 
+# ---- 전략에 쓰인 지표 추출·계산 (차트 표시용) ----
+_OVERLAY_INDS = {"SMA", "EMA", "VWAP", "SUPERTREND", "BB_upper", "BB_mid", "BB_lower"}
+# 오실레이터 → 패널 그룹키 (같은 그룹은 한 패널에 겹쳐 그림)
+_IND_PANE = {
+    "RSI": "rsi", "MACD": "macd", "MACD_signal": "macd", "MACD_hist": "macd",
+    "ATR": "atr", "STOCH_K": "stoch", "STOCH_D": "stoch",
+    "STOCHRSI_K": "stochrsi", "STOCHRSI_D": "stochrsi", "CCI": "cci", "MFI": "mfi",
+    "RVOL": "rvol", "TAKER_DELTA": "taker", "TAKER_DELTA_RATIO": "taker",
+    "CVD": "cvd", "CVD_EMA": "cvd", "HAWKEYE": "hawkeye",
+    "QQE_MOD": "qqe", "QQE_RSI": "qqe", "QQE_LINE": "qqe", "SUPERTREND_DIR": "st_dir",
+}
+_IND_COLOR = {
+    "EMA": "#e8a13a", "SMA": "#c77dff", "VWAP": "#4cc9f0", "SUPERTREND": "#26d07c",
+    "BB_upper": "#8a90a0", "BB_mid": "#6c7080", "BB_lower": "#8a90a0",
+    "RSI": "#e8a13a", "MACD": "#4cc9f0", "MACD_signal": "#f0708a", "MACD_hist": "#6c7080",
+    "ATR": "#c77dff", "STOCH_K": "#4cc9f0", "STOCH_D": "#f0708a",
+    "STOCHRSI_K": "#4cc9f0", "STOCHRSI_D": "#f0708a", "CCI": "#e8a13a", "MFI": "#3aa76d",
+    "RVOL": "#c77dff", "TAKER_DELTA": "#4cc9f0", "TAKER_DELTA_RATIO": "#4cc9f0",
+    "CVD": "#26d07c", "CVD_EMA": "#f0708a", "HAWKEYE": "#c77dff",
+    "QQE_MOD": "#4cc9f0", "QQE_RSI": "#e8a13a", "QQE_LINE": "#f0708a",
+}
+_IND_NAME = {
+    "SUPERTREND": "SuperTrend", "BB_upper": "BB상단", "BB_mid": "BB중심", "BB_lower": "BB하단",
+    "MACD_signal": "MACD signal", "MACD_hist": "MACD hist", "STOCH_K": "Stoch %K",
+    "STOCH_D": "Stoch %D", "STOCHRSI_K": "StochRSI %K", "STOCHRSI_D": "StochRSI %D",
+    "TAKER_DELTA_RATIO": "테이커델타비율", "TAKER_DELTA": "테이커델타", "CVD_EMA": "CVD EMA",
+    "QQE_MOD": "QQE MOD", "QQE_RSI": "QQE RSI", "QQE_LINE": "QQE 라인", "HAWKEYE": "HawkEye",
+}
+
+
+def _ind_label(op: dict) -> str:
+    name = op["indicator"]
+    disp = _IND_NAME.get(name, name)
+    pr = op.get("params") or {}
+    parts = []
+    if op.get("period"):
+        parts.append(str(op["period"]))
+    if "multiplier" in pr:
+        parts.append("×" + str(pr["multiplier"]))
+    if "stddev" in pr:
+        parts.append("σ" + str(pr["stddev"]))
+    if "fast" in pr:
+        parts.append(f"{pr.get('fast')}/{pr.get('slow')}/{pr.get('signal')}")
+    return f"{disp}({','.join(parts)})" if parts else disp
+
+
+def _chart_indicators(base, tf_min: int, preset_dict: dict, max_bars: int = 200000):
+    """프리셋 조건 트리에 쓰인 지표를 신호 TF에서 계산해 차트 봉에 정렬한 시계열로 반환.
+
+    반환: [{label, overlay, pane, color, data:[[time_ms, value|None], ...]}, ...]
+    - overlay=True(가격 스케일)는 캔들 위, False(오실레이터)는 pane 그룹별 하단 패널.
+    - SUPERTREND_DIR(±1)은 라인이 더 유용하므로 SUPERTREND 라인 오버레이로 치환.
+    """
+    import math
+    from .conditions import SeriesResolver
+    cs = resample(base, tf_min)
+    n = len(cs)
+    if n == 0:
+        return []
+    k = 1 if n <= max_bars else math.ceil(n / max_bars)
+    resolver = SeriesResolver(cs)
+
+    operands = []
+
+    def walk(node):
+        if not isinstance(node, dict):
+            return
+        if "op" in node:
+            for ch in node.get("children") or []:
+                walk(ch)
+            return
+        for sd in ("left", "right"):
+            op = node.get(sd)
+            if isinstance(op, dict) and "indicator" in op:
+                operands.append(op)
+
+    for r in preset_dict.get("entryRules") or []:
+        walk(r.get("when"))
+    if not preset_dict.get("entryRules"):
+        walk(preset_dict.get("entry"))
+    ex = preset_dict.get("exit") or {}
+    walk(ex.get("condition"))
+    st = ex.get("supertrendExit")
+    if st:   # 청산에 쓴 SuperTrend 라인도 오버레이
+        operands.append({"indicator": "SUPERTREND", "period": st.get("period", 10),
+                         "params": {"multiplier": st.get("multiplier", 3.0)}})
+
+    # SUPERTREND_DIR → SUPERTREND 라인으로 치환, 중복 제거
+    seen, uniq = set(), []
+    for op in operands:
+        if op.get("indicator") == "SUPERTREND_DIR":
+            op = {"indicator": "SUPERTREND", "period": op.get("period", 10),
+                  "params": op.get("params") or {"multiplier": 3.0}}
+        key = json.dumps(op, sort_keys=True)
+        if key not in seen:
+            seen.add(key)
+            uniq.append(op)
+
+    def subsample(series):
+        out = []
+        for s in range(0, n, k):
+            v = series[min(s + k, n) - 1]
+            out.append([int(cs.open_time[s]),
+                        None if (v is None or (isinstance(v, float) and math.isnan(v))) else round(float(v), 4)])
+        return out
+
+    result = []
+    for op in uniq:
+        name = op["indicator"]
+        if name == "SUPERTREND":
+            # 상승/하락 구간을 색이 다른 두 선으로 분리, 상대 구간은 nan→끊김(전환점 연결선 제거).
+            import numpy as np
+            from . import indicators as ind
+            per = op.get("period") or 10
+            mult = float((op.get("params") or {}).get("multiplier", 3.0))
+            line, d = ind.supertrend(cs.high, cs.low, cs.close, per, mult)
+            lbl = _ind_label(op)
+            result.append({"label": lbl + " ↑상승", "overlay": True, "pane": "price",
+                           "color": "#26d07c", "data": subsample(np.where(d > 0, line, np.nan))})
+            result.append({"label": lbl + " ↓하락", "overlay": True, "pane": "price",
+                           "color": "#cf5b5b", "data": subsample(np.where(d < 0, line, np.nan))})
+            continue
+        if name == "HAWKEYE":
+            # 원본: 거래량 막대를 상태색으로(강세 초록/약세 빨강/중립 회색). 히스토그램.
+            import numpy as np
+            from . import indicators as ind
+            per = op.get("period") or 200
+            div = float((op.get("params") or {}).get("divisor", 3.6))
+            state = ind.hawkeye(cs.high, cs.low, cs.close, cs.volume, per, div)
+            data = []
+            for s in range(0, n, k):
+                i = min(s + k, n) - 1
+                sv = state[i]
+                if sv is None or (isinstance(sv, float) and math.isnan(sv)):
+                    data.append([int(cs.open_time[s]), None])
+                else:
+                    color = "#26d07c" if sv > 0 else "#cf5b5b" if sv < 0 else "#6c7080"
+                    data.append([int(cs.open_time[s]), round(float(cs.volume[i]), 4), color])
+            result.append({"label": _ind_label(op) + " 볼륨", "overlay": False, "pane": "hawkeye",
+                           "type": "histogram", "color": "#6c7080", "data": data})
+            continue
+        if name == "QQE_MOD":
+            # 원본: secondaryRSI-50 컬럼(막대) + 신호색(매수 파랑/매도 빨강/중립 회색) + 보조 트렌드라인.
+            import talib
+            from . import indicators as ind
+            pr = op.get("params") or {}
+            rl = op.get("period") or int(pr.get("rsi_length", 6))
+            sm = int(pr.get("smoothing", 5))
+            fp = float(pr.get("factor_primary", 3.0)); fs = float(pr.get("factor_secondary", 1.61))
+            thr = float(pr.get("threshold", 3.0)); bbl = int(pr.get("bb_length", 50)); bbm = float(pr.get("bb_mult", 0.35))
+            line_p, rsi_p = ind.qqe(cs.close, rl, sm, fp)
+            line_s, rsi_s = ind.qqe(cs.close, rl, sm, fs)
+            basis = talib.SMA(line_p - 50.0, bbl)
+            dev = bbm * talib.STDDEV(line_p - 50.0, bbl, nbdev=1)
+            upper, lower = basis + dev, basis - dev
+            rp, rs = rsi_p - 50.0, rsi_s - 50.0
+            hist, ln = [], []
+            for s in range(0, n, k):
+                i = min(s + k, n) - 1
+                t = int(cs.open_time[s])
+                if math.isnan(rs[i]):
+                    hist.append([t, None])
+                else:
+                    if not math.isnan(upper[i]) and rs[i] > thr and rp[i] > upper[i]:
+                        c = "#00c3ff"
+                    elif not math.isnan(lower[i]) and rs[i] < -thr and rp[i] < lower[i]:
+                        c = "#ff0062"
+                    else:
+                        c = "#707070"
+                    hist.append([t, round(float(rs[i]), 4), c])
+                lv = line_s[i] - 50.0
+                ln.append([t, None if math.isnan(lv) else round(float(lv), 4)])
+            result.append({"label": "QQE MOD 히스토그램", "overlay": False, "pane": "qqe",
+                           "type": "histogram", "color": "#707070", "data": hist})
+            result.append({"label": "QQE 라인(보조)", "overlay": False, "pane": "qqe",
+                           "type": "line", "color": "#d0d0d0", "data": ln})
+            continue
+        try:
+            series = resolver.resolve(op)
+        except Exception:
+            continue
+        overlay = name in _OVERLAY_INDS
+        result.append({
+            "label": _ind_label(op),
+            "overlay": overlay,
+            "pane": "price" if overlay else _IND_PANE.get(name, name.lower()),
+            "color": _IND_COLOR.get(name, "#8a90a0"),
+            "data": subsample(series),
+        })
+    return result
+
+
 def _run_backtest(p: dict) -> dict:
     base, fr_rate = _get_candles(p["symbol"], float(p["days"]))
     preset_dict = _build_preset(p)
@@ -209,7 +401,9 @@ def _run_backtest(p: dict) -> dict:
     def _px(x):   # nan → None, 그 외 round
         return None if x is None or (isinstance(x, float) and math.isnan(x)) else round(float(x), 2)
 
-    ohlc, bar_min = _ohlc_for_chart(base, TIMEFRAME_MINUTES[p["timeframe"]])
+    tf_min = TIMEFRAME_MINUTES[p["timeframe"]]
+    ohlc, bar_min = _ohlc_for_chart(base, tf_min)
+    chart_inds = _chart_indicators(base, tf_min, preset_dict)
     trades_out = [{
         "side": t.side,
         "entryTime": int(t.entry_time), "entryPrice": round(float(t.entry_price), 2),
@@ -224,6 +418,7 @@ def _run_backtest(p: dict) -> dict:
         "fundingRate": fr_rate,
         "ohlc": ohlc,
         "ohlcBarMin": bar_min,
+        "indicators": chart_inds,
         "trades": trades_out,
         "metrics": {
             "totalReturnPct": round(m.total_return_pct, 3),
