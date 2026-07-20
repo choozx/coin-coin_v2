@@ -79,6 +79,10 @@ class SeriesResolver:
             return ind.mfi(c.high, c.low, c.close, c.volume, period or 14)
         if name == "VWAP":
             return ind.vwap(c.high, c.low, c.close, c.volume)
+        if name in ("SUPERTREND", "SUPERTREND_DIR"):
+            line, d = ind.supertrend(c.high, c.low, c.close, period or 10,
+                                     float(params.get("multiplier", 3.0)))
+            return line if name == "SUPERTREND" else d
         # 캔들스틱 반전 패턴 (종합 강세/약세 먼저, 그 외 CDL_XXX는 개별 패턴)
         if name == "CDL_BULLREV":
             return ind.reversal(c.open, c.high, c.low, c.close, bull=True)

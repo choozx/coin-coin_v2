@@ -358,6 +358,7 @@ function collect() {
 // fields는 배열 또는 (f)=>배열(모드에 따라 필드셋이 바뀌는 EMA·StochRSI). reflow:true면 그 값 바뀔 때 폼 재렌더.
 const _MODE_MA = {k:"mode",label:"방식",type:"select",opts:[["price","가격 대비"],["cross","크로스"]],v:"price",reflow:true};
 const _MODE_OSC = {k:"mode",label:"방식",type:"select",opts:[["level","기준값 비교"],["cross","크로스(K·D)"]],v:"level",reflow:true};
+const _MODE_ST = {k:"mode",label:"방식",type:"select",opts:[["trend","추세 필터(가격 대비)"],["flip","전환 신호(플립)"]],v:"trend",reflow:true};
 const COND_TYPES = {
   rsi: { label:"RSI",
     fields:[{k:"period",label:"기간",v:14,sweep:{path:"left.period",def:[7,21,7]}},{k:"cmp",label:"조건",type:"cmp"},{k:"value",label:"기준값",v:30,sweep:{path:"right",def:[15,35,5]}}],
@@ -389,6 +390,20 @@ const COND_TYPES = {
     fields:[{k:"cmp",label:"조건",type:"cmp",v:"<"}],
     build:f=>({left:{source:"close"},cmp:f.cmp,right:{indicator:"VWAP"}}),
     desc:n=>`가격 ${n.cmp} VWAP` },
+  superTrend: { label:"SuperTrend",
+    fields:f=> f.mode==="flip"
+      ? [_MODE_ST, {k:"cross",label:"방향",type:"cross"},
+         {k:"period",label:"ATR기간",v:10,sweep:{path:"left.period",def:[7,21,7]}},
+         {k:"mult",label:"배수",v:3,sweep:{path:"left.params.multiplier",def:[2,4,0.5]}}]
+      : [_MODE_ST, {k:"cmp",label:"조건",type:"cmp",v:">"},
+         {k:"period",label:"ATR기간",v:10,sweep:{path:"right.period",def:[7,21,7]}},
+         {k:"mult",label:"배수",v:3,sweep:{path:"right.params.multiplier",def:[2,4,0.5]}}],
+    build:f=> f.mode==="flip"
+      ? {cross:f.cross,left:{indicator:"SUPERTREND_DIR",period:+f.period,params:{multiplier:+f.mult}},right:0}
+      : {left:{source:"close"},cmp:f.cmp,right:{indicator:"SUPERTREND",period:+f.period,params:{multiplier:+f.mult}}},
+    desc:n=> n.cross!==undefined
+      ? `SuperTrend ${n.cross==="crossOver"?"▲상승전환":"▼하락전환"}(${n.left.period},×${n.left.params.multiplier})`
+      : `가격 ${n.cmp} SuperTrend(${n.right.period},×${n.right.params.multiplier})` },
   bb: { label:"볼린저밴드",
     fields:[{k:"band",label:"밴드",type:"select",opts:[["lower","하단(과매도)"],["upper","상단(과매수)"]],v:"lower"},
             {k:"period",label:"기간",v:20,sweep:{path:"right.period",def:[10,30,10]}},{k:"stddev",label:"표준편차",v:2,sweep:{path:"right.params.stddev",def:[1.5,3,0.5]}}],

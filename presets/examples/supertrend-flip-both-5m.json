@@ -1,0 +1,56 @@
+{
+  "schemaVersion": "1.0",
+  "name": "SuperTrend 전환 롱·숏 동시 (5m)",
+  "description": "SuperTrend(10, ×3) 상향전환+거래량이면 롱, 하향전환+거래량이면 숏. entryRules로 양방향 진입 — 하락장에선 숏으로, 상승장에선 롱으로 먹는 스캘핑. 손절 ATR 2배, 익절 손익비 2:1, 30봉 시간청산. direction:both+단일 entry는 롱만 치므로 반드시 entryRules 사용.",
+  "market": {
+    "exchange": "binance-futures",
+    "symbol": "BTCUSDT",
+    "timeframe": "5m",
+    "direction": "both"
+  },
+  "entryRules": [
+    {
+      "side": "long",
+      "when": {
+        "op": "AND",
+        "children": [
+          { "cross": "crossOver", "left": { "indicator": "SUPERTREND_DIR", "period": 10, "params": { "multiplier": 3.0 } }, "right": 0 },
+          { "left": { "indicator": "RVOL", "period": 20 }, "cmp": ">", "right": 1.5 }
+        ]
+      }
+    },
+    {
+      "side": "short",
+      "when": {
+        "op": "AND",
+        "children": [
+          { "cross": "crossUnder", "left": { "indicator": "SUPERTREND_DIR", "period": 10, "params": { "multiplier": 3.0 } }, "right": 0 },
+          { "left": { "indicator": "RVOL", "period": 20 }, "cmp": ">", "right": 1.5 }
+        ]
+      }
+    }
+  ],
+  "entry": {
+    "op": "AND",
+    "children": [
+      { "cross": "crossOver", "left": { "indicator": "SUPERTREND_DIR", "period": 10, "params": { "multiplier": 3.0 } }, "right": 0 },
+      { "left": { "indicator": "RVOL", "period": 20 }, "cmp": ">", "right": 1.5 }
+    ]
+  },
+  "exit": {
+    "stopLoss": { "type": "atrMultiple", "value": 2.0 },
+    "takeProfit": { "type": "riskReward", "value": 2.0 },
+    "timeStop": { "maxBars": 30 }
+  },
+  "sizing": {
+    "leverage": 4,
+    "marginMode": "isolated",
+    "size": { "type": "equityPercent", "value": 15 },
+    "minLiquidationBuffer": 10,
+    "maxConcurrentPositions": 1
+  },
+  "filter": {
+    "cooldownBars": 2,
+    "avoidFundingWindowMinutes": 5
+  }
+}

@@ -61,6 +61,27 @@ def test_rsi_bounds():
     assert (valid >= 0).all() and (valid <= 100).all()
 
 
+def test_supertrend_trend_and_flip():
+    # 상승→하락 명확한 추세: SuperTrend가 방향을 따라가고 플립이 최소 1번 나야 함.
+    up = np.linspace(100, 140, 60)
+    down = np.linspace(140, 100, 60)
+    close = np.concatenate([up, down])
+    high = close + 0.5
+    low = close - 0.5
+    line, d = ind.supertrend(high, low, close, period=10, multiplier=3.0)
+    valid = ~np.isnan(d)
+    assert valid.any()
+    # 방향은 ±1만
+    assert set(np.unique(d[valid])).issubset({-1.0, 1.0})
+    # 상승추세엔 라인이 가격 아래(지지), 하락추세엔 위(저항)
+    up_idx = np.where(valid & (d == 1.0))[0]
+    dn_idx = np.where(valid & (d == -1.0))[0]
+    assert (line[up_idx] <= close[up_idx]).all()
+    assert (line[dn_idx] >= close[dn_idx]).all()
+    # 추세 반전이 있으니 방향 전환(플립)이 최소 1번
+    assert (np.diff(d[valid]) != 0).any()
+
+
 # ---- 청산가 공식 -----------------------------------------------------------
 def test_liquidation_price_long():
     # EP=100, 10x, qty=1, MMR=0.004 → 약 90.36
