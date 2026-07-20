@@ -212,6 +212,7 @@
           <option value="percent" selected>고정 %</option>
           <option value="atrMultiple">ATR 배수</option>
           <option value="swing">스윙 고저점 (롱=전저점 / 숏=전고점)</option>
+          <option value="supertrend">SuperTrend 전환 (추세이탈 손절)</option>
         </select></div>
       <div class="row" data-when="sl-value"><label id="slValueLabel">손절 % (가격)</label>
         <input type="number" id="slValue" value="1.5" step="0.1" min="0"></div>
@@ -219,6 +220,10 @@
         <input type="number" id="slLookback" value="20" min="2"></div>
       <div class="row" data-when="sl-swing"><label>버퍼 %</label>
         <input type="number" id="slBuffer" value="0.05" step="0.05" min="0"></div>
+      <div class="row" data-when="sl-st"><label>SuperTrend ATR기간</label>
+        <input type="number" id="slStPeriod" value="10" min="1"></div>
+      <div class="row" data-when="sl-st"><label>SuperTrend 배수</label>
+        <input type="number" id="slStMult" value="3" step="0.5" min="0.1"></div>
       <div class="note" id="slNote" style="color:var(--mut)"></div>
     </div>
 
@@ -340,7 +345,7 @@
 <script>
 const $ = id => document.getElementById(id);
 const FIELDS = ["symbol","timeframe","days","equity",
-  "slType","slValue","slLookback","slBuffer",
+  "slType","slValue","slLookback","slBuffer","slStPeriod","slStMult",
   "tpType","tpValue","tpLookback","tpBuffer","tpStPeriod","tpStMult",
   "exitCondEnabled","exitCondInd","exitCondPeriod","exitCondCmp","exitCondValue","timeStopBars",
   "trailingEnabled","trailingCallback","trailingActivation",
@@ -617,19 +622,24 @@ function sync() {
   const slT = $("slType").value, tpT = $("tpType").value;
   const show = (sel, on) => document.querySelectorAll(`[data-when="${sel}"]`)
                                     .forEach(e => e.style.display = on ? "" : "none");
+  // 가격 레벨 손절이 있는가 (손익비·리스크사이징은 이게 필요). supertrend/off는 없음.
+  const slPrice = slT === "percent" || slT === "atrMultiple" || slT === "swing";
   show("sl-value", slT === "percent" || slT === "atrMultiple");
   show("sl-swing", slT === "swing");
+  show("sl-st", slT === "supertrend");
   show("tp-value", tpT === "percent" || tpT === "atrMultiple" || tpT === "riskReward");
   show("tp-swing", tpT === "swing");
   show("tp-st", tpT === "supertrend");
   $("slValueLabel").textContent = slT === "atrMultiple" ? "손절 ATR 배수" : "손절 % (가격)";
   $("slNote").textContent = slT === "swing"
     ? "룩백 구간(현재 봉 포함)의 최저/최고가 ± 버퍼%. 방향은 자동 — 롱은 전저점 아래, 숏은 전고점 위."
+    : slT === "supertrend"
+    ? "포지션 반대로 SuperTrend 전환 시 손절(신호봉 종가). 롱=하락전환, 숏=상승전환. 가격 레벨이 없어 손익비·리스크% 사이징과는 함께 못 씀."
     : "";
   $("tpValueLabel").textContent = tpT === "atrMultiple" ? "익절 ATR 배수"
     : tpT === "riskReward" ? "손익비 (손절 거리 × 배수)" : "익절 % (가격)";
   $("tpNote").textContent = tpT === "riskReward"
-    ? (slT === "off" ? "⚠️ 손익비는 손절이 필요해 — 손절 방식을 켜줘 (안 켜면 익절 없음)"
+    ? (!slPrice ? "⚠️ 손익비는 가격 손절이 필요해 — 손절을 %·ATR·스윙으로 켜줘 (SuperTrend/없음은 불가)"
                      : "익절 거리 = 손절 거리 × 배수 (예: 2 → 손절 1% 시 익절 2%)")
     : tpT === "supertrend"
     ? "포지션 방향과 반대로 SuperTrend가 전환하면 청산(신호봉 종가). 롱=하락전환, 숏=상승전환. 추세를 끝까지 타고 이탈 시 익절."
@@ -638,7 +648,7 @@ function sync() {
   const risk = $("sizeType").value === "riskPercent";
   $("sizeValueLabel").textContent = risk ? "트레이드당 리스크 %" : "증거금 비중 %";
   $("sizeNote").textContent = risk
-    ? (slT === "off" ? "⚠️ 리스크%는 손절이 필요해 — 손절 방식을 켜줘" : "손절 거리로 수량 역산 → 매 트레이드 리스크 일정")
+    ? (!slPrice ? "⚠️ 리스크%는 가격 손절이 필요해 — 손절을 %·ATR·스윙으로 켜줘 (SuperTrend/없음은 불가)" : "손절 거리로 수량 역산 → 매 트레이드 리스크 일정")
     : "";
   if (typeof updateHints === "function") updateHints();
 }
@@ -1377,7 +1387,8 @@ function updateHints() {
   }
   const slT = v("slType");
   setH("sl", slT==="off" ? "없음" : slT==="percent" ? `${v("slValue")}%`
-        : slT==="atrMultiple" ? `ATR×${v("slValue")}` : `스윙${v("slLookback")}봉`);
+        : slT==="atrMultiple" ? `ATR×${v("slValue")}`
+        : slT==="supertrend" ? `ST전환(${v("slStPeriod")},×${v("slStMult")})` : `스윙${v("slLookback")}봉`);
   const tpT = v("tpType");
   setH("tp", tpT==="off" ? "없음" : tpT==="percent" ? `${v("tpValue")}%`
         : tpT==="atrMultiple" ? `ATR×${v("tpValue")}`

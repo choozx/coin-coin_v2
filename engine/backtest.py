@@ -249,7 +249,8 @@ def run(base: Candles, preset: Preset, cfg: BacktestConfig = None) -> Metrics:
                 time_stop = ex.get("timeStop")
                 st_exit = ex.get("supertrendExit")
                 if st_exit is not None and _supertrend_flip_exit(resolver, st_exit, pos.side, sb):
-                    close_position(sig_close, fill_time, "take_profit")
+                    st_reason = "stop_loss" if st_exit.get("as") == "stopLoss" else "take_profit"
+                    close_position(sig_close, fill_time, st_reason)
                 elif cond is not None and evaluate(cond, resolver, sb):
                     close_position(sig_close, fill_time, "signal")
                 elif time_stop is not None:

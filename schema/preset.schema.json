@@ -90,10 +90,14 @@
           "type": "object",
           "additionalProperties": false,
           "required": ["multiplier"],
-          "description": "포지션 방향과 반대로 SuperTrend가 전환하면 청산(추세이탈 익절). 롱=하락전환 시, 숏=상승전환 시.",
+          "description": "포지션 방향과 반대로 SuperTrend가 전환하면 청산(추세이탈). 롱=하락전환 시, 숏=상승전환 시.",
           "properties": {
             "period": { "type": "integer", "minimum": 1, "default": 10 },
-            "multiplier": { "type": "number", "exclusiveMinimum": 0 }
+            "multiplier": { "type": "number", "exclusiveMinimum": 0 },
+            "as": {
+              "type": "string", "enum": ["takeProfit", "stopLoss"], "default": "takeProfit",
+              "description": "청산 사유 분류 — 익절 슬롯이면 takeProfit, 손절 슬롯이면 stopLoss."
+            }
           }
         }
       }
