@@ -102,6 +102,11 @@ def _build_preset(p: dict) -> dict:
     tp = _price_target(p, "tp")
     if tp:
         exit_block["takeProfit"] = tp
+    elif p.get("tpType") == "supertrend":       # SuperTrend 전환 익절 (방향 인식)
+        exit_block["supertrendExit"] = {
+            "period": int(p.get("tpStPeriod", 10) or 10),
+            "multiplier": float(p.get("tpStMult", 3.0) or 3.0),
+        }
     if p.get("trailingEnabled") and float(p.get("trailingCallback", 0)) > 0:
         exit_block["trailing"] = {
             "enabled": True,

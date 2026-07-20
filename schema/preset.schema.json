@@ -85,6 +85,16 @@
             "maxBars": { "type": "integer", "minimum": 1,
               "description": "N개 캔들 지나도 안 닫히면 강제 청산" }
           }
+        },
+        "supertrendExit": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["multiplier"],
+          "description": "포지션 방향과 반대로 SuperTrend가 전환하면 청산(추세이탈 익절). 롱=하락전환 시, 숏=상승전환 시.",
+          "properties": {
+            "period": { "type": "integer", "minimum": 1, "default": 10 },
+            "multiplier": { "type": "number", "exclusiveMinimum": 0 }
+          }
         }
       }
     },

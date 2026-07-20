@@ -110,6 +110,30 @@ def test_hawkeye_bull_bear_neutral():
     assert hv2[1] in (1.0, 0.0, -1.0)
 
 
+def test_supertrend_flip_exit_side_aware():
+    from engine.candles import Candles
+    from engine.conditions import SeriesResolver
+    from engine.backtest import _supertrend_flip_exit
+    up = np.linspace(100, 140, 80)
+    down = np.linspace(140, 100, 80)
+    close = np.concatenate([up, down])
+    ot = (np.arange(len(close)) * 300000).astype(np.int64)
+    c = Candles(ot, close, close + 0.5, close - 0.5, close, np.full(len(close), 10.0), 5)
+    r = SeriesResolver(c)
+    st = {"period": 10, "multiplier": 3.0}
+    _, d = ind.supertrend(c.high, c.low, c.close, 10, 3.0)
+    flips_down = [i for i in range(1, len(d)) if d[i - 1] == 1 and d[i] == -1]
+    assert flips_down, "하락 전환이 있어야 함"
+    fi = flips_down[0]
+    assert _supertrend_flip_exit(r, st, +1, fi) is True    # 롱은 하락전환에 청산
+    assert _supertrend_flip_exit(r, st, -1, fi) is False    # 숏은 아님
+    flips_up = [i for i in range(1, len(d)) if d[i - 1] == -1 and d[i] == 1]
+    if flips_up:
+        ui = flips_up[0]
+        assert _supertrend_flip_exit(r, st, -1, ui) is True   # 숏은 상승전환에 청산
+        assert _supertrend_flip_exit(r, st, +1, ui) is False
+
+
 def test_qqe_mod_signal():
     rng = np.random.default_rng(2)
     n = 500

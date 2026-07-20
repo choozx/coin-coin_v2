@@ -243,11 +243,14 @@ def run(base: Candles, preset: Preset, cfg: BacktestConfig = None) -> Metrics:
             # ot 를 그대로 쓰면 체결이 1분 이르게 기록돼 차트 마커가 신호봉 위에 찍힌다.
             fill_time = ot + MINUTE_MS
 
-            # 청산 신호 (조건/시간)
+            # 청산 신호 (SuperTrend 전환 / 지표조건 / 시간)
             if pos is not None:
                 cond = ex.get("condition")
                 time_stop = ex.get("timeStop")
-                if cond is not None and evaluate(cond, resolver, sb):
+                st_exit = ex.get("supertrendExit")
+                if st_exit is not None and _supertrend_flip_exit(resolver, st_exit, pos.side, sb):
+                    close_position(sig_close, fill_time, "take_profit")
+                elif cond is not None and evaluate(cond, resolver, sb):
                     close_position(sig_close, fill_time, "signal")
                 elif time_stop is not None:
                     bars_held = sb - pos.entry_signal_idx
@@ -299,6 +302,23 @@ def _trailing_hit(pos: _Position, trailing: dict, lo: float, hi: float) -> bool:
     else:
         activated = pos.peak <= pos.entry_price * (1 - act)
         return activated and hi >= _trailing_stop(pos, trailing)
+
+
+def _supertrend_flip_exit(resolver, st_exit: dict, side: int, sb: int) -> bool:
+    """포지션 방향과 반대로 SuperTrend가 전환하면 True (추세이탈 익절).
+
+    롱(+1): 상승(+1)→하락(-1) 전환 시 / 숏(-1): 하락(-1)→상승(+1) 전환 시.
+    신호 타임프레임의 SUPERTREND_DIR(±1)을 직전 봉과 비교. 워밍업(NaN)이면 False.
+    """
+    if sb < 1:
+        return False
+    d = resolver.resolve({"indicator": "SUPERTREND_DIR",
+                          "period": int(st_exit.get("period", 10)),
+                          "params": {"multiplier": float(st_exit.get("multiplier", 3.0))}})
+    d0, d1 = d[sb - 1], d[sb]
+    if np.isnan(d0) or np.isnan(d1):
+        return False
+    return bool((d0 > 0 and d1 < 0) if side == 1 else (d0 < 0 and d1 > 0))
 
 
 def _entry_allowed(sb, ot, filt, last_exit_idx, cfg) -> bool:
