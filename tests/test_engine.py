@@ -110,6 +110,38 @@ def test_hawkeye_bull_bear_neutral():
     assert hv2[1] in (1.0, 0.0, -1.0)
 
 
+def test_maker_limit_entry():
+    from engine.backtest import BacktestConfig, run
+    from engine.preset import Preset
+    rng = np.random.default_rng(3)
+    n = 2000
+    close = np.cumsum(rng.normal(0, 1, n)) + 5000
+    high = close + np.abs(rng.normal(0, 3, n))
+    low = close - np.abs(rng.normal(0, 3, n))
+    ot = (np.arange(n) * 60000).astype(np.int64)
+    base = Candles(ot, close.copy(), high, low, close, np.full(n, 100.0), 1)
+
+    def preset(execution):
+        d = {"schemaVersion": "1.0", "name": "m",
+             "market": {"exchange": "binance-futures", "symbol": "BTCUSDT", "timeframe": "1m", "direction": "long"},
+             "entry": {"left": {"source": "close"}, "cmp": ">", "right": {"indicator": "SMA", "period": 5}},
+             "exit": {"takeProfit": {"type": "percent", "value": 0.5}, "stopLoss": {"type": "percent", "value": 0.5}},
+             "sizing": {"leverage": 2, "marginMode": "isolated", "size": {"type": "equityPercent", "value": 10}}}
+        if execution:
+            d["execution"] = execution
+        return Preset.from_dict(d, validate=False)
+
+    cfg = BacktestConfig(initial_equity=10000, taker_fee=0.0005, maker_fee=0.0, funding_rate=0.0)
+    taker = run(base, preset(None), cfg)
+    maker = run(base, preset({"entryType": "makerLimit", "makerOffsetPercent": 0.2, "makerTimeoutBars": 2}), cfg)
+    assert taker.num_trades > 0
+    # 지정가+오프셋+짧은 타임아웃 → 일부 미체결(스킵) → 트레이드 수가 taker 이하
+    assert maker.num_trades <= taker.num_trades
+    # maker 진입 수수료 0 → 트레이드당 평균 수수료가 taker보다 작음
+    if maker.num_trades > 0:
+        assert maker.total_fees / maker.num_trades < taker.total_fees / taker.num_trades
+
+
 def test_supertrend_flip_exit_side_aware():
     from engine.candles import Candles
     from engine.conditions import SeriesResolver

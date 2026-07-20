@@ -165,6 +165,13 @@ def run(base: Candles, preset: Preset, cfg: BacktestConfig = None) -> Metrics:
     # 방향별 진입 규칙 (있으면 우선). 각 규칙 = (side, when-조건). 먼저 참인 규칙으로 진입.
     entry_rules = preset.data.get("entryRules")
 
+    # 체결 방식: 기본 taker(신호봉 종가 시장가). makerLimit이면 지정가를 걸고
+    # 가격이 닿아야만 maker 체결, 타임아웃 내 미체결이면 취소(미진입).
+    execution = preset.data.get("execution") or {}
+    maker_entry = execution.get("entryType") == "makerLimit"
+    maker_offset = float(execution.get("makerOffsetPercent", 0.0)) / 100.0
+    maker_timeout = int(execution.get("makerTimeoutBars", 3) or 3)
+
     sizing = preset.sizing
     ex = preset.exit
     filt = preset.filter
@@ -172,6 +179,7 @@ def run(base: Candles, preset: Preset, cfg: BacktestConfig = None) -> Metrics:
 
     equity = cfg.initial_equity
     pos: _Position = None
+    pending = None          # 대기 지정가 진입 주문: {side, limit, place_sb, timeout} 또는 None
     trades = []
     equity_curve = [(int(base.open_time[0]), equity)]
     last_exit_signal_idx = -10 ** 9
@@ -235,6 +243,23 @@ def run(base: Candles, preset: Preset, cfg: BacktestConfig = None) -> Metrics:
                 elif not np.isnan(pos.tp_price) and lo <= pos.tp_price:
                     close_position(pos.tp_price, ot, "take_profit", is_maker=True)
 
+        # ---- 대기 지정가 진입: 매 1분봉 체결/만료 판정 (포지션 없을 때만) ----
+        # 주문 낸 봉의 다음 봉부터 검사(포지션 관리 뒤·신호판정 앞이라 자동으로 그 봉은 제외).
+        if pending is not None and pos is None:
+            cur_sb = int(bar_of[t])
+            if cur_sb - pending["place_sb"] >= pending["timeout"]:
+                pending = None                          # 타임아웃 미체결 → 취소(미진입)
+            else:
+                touched = (pending["side"] == 1 and lo <= pending["limit"]) or \
+                          (pending["side"] == -1 and hi >= pending["limit"])
+                if touched:
+                    p = _open_position(preset, sizing, ex, pending["limit"], ot, pending["place_sb"],
+                                       pending["side"], lev, equity, cfg, atr_series, signal,
+                                       entry_maker=True)
+                    pending = None
+                    if p is not None:
+                        pos = p
+
         # ---- 신호봉 종료 시점: 진입/청산 신호 판정 ----
         if is_close[t]:
             sb = int(bar_of[t])
@@ -260,9 +285,9 @@ def run(base: Candles, preset: Preset, cfg: BacktestConfig = None) -> Metrics:
                     if bars_held >= time_stop["maxBars"]:
                         close_position(sig_close, fill_time, "time")
 
-            # 진입 신호
+            # 진입 신호 (대기 주문 없고 포지션 없을 때만)
             # 펀딩 임박·거래시간 필터는 '체결 순간' 기준이어야 하므로 fill_time 으로 판정
-            if pos is None and _entry_allowed(sb, fill_time, filt, last_exit_signal_idx, cfg):
+            if pos is None and pending is None and _entry_allowed(sb, fill_time, filt, last_exit_signal_idx, cfg):
                 side = None
                 if entry_rules:
                     for rule in entry_rules:               # 순서대로 평가, 먼저 참인 규칙의 방향
@@ -272,10 +297,15 @@ def run(base: Candles, preset: Preset, cfg: BacktestConfig = None) -> Metrics:
                 elif evaluate(preset.entry, resolver, sb):
                     side = entry_side
                 if side is not None:
-                    p = _open_position(preset, sizing, ex, sig_close, fill_time, sb,
-                                       side, lev, equity, cfg, atr_series, signal)
-                    if p is not None:
-                        pos = p
+                    if maker_entry:
+                        # 지정가 = 종가에서 offset만큼 불리한 쪽(롱=아래/숏=위). 다음 봉부터 체결 검사.
+                        limit = sig_close * (1 - side * maker_offset)
+                        pending = {"side": side, "limit": limit, "place_sb": sb, "timeout": maker_timeout}
+                    else:
+                        p = _open_position(preset, sizing, ex, sig_close, fill_time, sb,
+                                           side, lev, equity, cfg, atr_series, signal)
+                        if p is not None:
+                            pos = p
 
         # 마킹: 무포지션 구간도 자산곡선에 점 남김(선택)
         if pos is None and is_close[t]:
@@ -339,7 +369,8 @@ def _entry_allowed(sb, ot, filt, last_exit_idx, cfg) -> bool:
     return True
 
 
-def _open_position(preset, sizing, ex, price, ot, sb, side, lev, equity, cfg, atr_series, signal):
+def _open_position(preset, sizing, ex, price, ot, sb, side, lev, equity, cfg, atr_series, signal,
+                   entry_maker=False):
     atr_val = atr_series[sb]
     # 손절/익절가 먼저 계산 (리스크 사이징이 손절 거리를 필요로 함).
     # 롱 손절은 아래(-side), 익절은 위(+side). swing 타입은 side 무시.
@@ -369,7 +400,7 @@ def _open_position(preset, sizing, ex, price, ot, sb, side, lev, equity, cfg, at
         if abs(liq - price) / price * 100 < buf:
             return None                     # 청산가가 너무 가까움 → 진입 스킵
 
-    entry_fee = bm.trade_fee(price, qty, taker=True,
+    entry_fee = bm.trade_fee(price, qty, taker=not entry_maker,
                              taker_fee=cfg.taker_fee, maker_fee=cfg.maker_fee)
     return _Position(
         side=side, entry_time=ot, entry_price=price, qty=qty, leverage=lev,
