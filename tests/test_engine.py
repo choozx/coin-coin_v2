@@ -61,6 +61,36 @@ def test_rsi_bounds():
     assert (valid >= 0).all() and (valid <= 100).all()
 
 
+def test_orderflow_delta_cvd():
+    # taker_buy가 volume의 80% → delta_ratio=+0.6(매수우위), CVD 우상향.
+    n = 30
+    vol = np.full(n, 10.0)
+    tb = np.full(n, 8.0)
+    dr = ind.taker_delta_ratio(vol, tb)
+    assert abs(dr[0] - 0.6) < 1e-9
+    d = ind.taker_delta(vol, tb)
+    assert abs(d[0] - 6.0) < 1e-9                 # 2*8-10
+    c = ind.cvd(vol, tb)
+    assert c[-1] > c[0] and (np.diff(c) > 0).all()  # 매수우위면 CVD 단조 증가
+    # 매도우위(taker_buy=2) → delta_ratio 음수, CVD 하락
+    dr2 = ind.taker_delta_ratio(vol, np.full(n, 2.0))
+    assert (dr2 < 0).all()
+
+
+def test_orderflow_condition_needs_taker_data():
+    # taker_buy 없는 Candles에선 오더플로우 조건이 항상 false (NaN 처리).
+    from engine.candles import Candles
+    from engine.conditions import SeriesResolver, evaluate
+    n = 20
+    ot = (np.arange(n) * 60000).astype(np.int64)
+    px = np.full(n, 100.0)
+    c_no = Candles(ot, px, px, px, px, np.full(n, 10.0), 1)          # taker_buy=None
+    node = {"left": {"indicator": "TAKER_DELTA_RATIO"}, "cmp": ">", "right": 0.1}
+    assert evaluate(node, SeriesResolver(c_no), 10) is False
+    c_yes = Candles(ot, px, px, px, px, np.full(n, 10.0), 1, taker_buy=np.full(n, 8.0))
+    assert evaluate(node, SeriesResolver(c_yes), 10) is True
+
+
 def test_supertrend_trend_and_flip():
     # 상승→하락 명확한 추세: SuperTrend가 방향을 따라가고 플립이 최소 1번 나야 함.
     up = np.linspace(100, 140, 60)

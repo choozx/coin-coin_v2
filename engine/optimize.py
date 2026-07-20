@@ -23,8 +23,10 @@ from .backtest import run
 
 
 def slice_candles(c: Candles, start: int, end: int) -> Candles:
+    tb = c.taker_buy[start:end] if c.taker_buy is not None else None
     return Candles(c.open_time[start:end], c.open[start:end], c.high[start:end],
-                   c.low[start:end], c.close[start:end], c.volume[start:end], c.timeframe_min)
+                   c.low[start:end], c.close[start:end], c.volume[start:end], c.timeframe_min,
+                   taker_buy=tb)
 
 
 def expand_spec(spec):

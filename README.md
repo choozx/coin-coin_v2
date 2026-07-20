@@ -117,7 +117,8 @@ UI 블록은 껍데기, 진실은 `schema/preset.schema.json` 의 JSON 트리.
 
 ```
 candles.py      1분봉 → 상위 TF 리샘플, 결측/중복 방어
-indicators.py   지표 — TA-Lib 위임(RSI/MACD/BB/ATR/Stoch/StochRSI/CCI/MFI/SMA/EMA) + numpy(VWAP/RVOL)
+indicators.py   지표 — TA-Lib 위임(RSI/MACD/BB/ATR/Stoch/StochRSI/CCI/MFI/SMA/EMA)
+                + numpy(VWAP/RVOL/SuperTrend/오더플로우 델타·CVD)
 conditions.py   조건 트리 평가 (AND/OR/NOT, 비교, 교차)
 binance_math.py 청산가·펀딩비·수수료 (바이낸스 공식)
 backtest.py     코어 루프 — 1분봉 클럭, 이벤트순서 펀딩→청산→손절→신호

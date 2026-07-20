@@ -51,7 +51,8 @@ def fetch_range_rows(symbol: str, interval: str, start_ms: int, end_ms: int,
                      verbose: bool = False):
     """[start_ms, end_ms] 구간 klines를 페이지네이션으로 수집.
 
-    반환: [(open_time, o, h, l, c, v), ...] (raw 튜플). 캐시 저장용.
+    반환: [(open_time, o, h, l, c, v, taker_buy), ...] (raw 튜플). 캐시 저장용.
+    taker_buy = klines[9] 테이커 매수 체결량(base) — 오더플로우 델타/CVD 지표용.
     """
     rows = []
     cursor = start_ms
@@ -60,8 +61,9 @@ def fetch_range_rows(symbol: str, interval: str, start_ms: int, end_ms: int,
         if not batch:
             break
         for k in batch:
+            # klines: [openTime,o,h,l,c,v,closeTime,quoteVol,trades,takerBuyBase,takerBuyQuote,...]
             rows.append((int(k[0]), float(k[1]), float(k[2]),
-                         float(k[3]), float(k[4]), float(k[5])))
+                         float(k[3]), float(k[4]), float(k[5]), float(k[9])))
         last_open = int(batch[-1][0])
         cursor = last_open + MINUTE_MS
         if verbose:
@@ -90,9 +92,9 @@ def fetch(symbol: str = "BTCUSDT", interval: str = "1m", days: float = 5,
         if not batch:
             break
         for k in batch:
-            # klines: [openTime, open, high, low, close, volume, closeTime, ...]
+            # klines: [openTime,o,h,l,c,v,closeTime,quoteVol,trades,takerBuyBase,takerBuyQuote,...]
             rows.append((int(k[0]), float(k[1]), float(k[2]),
-                         float(k[3]), float(k[4]), float(k[5])))
+                         float(k[3]), float(k[4]), float(k[5]), float(k[9])))
         last_open = int(batch[-1][0])
         cursor = last_open + MINUTE_MS
         if verbose:

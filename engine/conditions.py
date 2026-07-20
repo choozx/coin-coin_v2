@@ -79,6 +79,15 @@ class SeriesResolver:
             return ind.mfi(c.high, c.low, c.close, c.volume, period or 14)
         if name == "VWAP":
             return ind.vwap(c.high, c.low, c.close, c.volume)
+        if name in ("TAKER_DELTA", "TAKER_DELTA_RATIO", "CVD", "CVD_EMA"):
+            if c.taker_buy is None:                 # 오더플로우 데이터 없음 → 항상 false
+                return np.full(len(c), np.nan)
+            if name == "TAKER_DELTA":
+                return ind.taker_delta(c.volume, c.taker_buy)
+            if name == "TAKER_DELTA_RATIO":
+                return ind.taker_delta_ratio(c.volume, c.taker_buy)
+            series = ind.cvd(c.volume, c.taker_buy)
+            return series if name == "CVD" else ind.ema(series, period or 20)
         if name in ("SUPERTREND", "SUPERTREND_DIR"):
             line, d = ind.supertrend(c.high, c.low, c.close, period or 10,
                                      float(params.get("multiplier", 3.0)))

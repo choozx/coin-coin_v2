@@ -145,6 +145,31 @@ def vwap(high, low, close, volume) -> np.ndarray:
     return np.where(cum_v > 0, cum_pv / cum_v, np.nan)
 
 
+# ---- 오더플로우: 테이커 매수/매도 델타 & CVD ----
+# klines의 taker_buy(테이커가 공격적으로 산 체결량)로 봉당 매수/매도 압력을 계산.
+# taker_sell = volume - taker_buy → delta = taker_buy - taker_sell = 2*taker_buy - volume.
+def taker_delta(volume, taker_buy) -> np.ndarray:
+    """봉당 테이커 순매수(base) = 2*taker_buy - volume. +면 공격 매수 우위."""
+    return 2.0 * _d(taker_buy) - _d(volume)
+
+
+def taker_delta_ratio(volume, taker_buy) -> np.ndarray:
+    """정규화 델타 = delta / volume, 범위 [-1, 1]. +0.2 ≈ 매수세 강함, -0.2 ≈ 매도세 강함."""
+    v = _d(volume)
+    d = 2.0 * _d(taker_buy) - v
+    out = np.full(len(v), np.nan)
+    nz = v > 0
+    out[nz] = d[nz] / v[nz]
+    return out
+
+
+def cvd(volume, taker_buy) -> np.ndarray:
+    """누적 볼륨 델타(CVD) = 델타 누적합. 결측(NaN) 봉은 0으로 보고 누적."""
+    d = 2.0 * _d(taker_buy) - _d(volume)
+    d = np.where(np.isnan(d), 0.0, d)
+    return np.cumsum(d)
+
+
 # ---- 캔들스틱 반전 패턴 (TA-Lib CDL*) ----
 # 각 CDL 함수는 봉마다 +100/+200(강세) · -100/-200(약세) · 0(없음) 반환.
 # 종합 반전 = 아래 세트 중 하나라도 뜨면 신호(강세 +100 / 약세 -100).
