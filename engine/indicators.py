@@ -207,6 +207,75 @@ def hawkeye(high, low, close, volume, length: int = 200, divisor: float = 3.6) -
     return np.where(warmup, np.nan, out)
 
 
+def qqe(source, rsi_length: int = 6, smoothing: int = 5, factor: float = 3.0):
+    """QQE 코어 (Quantitative Qualitative Estimation). 반환 (qqe_line, smoothed_rsi).
+
+    - smoothed_rsi = EMA(RSI). qqe_line = ATR(RSI)식 트레일링 밴드(longBand/shortBand)를
+      추세방향으로 선택한 값. 둘 다 0~100 스케일(중심 50).
+    - 상태가 있는(재귀) 지표라 밴드·추세를 봉마다 이어받는다. 원본 Pine 로직 그대로.
+    """
+    src = _d(source)
+    n = len(src)
+    rsi = talib.RSI(src, rsi_length)
+    rsi_ma = talib.EMA(rsi, smoothing)                 # smoothedRsi
+    wilders = rsi_length * 2 - 1
+    atr_rsi = np.full(n, np.nan)
+    atr_rsi[1:] = np.abs(rsi_ma[:-1] - rsi_ma[1:])     # |smoothedRsi[1] - smoothedRsi|
+    dar = talib.EMA(atr_rsi, wilders) * factor         # dynamicAtrRsi
+
+    longband = np.zeros(n)
+    shortband = np.zeros(n)
+    trend = np.ones(n)
+    line = np.full(n, np.nan)
+
+    valid = ~np.isnan(rsi_ma) & ~np.isnan(dar)
+    if not valid.any():
+        return line, rsi_ma
+    start = int(np.argmax(valid))                      # 첫 유효봉 (이후 연속 유효)
+    for i in range(start, n):
+        ns = rsi_ma[i] + dar[i]
+        nl = rsi_ma[i] - dar[i]
+        if i == start:
+            longband[i], shortband[i], trend[i], line[i] = nl, ns, 1, nl
+            continue
+        pl, ps, prm = longband[i - 1], shortband[i - 1], rsi_ma[i - 1]
+        longband[i] = max(pl, nl) if (prm > pl and rsi_ma[i] > pl) else nl
+        shortband[i] = min(ps, ns) if (prm < ps and rsi_ma[i] < ps) else ns
+        # ta.cross(smoothedRsi, shortBand[1]) / ta.cross(longBand[1], smoothedRsi)
+        sb1, sb2 = shortband[i - 1], (shortband[i - 2] if i - 2 >= start else shortband[i - 1])
+        lb1, lb2 = longband[i - 1], (longband[i - 2] if i - 2 >= start else longband[i - 1])
+        cross_short = ((rsi_ma[i] > sb1 and rsi_ma[i - 1] <= sb2) or
+                       (rsi_ma[i] < sb1 and rsi_ma[i - 1] >= sb2))
+        cross_long = ((lb1 > rsi_ma[i] and lb2 <= rsi_ma[i - 1]) or
+                      (lb1 < rsi_ma[i] and lb2 >= rsi_ma[i - 1]))
+        trend[i] = 1 if cross_short else (-1 if cross_long else trend[i - 1])
+        line[i] = longband[i] if trend[i] == 1 else shortband[i]
+    line[:start] = np.nan
+    return line, rsi_ma
+
+
+def qqe_mod(source, rsi_length: int = 6, smoothing: int = 5, factor_primary: float = 3.0,
+            factor_secondary: float = 1.61, threshold: float = 3.0,
+            bb_length: int = 50, bb_mult: float = 0.35) -> np.ndarray:
+    """QQE MOD (Mihkel00) 종합 신호 → +1 매수 / -1 매도 / 0 없음.
+
+    매수 = 보조 smoothedRSI-50 > threshold  그리고  주 smoothedRSI-50 > 볼린저 상단.
+    매도 = 보조 smoothedRSI-50 < -threshold 그리고  주 smoothedRSI-50 < 볼린저 하단.
+    (볼린저는 주 QQE 트렌드라인-50 기준 SMA±mult·STDEV, length=bb_length.)
+    """
+    line_p, rsi_p = qqe(source, rsi_length, smoothing, factor_primary)
+    _, rsi_s = qqe(source, rsi_length, smoothing, factor_secondary)
+    basis = talib.SMA(line_p - 50.0, bb_length)
+    dev = bb_mult * talib.STDDEV(line_p - 50.0, bb_length, nbdev=1)
+    upper, lower = basis + dev, basis - dev
+    rp, rs = rsi_p - 50.0, rsi_s - 50.0
+    up = (rs > threshold) & (rp > upper)
+    down = (rs < -threshold) & (rp < lower)
+    out = np.where(up, 1.0, np.where(down, -1.0, 0.0))
+    warmup = np.isnan(rp) | np.isnan(rs) | np.isnan(upper)
+    return np.where(warmup, np.nan, out)
+
+
 # ---- 캔들스틱 반전 패턴 (TA-Lib CDL*) ----
 # 각 CDL 함수는 봉마다 +100/+200(강세) · -100/-200(약세) · 0(없음) 반환.
 # 종합 반전 = 아래 세트 중 하나라도 뜨면 신호(강세 +100 / 약세 -100).

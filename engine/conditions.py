@@ -91,6 +91,18 @@ class SeriesResolver:
         if name == "HAWKEYE":
             return ind.hawkeye(c.high, c.low, c.close, c.volume,
                                period or 200, float(params.get("divisor", 3.6)))
+        if name in ("QQE_MOD", "QQE_RSI", "QQE_LINE"):
+            rl = period or int(params.get("rsi_length", 6))
+            sm = int(params.get("smoothing", 5))
+            if name == "QQE_MOD":
+                return ind.qqe_mod(c.close, rl, sm,
+                                   float(params.get("factor_primary", 3.0)),
+                                   float(params.get("factor_secondary", 1.61)),
+                                   float(params.get("threshold", 3.0)),
+                                   int(params.get("bb_length", 50)),
+                                   float(params.get("bb_mult", 0.35)))
+            line, rsi_ma = ind.qqe(c.close, rl, sm, float(params.get("factor_primary", 3.0)))
+            return (rsi_ma - 50.0) if name == "QQE_RSI" else (line - 50.0)
         if name in ("SUPERTREND", "SUPERTREND_DIR"):
             line, d = ind.supertrend(c.high, c.low, c.close, period or 10,
                                      float(params.get("multiplier", 3.0)))

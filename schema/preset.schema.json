@@ -251,6 +251,7 @@
                        "BB_upper", "BB_lower", "BB_mid", "ATR", "STOCH_K", "STOCH_D",
                        "STOCHRSI_K", "STOCHRSI_D", "CCI", "MFI", "RVOL", "VWAP",
                        "TAKER_DELTA", "TAKER_DELTA_RATIO", "CVD", "CVD_EMA", "HAWKEYE",
+                       "QQE_MOD", "QQE_RSI", "QQE_LINE",
                        "SUPERTREND", "SUPERTREND_DIR",
                        "CDL_BULLREV", "CDL_BEARREV", "CDL_ENGULFING", "CDL_HAMMER",
                        "CDL_HANGINGMAN", "CDL_MORNINGSTAR", "CDL_EVENINGSTAR",

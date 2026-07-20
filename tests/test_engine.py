@@ -110,6 +110,22 @@ def test_hawkeye_bull_bear_neutral():
     assert hv2[1] in (1.0, 0.0, -1.0)
 
 
+def test_qqe_mod_signal():
+    rng = np.random.default_rng(2)
+    n = 500
+    close = np.cumsum(rng.normal(0, 1, n)) + 1000
+    line, rsi_ma = ind.qqe(close, 6, 5, 3.0)
+    v = rsi_ma[~np.isnan(rsi_ma)]
+    assert (v >= 0).all() and (v <= 100).all()          # smoothedRSI는 0~100
+    # 트레일링 라인도 0~100 근방
+    lv = line[~np.isnan(line)]
+    assert lv.size > 0 and lv.min() > -50 and lv.max() < 150
+    sig = ind.qqe_mod(close, 6, 5, 3.0, 1.61, 3.0, 50, 0.35)
+    sv = sig[~np.isnan(sig)]
+    assert sv.size > 0
+    assert set(np.unique(sv)).issubset({-1.0, 0.0, 1.0})  # 세 상태만
+
+
 def test_supertrend_trend_and_flip():
     # 상승→하락 명확한 추세: SuperTrend가 방향을 따라가고 플립이 최소 1번 나야 함.
     up = np.linspace(100, 140, 60)
