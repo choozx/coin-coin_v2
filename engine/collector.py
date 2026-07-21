@@ -76,6 +76,8 @@ def main():
                     help="첫 수집(백필) 범위. 이미 있으면 최신분만 증분 (기본 7)")
     ap.add_argument("--loop", type=float, metavar="SEC",
                     help="N초마다 반복 수집. 생략하면 1회만")
+    ap.add_argument("--heal-every", type=int, default=60, metavar="N",
+                    help="N 사이클마다 내부 구멍 스캔·복구(자가치유). 기본 60(=루프60s면 1시간), 0=끔")
     ap.add_argument("--no-funding", action="store_true", help="펀딩비 수집 생략")
     args = ap.parse_args()
 
@@ -96,12 +98,21 @@ def main():
         return
 
     from . import control
+    cycle = 0
     try:
         while True:
             if control.service_state("collector") == "paused":
                 print("  [멈춤] 수집 건너뜀", flush=True)
             else:
                 collect_once(symbols, args.seed_days, with_funding)
+                # 자가치유: N사이클마다 내부 구멍 스캔·복구 (tail 수집은 못 메우는 중간 결측)
+                if args.heal_every and cycle % args.heal_every == 0:
+                    for sym in symbols:
+                        try:
+                            candle_store.heal_gaps(sym, verbose=True)
+                        except Exception as e:
+                            print(f"[{_now()}] {sym} heal 실패: {e}")
+            cycle += 1
             time.sleep(args.loop)
     except KeyboardInterrupt:
         print("\n수집기 종료")

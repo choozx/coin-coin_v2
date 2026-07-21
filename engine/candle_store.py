@@ -273,6 +273,52 @@ def info(db_path=DB_PATH):
     conn.close()
 
 
+def find_gaps(symbol: str, db_path=DB_PATH) -> list:
+    """저장된 [min,max] 구간 '내부'의 1분봉 결측을 찾는다 (head/tail 아님).
+    반환: [(gap_start_ms, gap_end_ms), ...] — 빠진 첫 분 ~ 마지막 분(양끝 포함)."""
+    conn = _conn(db_path)
+    ot = np.array([r[0] for r in conn.execute(
+        "SELECT open_time FROM candle WHERE symbol=? ORDER BY open_time", (symbol,))],
+        dtype=np.int64)
+    conn.close()
+    if len(ot) < 2:
+        return []
+    diffs = np.diff(ot)
+    idx = np.where(diffs > MINUTE_MS)[0]                     # 1분보다 벌어진 지점 = 구멍
+    return [(int(ot[i] + MINUTE_MS), int(ot[i + 1] - MINUTE_MS)) for i in idx]
+
+
+def heal_gaps(symbol: str, db_path=DB_PATH, verbose=True) -> dict:
+    """내부 결측 구간을 바이낸스에서 재수집해 메운다. (자가치유)
+    반환: {'gaps', 'expected'(결측 분봉수), 'filled'(복구), 'source_missing'(바이낸스에도 없음)}.
+    소스에도 없는 분봉(거래소 정지 등)은 물리적 결측이라 남는다."""
+    gaps = find_gaps(symbol, db_path)
+    if not gaps:
+        if verbose:
+            print(f"[heal] {symbol}: 구멍 없음 ✓")
+        return {"gaps": 0, "expected": 0, "filled": 0, "source_missing": 0}
+    conn = _conn(db_path)
+    filled = expected = 0
+    for start, end in gaps:
+        expected += int((end - start) // MINUTE_MS) + 1
+        # end+1분: fetch_range_rows는 while cursor<end_ms 라 1분 구멍(start==end)이면 빈손 → 확장 후 필터
+        rows = binance_data.fetch_range_rows(symbol, "1m", start, end + MINUTE_MS)
+        rows = [r for r in rows if start <= int(r[0]) <= end]  # 구멍 구간만 (경계 밖 배제)
+        if rows:
+            conn.executemany(
+                "INSERT OR IGNORE INTO candle(symbol,open_time,open,high,low,close,volume,taker_buy) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                [(symbol, *r) for r in rows])
+            conn.commit()
+            filled += len(rows)
+    conn.close()
+    src_missing = expected - filled
+    if verbose:
+        tail = f", 소스결측 {src_missing}분(거래소에도 없음)" if src_missing else ""
+        print(f"[heal] {symbol}: 구멍 {len(gaps)}곳/{expected}분 → 복구 {filled}분{tail}")
+    return {"gaps": len(gaps), "expected": expected, "filled": filled, "source_missing": src_missing}
+
+
 def main():
     import sys
     args = sys.argv[1:]
@@ -284,6 +330,11 @@ def main():
         for sym in syms:
             n = backfill_taker(sym, verbose=True)
             print(f"{sym}: taker_buy {n:,}개 채움")
+        return
+    if args[0] == "--heal":                 # 내부 구멍 스캔·복구: 인자 심볼 또는 전체
+        syms = [args[1].upper()] if len(args) > 1 else [s["symbol"] for s in list_stats()]
+        for sym in syms:
+            heal_gaps(sym, verbose=True)
         return
     symbol = args[0].upper()
     days = float(args[1]) if len(args) > 1 else 30
