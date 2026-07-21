@@ -26,15 +26,32 @@ def service_state(service: str, path: str = DEFAULT_PATH) -> str:
     return read_control(path).get(service, "running")
 
 
-def set_service(service: str, state: str, path: str = DEFAULT_PATH) -> dict:
-    """control.json에 서비스 상태 기록(원자적). state = 'running' | 'paused'."""
-    if state not in ("running", "paused"):
-        raise ValueError("state는 running 또는 paused")
-    ctrl = read_control(path)
-    ctrl[service] = state
+def _write(ctrl: dict, path: str) -> dict:
+    """control dict를 원자적으로 기록."""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(ctrl, f, ensure_ascii=False)
     os.replace(tmp, path)
     return ctrl
+
+
+def set_service(service: str, state: str, path: str = DEFAULT_PATH) -> dict:
+    """control.json에 서비스 상태 기록(원자적). state = 'running' | 'paused'."""
+    if state not in ("running", "paused"):
+        raise ValueError("state는 running 또는 paused")
+    ctrl = read_control(path)
+    ctrl[service] = state
+    return _write(ctrl, path)
+
+
+def get_strategy(path: str = DEFAULT_PATH):
+    """대시보드가 선택한 '원하는 전략' 프리셋 경로(없으면 None → 봇은 실행 시 프리셋 유지)."""
+    return read_control(path).get("strategy")
+
+
+def set_strategy(preset_path: str, path: str = DEFAULT_PATH) -> dict:
+    """control.json에 '원하는 전략' 기록. 봇이 다음 폴링에 무포지션이면 그 전략으로 전환."""
+    ctrl = read_control(path)
+    ctrl["strategy"] = preset_path
+    return _write(ctrl, path)

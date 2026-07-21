@@ -18,7 +18,7 @@ from .backtest import BacktestConfig, run
 from . import binance_math as bm
 from . import control
 from .candles import resample, TIMEFRAME_MINUTES
-from .preset import Preset
+from .preset import Preset, list_strategies, select_strategy
 
 _HTML = os.path.join(os.path.dirname(__file__), "gui.html")
 _DASH_HTML = os.path.join(os.path.dirname(__file__), "dashboard.html")   # 매매 대시보드(같은 포트 /dashboard)
@@ -634,6 +634,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, json.dumps({"error": "상태 없음 — 봇이 아직 안 돌았거나 state.json 미생성"}))
         elif self.path == "/api/control":
             self._send(200, json.dumps(control.read_control()))
+        elif self.path == "/api/strategies":                 # 봇이 고를 수 있는 전략 목록
+            self._send(200, json.dumps({"strategies": list_strategies()}))
         else:
             self._send(404, b"not found", "text/plain")
 
@@ -646,6 +648,14 @@ class Handler(BaseHTTPRequestHandler):
                 length = int(self.headers.get("Content-Length", 0))
                 body = json.loads(self.rfile.read(length))
                 self._send(200, json.dumps({"ok": True, "control": control.set_service(body["service"], body["state"])}))
+            except Exception as e:
+                self._send(400, json.dumps({"error": str(e)}))
+            return
+        if self.path == "/api/strategy":                     # 봇 전략 선택(무포지션 시 전환)
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length))
+                self._send(200, json.dumps({"ok": True, "control": select_strategy(body["path"])}))
             except Exception as e:
                 self._send(400, json.dumps({"error": str(e)}))
             return

@@ -14,6 +14,7 @@ import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import control
+from .preset import list_strategies, select_strategy
 
 _HTML = os.path.join(os.path.dirname(__file__), "dashboard.html")
 STATE_PATH = os.environ.get("STATE_PATH", "data/state.json")
@@ -43,18 +44,22 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, json.dumps({"error": str(e)}))
         elif self.path == "/api/control":
             self._send(200, json.dumps(control.read_control()))
+        elif self.path == "/api/strategies":
+            self._send(200, json.dumps({"strategies": list_strategies()}))
         else:
             self._send(404, b"not found", "text/plain")
 
     def do_POST(self):
-        # 멈춤/재개 제어 — {"service":"trader"|"collector","state":"running"|"paused"}
-        if self.path != "/api/control":
-            self._send(404, b"not found", "text/plain")
-            return
         try:
             length = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(length))
-            ctrl = control.set_service(body["service"], body["state"])
+            if self.path == "/api/control":       # {"service":"trader"|"collector","state":...}
+                ctrl = control.set_service(body["service"], body["state"])
+            elif self.path == "/api/strategy":     # {"path": "presets/..."} 봇 전략 선택
+                ctrl = select_strategy(body["path"])
+            else:
+                self._send(404, b"not found", "text/plain")
+                return
             self._send(200, json.dumps({"ok": True, "control": ctrl}))
         except Exception as e:
             self._send(400, json.dumps({"error": str(e)}))

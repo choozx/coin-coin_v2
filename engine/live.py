@@ -46,7 +46,7 @@ from . import control
 from . import indicators as ind
 from .candles import resample, signal_close_index, TIMEFRAME_MINUTES, MINUTE_MS
 from .conditions import SeriesResolver, evaluate
-from .preset import Preset
+from .preset import Preset, load_preset_file
 from .executor import PaperExecutor, LiveExecutor
 from .backtest import (
     BacktestConfig, _leverage_for, _open_position, _supertrend_flip_exit,
@@ -58,21 +58,72 @@ class LiveTrader:
     """실시간 봉 스트림(폴링)을 백테스트와 같은 로직으로 처리해 Executor에 주문."""
 
     def __init__(self, preset: Preset, executor, cfg: BacktestConfig = None, warmup_days: float = 10,
-                 state_path: str = "data/state.json"):
+                 state_path: str = "data/state.json", strategy_path: str = None):
         self.preset = preset
         self.ex = executor
         self.cfg = cfg or BacktestConfig()
         self.warmup_days = warmup_days
         self.state_path = state_path         # 대시보드가 읽을 상태 스냅샷(포지션·트레이드·잔고)
+        self.strategy_path = strategy_path   # 현재 활성 전략 파일 경로(대시보드 선택과 비교)
+        self._pending_strategy = None        # 전환 대기(포지션 청산 후 적용할 전략)
+        self._strategy_error = None
+        self._apply_derived(preset)          # tf_min/entry_rules/entry_side/maker_entry
+        self._last_ot = None                 # 마지막으로 처리한 1분봉 open_time
+        self._last_exit_sb = -10 ** 9        # 쿨다운용
+        self._started_at = int(time.time() * 1000)
+        self._paused = False                 # control.json에서 읽음(멈춤=새 진입 차단)
+
+    def _apply_derived(self, preset: Preset):
+        """프리셋에서 파생되는 실행 파라미터 세팅(전환 시 재호출)."""
         self.tf_min = TIMEFRAME_MINUTES[preset.timeframe]
         self.entry_rules = preset.data.get("entryRules")
         self.entry_side = -1 if preset.direction == "short" else 1
         execution = preset.data.get("execution") or {}
         self.maker_entry = execution.get("entryType") == "makerLimit"
-        self._last_ot = None                 # 마지막으로 처리한 1분봉 open_time
-        self._last_exit_sb = -10 ** 9        # 쿨다운용
-        self._started_at = int(time.time() * 1000)
-        self._paused = False                 # control.json에서 읽음(멈춤=새 진입 차단)
+
+    def _maybe_switch_strategy(self):
+        """대시보드가 고른 '원하는 전략'을 확인 → 무포지션이면 전환, 포지션 있으면 대기.
+        (1번 방식: 안전 — 열린 포지션은 기존 전략이 청산할 때까지 그대로 두고 flat 되면 교체.)"""
+        desired = control.get_strategy()
+        if not desired or desired == self.strategy_path:
+            self._pending_strategy = None
+            return
+        if self.ex.position is not None:     # 포지션 열림 → 청산 후로 미룸
+            self._pending_strategy = desired
+            return
+        try:
+            new = load_preset_file(desired, validate=True)
+        except Exception as e:
+            self._strategy_error = f"{desired}: {e}"
+            self._pending_strategy = desired
+            notify(f"⚠️ 전략 전환 실패 {desired}: {e}")
+            print(f"  [전략전환 실패] {e}", flush=True)
+            return
+        self._apply_strategy(new, desired)
+
+    def _apply_strategy(self, preset: Preset, path: str):
+        """무포지션 상태에서 전략을 실제로 갈아끼운다(심볼 바뀌면 수수료·데이터도 갱신)."""
+        old = self.preset.name
+        self.preset = preset
+        self.strategy_path = path
+        self._apply_derived(preset)
+        mk, tk = bm.fees_for_symbol(preset.symbol)   # 심볼 바뀌면 수수료 갱신
+        self.cfg.maker_fee, self.cfg.taker_fee = mk, tk
+        if hasattr(self.ex, "maker_fee"):
+            self.ex.maker_fee, self.ex.taker_fee = mk, tk
+        self._last_exit_sb = -10 ** 9                # 쿨다운 리셋
+        self._pending_strategy = None
+        self._strategy_error = None
+        # 과거 replay 방지: 새 전략/심볼 데이터의 최신 닫힌 봉으로 _last_ot 세팅
+        self._last_ot = None
+        try:
+            base = self._fetch(int(time.time() * 1000))
+            if len(base):
+                self._last_ot = int(base.open_time[-1])
+        except Exception:
+            pass
+        notify(f"🔄 전략 전환 {old} → {preset.name} ({preset.symbol} {preset.timeframe})")
+        print(f"  [전략전환] {old} → {preset.name} ({preset.symbol} {preset.timeframe})", flush=True)
 
     def _write_state(self):
         """포지션·트레이드·잔고 스냅샷을 state_path에 원자적으로 기록(대시보드용)."""
@@ -89,6 +140,9 @@ class LiveTrader:
             "preset": self.preset.name, "symbol": self.preset.symbol, "timeframe": self.preset.timeframe,
             "startedAt": self._started_at, "updatedAt": int(time.time() * 1000),
             "paused": self._paused,
+            "strategy": self.strategy_path,              # 현재 활성 전략 파일 경로
+            "pendingStrategy": self._pending_strategy,   # 전환 대기(포지션 청산 후) 경로 or None
+            "strategyError": self._strategy_error,
             "equity": round(ex.equity(), 2), "initialEquity": round(self.cfg.initial_equity, 2),
             "returnPct": round((ex.equity() / self.cfg.initial_equity - 1) * 100, 2),
             "numTrades": len(trades),
@@ -128,6 +182,7 @@ class LiveTrader:
     def poll_once(self, now_ms: int = None, base=None):
         """한 번 폴링 → 새로 닫힌 1분봉들을 순서대로 처리. 반환: 이번에 발생한 이벤트 리스트."""
         if base is None:
+            self._maybe_switch_strategy()    # 폴링 시작 시 전략 전환 확인(무포지션이면 교체)
             if now_ms is None:
                 raise ValueError("now_ms 필요(실시간). 테스트는 base 주입.")
             base = self._fetch(now_ms)
@@ -279,18 +334,14 @@ def main():
     ap.add_argument("--once", action="store_true", help="한 번만 폴링하고 종료(테스트용)")
     args = ap.parse_args()
 
-    import json
-    with open(args.preset, encoding="utf-8") as f:
-        raw = json.load(f)
-    # presets/saved/ 파일은 {name, form, params, preset} 래퍼 → preset 키 사용. 아니면 raw 자체.
-    preset = Preset.from_dict(raw.get("preset", raw), validate=True)
+    preset = load_preset_file(args.preset, validate=True)
     mk, tk = bm.fees_for_symbol(preset.symbol)
     cfg = BacktestConfig(initial_equity=args.equity, maker_fee=mk, taker_fee=tk)
     if args.live:
         ex = LiveExecutor()              # NotImplementedError
     else:
         ex = PaperExecutor(equity=args.equity, maker_fee=mk, taker_fee=tk)
-    trader = LiveTrader(preset, ex, cfg)
+    trader = LiveTrader(preset, ex, cfg, strategy_path=args.preset)
     print(f"[{'페이퍼' if not args.live else '실거래'}] {preset.name} · {preset.symbol} {preset.timeframe} "
           f"· 수수료 maker {mk*100:.3f}%/taker {tk*100:.3f}% · 초기잔고 {args.equity:.0f}")
     trader.run(interval=args.interval, once=args.once)

@@ -41,6 +41,9 @@
   .svc button { padding:4px 12px; border-radius:6px; border:1px solid var(--line); background:var(--panel2);
                 color:var(--fg); cursor:pointer; font-size:12px; }
   .svc button:hover { border-color:var(--blue); }
+  .svc select { background:var(--panel2); color:var(--fg); border:1px solid var(--line); border-radius:6px;
+                padding:4px 8px; font-size:12px; cursor:pointer; max-width:260px; }
+  .svc select:hover { border-color:var(--blue); }
 </style>
 </head>
 <body>
@@ -66,22 +69,49 @@ function svcBtn(svc, label, state){
   return `<span class="svc"><b>${label}</b> <span class="dot ${paused?'p':'r'}"></span>${paused?'멈춤':'실행중'} `
     + `<button onclick="setSvc('${svc}','${paused?'running':'paused'}')">${paused?'▶ 재개':'⏸ 멈춤'}</button></span>`;
 }
-async function renderControl(){
+let STRATS = [];
+async function loadStrategies(){
+  try { STRATS = ((await (await fetch("/api/strategies",{cache:"no-store"})).json()).strategies)||[]; } catch(e){}
+}
+function stratSelector(d){
+  if (!STRATS.length) return "";
+  const active = d && d.strategy;
+  const pending = d && d.pendingStrategy && d.pendingStrategy!==active ? d.pendingStrategy : null;
+  const opts = STRATS.map(s=>{
+    const mark = s.source==="saved" ? "📁 " : "";
+    return `<option value="${s.path}"${s.path===active?" selected":""}>${mark}${s.name} · ${s.symbol} ${s.timeframe}</option>`;
+  }).join("");
+  let html = `<span class="svc"><b>전략</b> <select id="stratSel" onchange="setStrat(this.value)">${opts}</select></span>`;
+  if (pending){
+    const pn = (STRATS.find(s=>s.path===pending)||{}).name || pending;
+    html += `<span class="svc" style="color:#e0a030">⏳ 전환 대기: <b>${pn}</b> <span class="sub">포지션 청산 후 적용</span></span>`;
+  }
+  if (d && d.strategyError) html += `<span class="svc" style="color:var(--down)">⚠ ${d.strategyError}</span>`;
+  return html;
+}
+async function setStrat(path){
+  try {
+    const r = await (await fetch("/api/strategy",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path})})).json();
+    if (r && r.error) alert("전략 선택 실패: "+r.error);
+  } catch(e){ alert("전략 선택 실패: "+e); }
+}
+async function renderControl(d){
   let c = {};
   try { c = await (await fetch("/api/control",{cache:"no-store"})).json(); } catch(e){}
-  $("control").innerHTML = svcBtn("trader","봇", c.trader||"running") + svcBtn("collector","수집기", c.collector||"running");
+  $("control").innerHTML = svcBtn("trader","봇", c.trader||"running") + svcBtn("collector","수집기", c.collector||"running") + stratSelector(d);
 }
 async function setSvc(svc, state){
   try { await fetch("/api/control",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:svc,state})}); }
   catch(e){ alert("제어 실패: "+e); }
-  renderControl();
+  renderControl(window._lastState);
 }
 
 async function tick(){
-  renderControl();
   let d;
   try { d = await (await fetch("/api/state",{cache:"no-store"})).json(); }
-  catch(e){ $("body").innerHTML = `<div class="err">상태 서버 응답 없음: ${e}</div>`; return; }
+  catch(e){ renderControl(null); $("body").innerHTML = `<div class="err">상태 서버 응답 없음: ${e}</div>`; return; }
+  window._lastState = d;
+  renderControl(d);
   if (d.error){ $("body").innerHTML = `<div class="err">${d.error}</div>`; $("status").className="badge stale"; $("status").textContent="대기"; return; }
 
   $("title").textContent = `${d.preset} · ${d.symbol} ${d.timeframe}`;
@@ -155,7 +185,7 @@ function drawEquity(d){
   ctx.beginPath(); ctx.moveTo(4,y(d.initialEquity)); ctx.lineTo(W-4,y(d.initialEquity)); ctx.stroke(); ctx.setLineDash([]);
 }
 
-tick(); setInterval(tick, 3000);   // 3초마다 새로고침
+loadStrategies().then(tick); setInterval(tick, 3000);   // 전략 목록 로드 후 3초마다 새로고침
 </script>
 </body>
 </html>
