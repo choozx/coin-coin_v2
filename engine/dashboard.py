@@ -74,6 +74,7 @@ class Handler(BaseHTTPRequestHandler):
             import os as _os
             info = {"symbols": candle_store.coverage_report(),
                     "collector": control.service_state("collector"),
+                    "collectSymbols": control.get_symbols(),
                     "dbBytes": _os.path.getsize(candle_store.DB_PATH) if _os.path.exists(candle_store.DB_PATH) else 0}
             self._send(200, json.dumps(info))
         else:
@@ -90,6 +91,10 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/api/heal":         # 캔들 구멍 수동 복구
                 syms = [body["symbol"]] if body.get("symbol") else [s["symbol"] for s in candle_store.list_stats()]
                 self._send(200, json.dumps({"ok": True, "result": {s: candle_store.heal_gaps(s, verbose=False) for s in syms}}))
+                return
+            elif self.path == "/api/collect_symbols":   # 수집 심볼 설정(핫리로드)
+                ctrl = control.set_symbols(control.clean_symbols(body.get("symbols") or []))
+                self._send(200, json.dumps({"ok": True, "control": ctrl}))
                 return
             else:
                 self._send(404, b"not found", "text/plain")

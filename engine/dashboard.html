@@ -61,6 +61,14 @@
   .tab.active { color:var(--fg); border-bottom-color:var(--blue); }
   .tab:hover { color:var(--fg); }
   .fresh-g { color:var(--up); } .fresh-y { color:#e0a030; } .fresh-r { color:var(--down); }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; }
+  .chip { background:var(--panel2); border:1px solid var(--line); border-radius:6px; padding:3px 9px;
+          font-family:ui-monospace,monospace; font-size:12px; }
+  .chip b { cursor:pointer; color:var(--mut); margin-left:5px; font-weight:600; }
+  .chip b:hover { color:var(--down); }
+  .syminput { background:var(--panel2); color:var(--fg); border:1px solid var(--line); border-radius:6px;
+              padding:5px 10px; font-size:13px; max-width:220px; }
+  .syminput:focus { outline:none; border-color:var(--blue); }
 </style>
 </head>
 <body>
@@ -154,6 +162,18 @@ async function renderData(){
     + `<span class="svc"><button onclick="healGaps()">🩹 구멍 복구</button></span>`
     + `<span class="svc"><button onclick="renderData()">↻ 갱신</button></span>`
     + `<span class="sub" style="margin-left:auto">DB ${fmtBytes(info.dbBytes)} · 캔들 캐시</span></div>`;
+
+  // 수집 심볼 편집기 (핫리로드 — 수집기가 다음 루프에 반영)
+  const syms = info.collectSymbols || [];
+  window._collectSyms = syms.slice();
+  const chips = syms.map(s => `<span class="chip">${s} <b onclick="removeSym('${s}')">✕</b></span>`).join("");
+  h += `<div class="pos"><h3>수집 심볼 <span class="sub">${syms.length}개 · 재시작 없이 반영</span></h3>`
+    + `<div class="chips">${chips || '<span class="sub">미설정 → 수집기 시작 인자(COLLECT_SYMBOLS) 사용</span>'}</div>`
+    + `<div style="margin-top:10px;display:flex;gap:6px">`
+    + `<input id="symInput" class="syminput" placeholder="심볼 추가 (예: ETHUSDT)" onkeydown="if(event.key==='Enter')addSym()">`
+    + `<span class="svc"><button onclick="addSym()">+ 추가</button></span></div>`
+    + `<div class="sub" style="margin-top:8px">트레이더가 매매하는 심볼은 프리셋이 정함. 여기는 미리 캔들을 채워둘 워치리스트.</div></div>`;
+
   h += `<div class="pos"><h3>캔들 커버리지 <span class="sub">${(info.symbols||[]).length}개 심볼</span></h3>`;
   if (!info.symbols || !info.symbols.length) h += `<div class="empty">수집된 캔들 없음</div>`;
   else {
@@ -174,6 +194,23 @@ async function renderData(){
   h += `<div class="sub" style="margin-top:10px">신선도=마지막 캔들 시각. 수집기가 살아있으면 수분 내. · 구멍=중간 결측 1분봉(자가치유 매시간).</div>`;
   h += `</div>`;
   box.innerHTML = h;
+}
+async function saveSyms(){
+  try { await fetch("/api/collect_symbols",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({symbols:window._collectSyms||[]})}); }
+  catch(e){ alert("저장 실패: "+e); }
+  renderData();
+}
+function addSym(){
+  const inp = document.getElementById("symInput"); if (!inp) return;
+  const v = (inp.value||"").toUpperCase().replace(/[^A-Z0-9]/g,"");
+  if (!v) return;
+  window._collectSyms = window._collectSyms || [];
+  if (!window._collectSyms.includes(v)) window._collectSyms.push(v);
+  saveSyms();
+}
+function removeSym(s){
+  window._collectSyms = (window._collectSyms||[]).filter(x => x!==s);
+  saveSyms();
 }
 async function healGaps(){
   if (!confirm("모든 심볼의 캔들 구멍을 바이낸스에서 재수집합니다. 진행할까요?")) return;

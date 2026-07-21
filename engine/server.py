@@ -660,6 +660,7 @@ class Handler(BaseHTTPRequestHandler):
             from . import candle_store
             info = {"symbols": candle_store.coverage_report(),
                     "collector": control.service_state("collector"),
+                    "collectSymbols": control.get_symbols(),
                     "dbBytes": os.path.getsize(candle_store.DB_PATH) if os.path.exists(candle_store.DB_PATH) else 0}
             self._send(200, json.dumps(info))
         else:
@@ -693,6 +694,15 @@ class Handler(BaseHTTPRequestHandler):
                 syms = [body["symbol"]] if body.get("symbol") else [s["symbol"] for s in candle_store.list_stats()]
                 res = {s: candle_store.heal_gaps(s, verbose=False) for s in syms}
                 self._send(200, json.dumps({"ok": True, "result": res}))
+            except Exception as e:
+                self._send(400, json.dumps({"error": str(e)}))
+            return
+        if self.path == "/api/collect_symbols":               # 데이터탭: 수집 심볼 설정(핫리로드)
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length) or b"{}")
+                syms = control.clean_symbols(body.get("symbols") or [])
+                self._send(200, json.dumps({"ok": True, "control": control.set_symbols(syms)}))
             except Exception as e:
                 self._send(400, json.dumps({"error": str(e)}))
             return

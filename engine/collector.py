@@ -100,16 +100,19 @@ def main():
         return
 
     from . import control
+    if control.get_symbols() is None:            # 최초 1회 시드 → 대시보드가 현재 목록을 보게
+        control.set_symbols(symbols)
     cycle = 0
     try:
         while True:
             if control.service_state("collector") == "paused":
                 print("  [멈춤] 수집 건너뜀", flush=True)
             else:
-                collect_once(symbols, args.seed_days, with_funding)
+                active = control.get_symbols() or symbols   # 대시보드가 바꾸면 재시작 없이 반영
+                collect_once(active, args.seed_days, with_funding)
                 # 자가치유: N사이클마다 내부 구멍 스캔·복구 (tail 수집은 못 메우는 중간 결측)
                 if args.heal_every and cycle % args.heal_every == 0:
-                    for sym in symbols:
+                    for sym in active:
                         try:
                             candle_store.heal_gaps(sym, verbose=True)
                         except Exception as e:

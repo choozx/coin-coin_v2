@@ -55,3 +55,26 @@ def set_strategy(preset_path: str, path: str = DEFAULT_PATH) -> dict:
     ctrl = read_control(path)
     ctrl["strategy"] = preset_path
     return _write(ctrl, path)
+
+
+def get_symbols(path: str = DEFAULT_PATH):
+    """수집기 워치리스트(대시보드 설정). 리스트 or None(미설정 → 수집기 시작인자 사용)."""
+    v = read_control(path).get("collect_symbols")
+    return v if isinstance(v, list) else None
+
+
+def set_symbols(symbols, path: str = DEFAULT_PATH) -> dict:
+    """control.json에 수집 심볼 기록. 수집기가 다음 루프에 다시 읽어 반영(재시작 불필요)."""
+    ctrl = read_control(path)
+    ctrl["collect_symbols"] = list(symbols)
+    return _write(ctrl, path)
+
+
+def clean_symbols(raw) -> list:
+    """입력 심볼 정리 — 대문자·영숫자만·중복제거(예: [' btcusdc '] → ['BTCUSDC'])."""
+    out = []
+    for s in raw or []:
+        s = "".join(ch for ch in str(s).upper() if ch.isalnum())
+        if s and s not in out:
+            out.append(s)
+    return out
