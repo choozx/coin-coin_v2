@@ -1,0 +1,240 @@
+{
+  "schemaVersion": "1.0",
+  "name": "라이브 · 슈퍼트렌드 동적레버리지 (BTCUSDC 15m)",
+  "market": {
+    "exchange": "binance-futures",
+    "symbol": "BTCUSDC",
+    "timeframe": "15m",
+    "direction": "both"
+  },
+  "entry": {
+    "op": "OR",
+    "children": [
+      {
+        "op": "AND",
+        "children": [
+          {
+            "cross": "crossOver",
+            "left": {
+              "indicator": "SUPERTREND_DIR",
+              "period": 14,
+              "params": {
+                "multiplier": 2.5
+              }
+            },
+            "right": 0
+          },
+          {
+            "left": {
+              "indicator": "HAWKEYE",
+              "period": 200,
+              "params": {
+                "divisor": 1.5
+              }
+            },
+            "cmp": ">",
+            "right": 0
+          },
+          {
+            "left": {
+              "indicator": "QQE_MOD",
+              "period": 6,
+              "params": {
+                "smoothing": 5,
+                "factor_primary": 3,
+                "factor_secondary": 1.61,
+                "threshold": 5,
+                "bb_length": 50,
+                "bb_mult": 0.35
+              }
+            },
+            "cmp": ">",
+            "right": 0
+          }
+        ]
+      },
+      {
+        "op": "AND",
+        "children": [
+          {
+            "cross": "crossUnder",
+            "left": {
+              "indicator": "SUPERTREND_DIR",
+              "period": 14,
+              "params": {
+                "multiplier": 2.5
+              }
+            },
+            "right": 0
+          },
+          {
+            "left": {
+              "indicator": "HAWKEYE",
+              "period": 200,
+              "params": {
+                "divisor": 1.5
+              }
+            },
+            "cmp": "<",
+            "right": 0
+          },
+          {
+            "left": {
+              "indicator": "QQE_MOD",
+              "period": 6,
+              "params": {
+                "smoothing": 5,
+                "factor_primary": 3,
+                "factor_secondary": 1.61,
+                "threshold": 5,
+                "bb_length": 50,
+                "bb_mult": 0.35
+              }
+            },
+            "cmp": "<",
+            "right": 0
+          }
+        ]
+      }
+    ]
+  },
+  "entryRules": [
+    {
+      "side": "long",
+      "when": {
+        "op": "AND",
+        "children": [
+          {
+            "cross": "crossOver",
+            "left": {
+              "indicator": "SUPERTREND_DIR",
+              "period": 14,
+              "params": {
+                "multiplier": 2.5
+              }
+            },
+            "right": 0
+          },
+          {
+            "left": {
+              "indicator": "HAWKEYE",
+              "period": 200,
+              "params": {
+                "divisor": 1.5
+              }
+            },
+            "cmp": ">",
+            "right": 0
+          },
+          {
+            "left": {
+              "indicator": "QQE_MOD",
+              "period": 6,
+              "params": {
+                "smoothing": 5,
+                "factor_primary": 3,
+                "factor_secondary": 1.61,
+                "threshold": 5,
+                "bb_length": 50,
+                "bb_mult": 0.35
+              }
+            },
+            "cmp": ">",
+            "right": 0
+          }
+        ]
+      }
+    },
+    {
+      "side": "short",
+      "when": {
+        "op": "AND",
+        "children": [
+          {
+            "cross": "crossUnder",
+            "left": {
+              "indicator": "SUPERTREND_DIR",
+              "period": 14,
+              "params": {
+                "multiplier": 2.5
+              }
+            },
+            "right": 0
+          },
+          {
+            "left": {
+              "indicator": "HAWKEYE",
+              "period": 200,
+              "params": {
+                "divisor": 1.5
+              }
+            },
+            "cmp": "<",
+            "right": 0
+          },
+          {
+            "left": {
+              "indicator": "QQE_MOD",
+              "period": 6,
+              "params": {
+                "smoothing": 5,
+                "factor_primary": 3,
+                "factor_secondary": 1.61,
+                "threshold": 5,
+                "bb_length": 50,
+                "bb_mult": 0.35
+              }
+            },
+            "cmp": "<",
+            "right": 0
+          }
+        ]
+      }
+    }
+  ],
+  "exit": {
+    "supertrendExit": {
+      "period": 14,
+      "multiplier": 2.5,
+      "as": "exit"
+    }
+  },
+  "sizing": {
+    "leverage": 20,
+    "marginMode": "isolated",
+    "size": {
+      "type": "equityPercent",
+      "value": 10.0
+    },
+    "leverageTiers": [
+      {
+        "leverage": 50,
+        "maxBalance": 1000.0
+      },
+      {
+        "leverage": 25,
+        "maxBalance": 5000.0
+      },
+      {
+        "leverage": 20,
+        "maxBalance": 10000.0
+      },
+      {
+        "leverage": 10,
+        "maxBalance": 50000.0
+      },
+      {
+        "leverage": 5,
+        "maxBalance": 100000.0
+      }
+    ]
+  },
+  "execution": {
+    "entryType": "makerLimit"
+  },
+  "filter": {
+    "cooldownBars": 3,
+    "avoidFundingWindowMinutes": 2
+  },
+  "description": "배포용 라이브 프리셋. SuperTrend+HawkEye+QQE, 양방향, maker 지정가, 잔고구간 레버리지 티어."
+}
