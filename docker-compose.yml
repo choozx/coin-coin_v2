@@ -4,16 +4,17 @@
 #   [프로덕션] .env에 IMAGE=ghcr.io/OWNER/REPO:TAG → docker compose pull && up -d --no-build
 #              (EC2에서 컴파일 안 함 — 프리티어 1GB 안전. CI가 빌드해 ghcr에 올림)
 # 설정은 .env (gitignore). 셋 다 ./data 볼륨 공유(캔들 캐시 + 봇 상태 state.json).
-# 메모리 상한(mem_limit): 프리티어 1GB 대비 — 한 컨테이너가 다 먹고 OOM 나는 것 방지.
-#   합계 ~700M(1GB 내) + 스왑 2GB 완충(docs/deploy.md). limit 초과 시 그 컨테이너만 재시작.
+# 메모리 상한(mem_limit): EC2 t4g.small(2GB) 기준 — 한 컨테이너가 다 먹고 OOM 나는 것 방지.
+#   합계 ~1.5G(2GB 내, OS/도커 여유 ~0.5G + 스왑 2GB 완충). limit 초과 시 그 컨테이너만 재시작.
+#   ※ 1GB 인스턴스(t3.micro)로 내려가면 340/200/160 + 스왑 필수로 조정할 것.
 services:
 
   trader:                                   # 실매매/페이퍼 봇 — 24/7, 안 멈춤
     build: .                                # 로컬 빌드용. 프로덕션은 IMAGE(ghcr) pull 사용
     image: ${IMAGE:-auto-trading}           # .env의 IMAGE로 레지스트리 이미지 지정 가능
     restart: unless-stopped
-    mem_limit: 340m                         # 워밍업 때 캔들 로드로 피크 → 가장 여유 있게
-    mem_reservation: 220m
+    mem_limit: 800m                         # 워밍업 때 캔들 로드로 피크 → 가장 여유 있게
+    mem_reservation: 300m
     command: >
       sh -c "python -m engine.live \"$PRESET\" --paper --interval \"$INTERVAL\" --equity \"$EQUITY\""
     environment:
@@ -32,8 +33,8 @@ services:
     build: .                                # 이것만 재배포해도 trader/collector 안 멈춤. 가볍고 안전.
     image: ${IMAGE:-auto-trading}
     restart: unless-stopped
-    mem_limit: 160m
-    mem_reservation: 90m
+    mem_limit: 300m
+    mem_reservation: 120m
     command: python -m engine.dashboard --port 8080
     environment:
       STATE_PATH: /app/data/state.json      # trader가 기록한 상태를 읽음
@@ -51,8 +52,8 @@ services:
     build: .
     image: ${IMAGE:-auto-trading}
     restart: unless-stopped
-    mem_limit: 200m
-    mem_reservation: 120m
+    mem_limit: 400m
+    mem_reservation: 150m
     command: >
       sh -c "python -m engine.collector $COLLECT_SYMBOLS --loop \"$INTERVAL\""
     environment:
