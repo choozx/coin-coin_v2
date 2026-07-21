@@ -13,6 +13,7 @@ import json
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from . import candle_store
 from . import control
 from . import ledger
 from .preset import list_strategies, select_strategy
@@ -69,6 +70,12 @@ class Handler(BaseHTTPRequestHandler):
                     int(q.get("id", [0])[0]), mode=q.get("mode", ["paper"])[0])))
             except Exception as e:
                 self._send(400, json.dumps({"error": str(e)}))
+        elif self.path == "/api/candles":
+            import os as _os
+            info = {"symbols": candle_store.coverage_report(),
+                    "collector": control.service_state("collector"),
+                    "dbBytes": _os.path.getsize(candle_store.DB_PATH) if _os.path.exists(candle_store.DB_PATH) else 0}
+            self._send(200, json.dumps(info))
         else:
             self._send(404, b"not found", "text/plain")
 
@@ -80,6 +87,10 @@ class Handler(BaseHTTPRequestHandler):
                 ctrl = control.set_service(body["service"], body["state"])
             elif self.path == "/api/strategy":     # {"path": "presets/..."} 봇 전략 선택
                 ctrl = select_strategy(body["path"])
+            elif self.path == "/api/heal":         # 캔들 구멍 수동 복구
+                syms = [body["symbol"]] if body.get("symbol") else [s["symbol"] for s in candle_store.list_stats()]
+                self._send(200, json.dumps({"ok": True, "result": {s: candle_store.heal_gaps(s, verbose=False) for s in syms}}))
+                return
             else:
                 self._send(404, b"not found", "text/plain")
                 return

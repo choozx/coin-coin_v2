@@ -273,6 +273,21 @@ def info(db_path=DB_PATH):
     conn.close()
 
 
+def coverage_report(db_path=DB_PATH) -> list:
+    """심볼별 커버리지+신선도+구멍 개수 (대시보드 데이터탭용).
+    반환: [{symbol, count, min, max, ageMin(마지막봉 몇분전), gaps}, ...]."""
+    now = int(time.time() * 1000)
+    out = []
+    for st in list_stats(db_path):
+        mx = st.get("max")
+        out.append({
+            "symbol": st["symbol"], "count": st["count"], "min": st.get("min"), "max": mx,
+            "ageMin": round((now - mx) / 60000, 1) if mx else None,
+            "gaps": len(find_gaps(st["symbol"], db_path)),
+        })
+    return out
+
+
 def find_gaps(symbol: str, db_path=DB_PATH) -> list:
     """저장된 [min,max] 구간 '내부'의 1분봉 결측을 찾는다 (head/tail 아님).
     반환: [(gap_start_ms, gap_end_ms), ...] — 빠진 첫 분 ~ 마지막 분(양끝 포함)."""

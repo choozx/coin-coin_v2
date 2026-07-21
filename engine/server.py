@@ -656,6 +656,12 @@ class Handler(BaseHTTPRequestHandler):
                     int(q.get("id", [0])[0]), mode=q.get("mode", ["paper"])[0])))
             except Exception as e:
                 self._send(400, json.dumps({"error": str(e)}))
+        elif self.path == "/api/candles":                    # 데이터탭: 심볼별 커버리지·신선도·구멍
+            from . import candle_store
+            info = {"symbols": candle_store.coverage_report(),
+                    "collector": control.service_state("collector"),
+                    "dbBytes": os.path.getsize(candle_store.DB_PATH) if os.path.exists(candle_store.DB_PATH) else 0}
+            self._send(200, json.dumps(info))
         else:
             self._send(404, b"not found", "text/plain")
 
@@ -676,6 +682,17 @@ class Handler(BaseHTTPRequestHandler):
                 length = int(self.headers.get("Content-Length", 0))
                 body = json.loads(self.rfile.read(length))
                 self._send(200, json.dumps({"ok": True, "control": select_strategy(body["path"])}))
+            except Exception as e:
+                self._send(400, json.dumps({"error": str(e)}))
+            return
+        if self.path == "/api/heal":                          # 데이터탭: 캔들 구멍 수동 복구
+            from . import candle_store
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length) or b"{}")
+                syms = [body["symbol"]] if body.get("symbol") else [s["symbol"] for s in candle_store.list_stats()]
+                res = {s: candle_store.heal_gaps(s, verbose=False) for s in syms}
+                self._send(200, json.dumps({"ok": True, "result": res}))
             except Exception as e:
                 self._send(400, json.dumps({"error": str(e)}))
             return

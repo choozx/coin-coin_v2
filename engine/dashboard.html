@@ -55,6 +55,12 @@
                   color:var(--fg); cursor:pointer; font-size:13px; }
   .pager button:hover:not(:disabled) { border-color:var(--blue); }
   .pager button:disabled { opacity:.4; cursor:default; }
+  .tabs { display:flex; gap:4px; margin-bottom:16px; border-bottom:1px solid var(--line); }
+  .tab { padding:9px 18px; background:none; border:none; border-bottom:2px solid transparent;
+         color:var(--mut); cursor:pointer; font-size:14px; font-weight:600; }
+  .tab.active { color:var(--fg); border-bottom-color:var(--blue); }
+  .tab:hover { color:var(--fg); }
+  .fresh-g { color:var(--up); } .fresh-y { color:#e0a030; } .fresh-r { color:var(--down); }
 </style>
 </head>
 <body>
@@ -67,8 +73,15 @@
     <span class="sub" id="meta"></span>
     <span class="sub" style="margin-left:auto" id="updated"></span>
   </header>
-  <div id="control" class="ctrlbar"></div>
-  <div id="body"><div class="empty">상태 불러오는 중…</div></div>
+  <div class="tabs">
+    <button class="tab active" id="tabbtn-trading" onclick="switchTab('trading')">📊 매매</button>
+    <button class="tab" id="tabbtn-data" onclick="switchTab('data')">📈 데이터/수집기</button>
+  </div>
+  <div id="tab-trading">
+    <div id="control" class="ctrlbar"></div>
+    <div id="body"><div class="empty">상태 불러오는 중…</div></div>
+  </div>
+  <div id="tab-data" style="display:none"><div class="empty">데이터 정보 불러오는 중…</div></div>
 </div>
 <script>
 const $ = id => document.getElementById(id);
@@ -110,12 +123,67 @@ async function setStrat(path){
 async function renderControl(d){
   let c = {};
   try { c = await (await fetch("/api/control",{cache:"no-store"})).json(); } catch(e){}
-  $("control").innerHTML = svcBtn("trader","봇", c.trader||"running") + svcBtn("collector","수집기", c.collector||"running") + stratSelector(d);
+  $("control").innerHTML = svcBtn("trader","봇", c.trader||"running") + stratSelector(d);   // 수집기는 데이터탭으로
 }
 async function setSvc(svc, state){
   try { await fetch("/api/control",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:svc,state})}); }
   catch(e){ alert("제어 실패: "+e); }
   renderControl(window._lastState);
+  if (window._activeTab === "data") renderData();   // 수집기 제어는 데이터탭에서
+}
+
+// ── 탭 전환 ──
+window._activeTab = "trading";
+function switchTab(name){
+  window._activeTab = name;
+  document.getElementById("tab-trading").style.display = name==="trading" ? "" : "none";
+  document.getElementById("tab-data").style.display    = name==="data" ? "" : "none";
+  document.getElementById("tabbtn-trading").classList.toggle("active", name==="trading");
+  document.getElementById("tabbtn-data").classList.toggle("active", name==="data");
+  if (name==="data") renderData();
+}
+
+const fmtBytes = b => !b ? "0" : b>1e9 ? (b/1e9).toFixed(1)+"GB" : b>1e6 ? (b/1e6).toFixed(0)+"MB" : (b/1e3).toFixed(0)+"KB";
+async function renderData(){
+  const box = document.getElementById("tab-data");
+  let info;
+  try { info = await (await fetch("/api/candles",{cache:"no-store"})).json(); }
+  catch(e){ box.innerHTML = `<div class="err">데이터 정보 실패: ${e}</div>`; return; }
+  let h = `<div class="ctrlbar">`
+    + svcBtn("collector","수집기", info.collector||"running")
+    + `<span class="svc"><button onclick="healGaps()">🩹 구멍 복구</button></span>`
+    + `<span class="svc"><button onclick="renderData()">↻ 갱신</button></span>`
+    + `<span class="sub" style="margin-left:auto">DB ${fmtBytes(info.dbBytes)} · 캔들 캐시</span></div>`;
+  h += `<div class="pos"><h3>캔들 커버리지 <span class="sub">${(info.symbols||[]).length}개 심볼</span></h3>`;
+  if (!info.symbols || !info.symbols.length) h += `<div class="empty">수집된 캔들 없음</div>`;
+  else {
+    h += `<table><thead><tr><th>심볼</th><th>봉 수</th><th>범위(UTC)</th><th>신선도</th><th>구멍</th></tr></thead><tbody>`;
+    for (const s of info.symbols){
+      let fresh = "–";
+      if (s.ageMin != null){
+        if (s.ageMin < 10) fresh = `<span class="fresh-g">🟢 ${s.ageMin}분 전</span>`;
+        else if (s.ageMin < 1440) fresh = `<span class="fresh-y">🟡 ${Math.round(s.ageMin)}분 전</span>`;
+        else fresh = `<span class="fresh-r">🔴 ${(s.ageMin/1440).toFixed(1)}일 전</span>`;
+      }
+      const gap = s.gaps===0 ? `<span class="g">0 ✅</span>` : `<span class="r">${s.gaps}</span>`;
+      h += `<tr><td><b>${s.symbol}</b></td><td>${(s.count||0).toLocaleString()}</td>`
+        + `<td class="sub">${fmtT(s.min)} ~ ${fmtT(s.max)}</td><td>${fresh}</td><td>${gap}</td></tr>`;
+    }
+    h += `</tbody></table>`;
+  }
+  h += `<div class="sub" style="margin-top:10px">신선도=마지막 캔들 시각. 수집기가 살아있으면 수분 내. · 구멍=중간 결측 1분봉(자가치유 매시간).</div>`;
+  h += `</div>`;
+  box.innerHTML = h;
+}
+async function healGaps(){
+  if (!confirm("모든 심볼의 캔들 구멍을 바이낸스에서 재수집합니다. 진행할까요?")) return;
+  const box = document.getElementById("tab-data");
+  box.insertAdjacentHTML("afterbegin", `<div class="sub" id="healmsg" style="padding:8px">🩹 구멍 복구 중… (구멍 많으면 잠시 걸릴 수 있어요)</div>`);
+  try {
+    const r = await (await fetch("/api/heal",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"})).json();
+    if (r.error) alert("복구 실패: "+r.error);
+  } catch(e){ alert("복구 실패: "+e); }
+  renderData();
 }
 
 async function tick(){
