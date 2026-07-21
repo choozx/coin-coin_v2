@@ -23,6 +23,12 @@ services:
       EQUITY: ${EQUITY:-10000}
       NOTIFY_WEBHOOK: ${NOTIFY_WEBHOOK:-}
       CONTROL_PATH: /app/data/control.json  # 대시보드의 멈춤/재개 신호를 읽음
+      LEDGER_PATH: /app/data/trades.db      # 매매 원장(대시보드가 읽음)
+      # 실거래 키 — .env(gitignore)에서 주입. 트레이더만 필요(collector·dashboard엔 X).
+      # 출금권한 OFF·IP 화이트리스트 필수. 미설정이면 페이퍼(--paper)로만 동작.
+      BINANCE_API_KEY: ${BINANCE_API_KEY:-}
+      BINANCE_API_SECRET: ${BINANCE_API_SECRET:-}
+      BINANCE_TESTNET: ${BINANCE_TESTNET:-1}
       TZ: UTC
     volumes:
       - ./data:/app/data                    # 캔들 캐시 + state.json(대시보드가 읽음)
@@ -39,6 +45,7 @@ services:
     environment:
       STATE_PATH: /app/data/state.json      # trader가 기록한 상태를 읽음
       CONTROL_PATH: /app/data/control.json  # 멈춤/재개 제어 파일
+      LEDGER_PATH: /app/data/trades.db      # 매매 원장 읽기(이력·통계·거래별 차트)
       TZ: UTC
     ports:
       - "${DASH_PORT:-8080}:8080"           # 대시보드만 노출(내 IP 제한 권장)

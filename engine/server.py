@@ -727,6 +727,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    from .env import load_dotenv
+    load_dotenv()
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8765)
     args = ap.parse_args()

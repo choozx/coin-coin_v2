@@ -355,6 +355,8 @@ class LiveTrader:
 
 
 def main():
+    from .env import load_dotenv
+    load_dotenv()                            # .env → 환경변수(BINANCE_API_KEY 등)
     ap = argparse.ArgumentParser(description="페이퍼/실거래 트레이딩 루프 (뼈대)")
     ap.add_argument("preset", help="프리셋 JSON 경로 (presets/saved/... 또는 examples/...)")
     ap.add_argument("--paper", action="store_true", help="페이퍼 트레이딩(기본). 실거래는 --live(미구현)")

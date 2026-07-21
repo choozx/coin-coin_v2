@@ -92,6 +92,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    from .env import load_dotenv
+    load_dotenv()
     ap = argparse.ArgumentParser(description="매매 대시보드 (봇 상태 모니터)")
     ap.add_argument("--port", type=int, default=8080)
     args = ap.parse_args()

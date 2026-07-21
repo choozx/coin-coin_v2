@@ -69,6 +69,8 @@ def load_watchlist(path):
 
 
 def main():
+    from .env import load_dotenv
+    load_dotenv()
     ap = argparse.ArgumentParser(description="독립 캔들 수집기 (SQLite 캐시 유지)")
     ap.add_argument("symbols", nargs="*", help="수집할 심볼 (예: BTCUSDT ETHUSDT)")
     ap.add_argument("--watchlist", help="심볼 목록 파일 (한 줄에 하나, # 주석)")

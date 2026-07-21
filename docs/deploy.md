@@ -139,13 +139,22 @@ git push origin prod        # 이후 이 push가 배포 트리거
 > GitHub Environment 보호규칙(수동 승인) 또는 테스트 통과 게이트를 deploy 앞에 추가.
 > 나쁜 push가 곧장 실매매 봇을 갈아치우면 안 됨. (지금은 페이퍼라 자동배포 OK.)
 
+## API 키 배선 (로컬/배포 공통)
+키는 **환경변수 3개**로 주입: `BINANCE_API_KEY` · `BINANCE_API_SECRET` · `BINANCE_TESTNET`(1=테스트넷).
+저장은 **`.env`(gitignore)에만** — 레포·이미지·GitHub 어디에도 안 들어감. 템플릿: `.env.example`.
+- **로컬**: `cp .env.example .env && chmod 600 .env` → 값 채움. `engine.*` 실행 시 자동 로드(`engine/env.py`).
+- **배포(EC2)**: 서버의 `.env`에 직접 작성(git clone엔 없음). `docker compose`가 **trader 컨테이너에만** 주입
+  (collector·dashboard엔 불필요). 재배포해도 `.env`는 서버에 유지 → 키가 GitHub를 안 거침.
+- 키 발급: **Reading+Futures / 출금(Withdrawals) OFF / IP 화이트리스트**. 처음엔 `BINANCE_TESTNET=1`.
+- 키가 없으면 `LiveExecutor` 생성 시 명확한 에러 → **페이퍼(`--paper`)로만 동작**(실주문 불가).
+
 ## ⚠️ 실거래(실돈)로 넘어가기 전 반드시
-현재는 **페이퍼 전용**(실주문 없음). 실거래는 아래가 선행되어야 안전:
+현재는 **페이퍼 전용**(실주문 없음). `LiveExecutor`는 배선 골격만 — env 로드·ccxt 연결·읽기전용
+잔고 조회까지 되고, **주문(open/close)은 NotImplementedError**(Tier B에서 구현). 실거래는 아래가 선행:
 1. **페이퍼로 며칠 실전 검증** (백테스트 가정 vs 실제 체결)
 2. **리스크 가드레일** (일일 손실 한도·kill switch·연속손실 차단)
-3. **`LiveExecutor`(ccxt) 실구현** — 주문/체결/잔고 동기화
-   - **API 키는 절대 레포·compose에 X** → `.env`(gitignore)/시크릿매니저
-   - 바이낸스 키: **출금 비활성 + IP 화이트리스트** 필수
+3. **`LiveExecutor` 주문 구현** — create_order·set_leverage, post-only 지정가→3초 미체결 시 taker,
+   체결가로 entry_price/qty/fee 갱신. **먼저 테스트넷(`BINANCE_TESTNET=1`)에서 검증.**
    - 재시작 시 **포지션/잔고는 거래소에서 읽어 동기화**(로컬 상태 맹신 금지)
 4. **모니터링/알림** 확실히 (봇이 죽거나 이상하면 즉시 알아야 함)
 5. **소액부터** → 점진적 확대
