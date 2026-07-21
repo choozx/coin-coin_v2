@@ -13,3 +13,6 @@ presets/saved/
 
 # 배포 설정·시크릿 (API키 등) — 커밋 금지
 .env
+
+# 배포 폴러가 기록하는 '완전히 반영된 커밋' (서버 로컬 상태)
+.deploy-applied

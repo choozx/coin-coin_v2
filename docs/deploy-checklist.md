@@ -177,6 +177,16 @@ systemctl list-timers deploy-poll                # NEXT/LAST 확인
 - 이미지가 아직 빌드 중이면 조용히 다음 주기 재시도(**기존 컨테이너는 안 멈춤**)
 - 로그: `journalctl -u deploy-poll -f` / 즉시 배포: `sudo systemctl start deploy-poll`
 
+**매매 봇을 함부로 재시작하지 않는 두 장치**
+
+| 장치 | 동작 |
+|---|---|
+| **영향받는 서비스만 교체** | 대시보드만 고친 커밋이면 `dashboard`만 재생성. 트레이더·수집기는 안 멈춤. 판단 근거는 `deploy/service-deps.conf`(import 폐포) — `tests/test_deploy_paths.py`가 실제 import 그래프와 대조해 드리프트를 막는다 |
+| **포지션 가드** | 트레이더 교체가 필요해도 **포지션 보유 중이면 연기**. 무포지션이 되면 다음 주기에 자동 반영. 급하면 `sudo FORCE_TRADER=1 systemctl start deploy-poll` |
+
+> 문서·테스트·CI만 바뀐 커밋은 **아무 컨테이너도 건드리지 않는다**(이미지 내용이 동일).
+> 연기된 배포는 `.deploy-applied`에 기록되지 않아 매 주기 재시도된다 — 잊히지 않는다.
+
 > ✅ **GitHub Secrets는 하나도 필요 없다.** `VPS_HOST`/`VPS_USER`/`VPS_SSH_KEY`/`VPS_PATH` 를
 > 등록했다면 **삭제할 것**. EC2 `~/.ssh/authorized_keys` 의 배포용 공개키 줄도 지워도 된다.
 > `GITHUB_TOKEN` 은 Actions가 ghcr push에 자동 사용(등록 불필요).
