@@ -18,6 +18,8 @@ from . import ledger
 from .preset import list_strategies, select_strategy
 
 _HTML = os.path.join(os.path.dirname(__file__), "dashboard.html")
+_CHARTS_JS = os.path.join(os.path.dirname(__file__), "vendor",
+                          "lightweight-charts.standalone.production.js")
 STATE_PATH = os.environ.get("STATE_PATH", "data/state.json")
 
 
@@ -35,6 +37,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/" or self.path.startswith("/?"):
             with open(_HTML, "rb") as f:
                 self._send(200, f.read(), "text/html; charset=utf-8")
+        elif self.path == "/vendor/lightweight-charts.js":
+            with open(_CHARTS_JS, "rb") as f:
+                self._send(200, f.read(), "application/javascript; charset=utf-8")
         elif self.path == "/api/state":
             try:
                 with open(STATE_PATH, encoding="utf-8") as f:
@@ -55,6 +60,15 @@ class Handler(BaseHTTPRequestHandler):
             from urllib.parse import parse_qs, urlparse
             mode = parse_qs(urlparse(self.path).query).get("mode", [None])[0]
             self._send(200, json.dumps(ledger.stats(mode=mode)))
+        elif self.path.split("?")[0] == "/api/trade_chart":
+            from urllib.parse import parse_qs, urlparse
+            from . import trade_chart
+            q = parse_qs(urlparse(self.path).query)
+            try:
+                self._send(200, json.dumps(trade_chart.build(
+                    int(q.get("id", [0])[0]), mode=q.get("mode", ["paper"])[0])))
+            except Exception as e:
+                self._send(400, json.dumps({"error": str(e)}))
         else:
             self._send(404, b"not found", "text/plain")
 

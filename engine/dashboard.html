@@ -44,9 +44,16 @@
   .svc select { background:var(--panel2); color:var(--fg); border:1px solid var(--line); border-radius:6px;
                 padding:4px 8px; font-size:12px; cursor:pointer; max-width:260px; }
   .svc select:hover { border-color:var(--blue); }
+  .trow { cursor:pointer; }
+  .trow:hover td { background:rgba(255,255,255,.04); }
+  .trow .cursor { color:var(--mut); font-size:10px; }
+  .exprow > td { padding:0; background:var(--panel2); border-bottom:1px solid var(--line); }
+  .tchart { width:100%; padding:8px 4px; }
+  .tchart .caption { color:var(--mut); font-size:12px; padding:4px 6px 8px; }
 </style>
 </head>
 <body>
+<script src="/vendor/lightweight-charts.js"></script>
 <div class="wrap">
   <header>
     <h1 id="title">매매 대시보드</h1>
@@ -109,10 +116,10 @@ async function setSvc(svc, state){
 async function tick(){
   let d;
   try { d = await (await fetch("/api/state",{cache:"no-store"})).json(); }
-  catch(e){ renderControl(null); $("body").innerHTML = `<div class="err">상태 서버 응답 없음: ${e}</div>`; return; }
+  catch(e){ renderControl(null); window._lastTradeN=-1; $("body").innerHTML = `<div class="err">상태 서버 응답 없음: ${e}</div>`; return; }
   window._lastState = d;
   renderControl(d);
-  if (d.error){ $("body").innerHTML = `<div class="err">${d.error}</div>`; $("status").className="badge stale"; $("status").textContent="대기"; return; }
+  if (d.error){ window._lastTradeN=-1; $("body").innerHTML = `<div class="err">${d.error}</div>`; $("status").className="badge stale"; $("status").textContent="대기"; return; }
 
   $("title").textContent = `${d.preset} · ${d.symbol} ${d.timeframe}`;
   $("meta").textContent = `초기 ${fmt(d.initialEquity)} · ${d.mode==='live'?'실거래':'페이퍼'}`;
@@ -129,18 +136,18 @@ async function tick(){
   try { led = ((await (await fetch(`/api/trades?mode=${mode}`,{cache:"no-store"})).json()).trades)||[]; } catch(e){}
   try { st = await (await fetch(`/api/stats?mode=${mode}`,{cache:"no-store"})).json(); } catch(e){}
 
+  // ── 라이브 영역(매 틱 갱신): 카드 + 현재 포지션 ──
   const retCls = d.returnPct>=0 ? "g" : "r";
   const pos = d.position;
   const posCls = pos ? (pos.side>0?"g":"r") : "";
-  let html = `<div class="cards">
+  let live = `<div class="cards">
     <div class="card"><div class="k">잔고</div><div class="v">${fmt(d.equity)}</div></div>
     <div class="card"><div class="k">수익률</div><div class="v ${retCls}">${d.returnPct>=0?"+":""}${fmt(d.returnPct)}%</div></div>
     <div class="card"><div class="k">포지션</div><div class="v ${posCls}">${pos?(pos.side>0?"롱":"숏"):"없음"}</div></div>
     <div class="card"><div class="k">총 거래</div><div class="v">${st?st.n:d.numTrades}</div></div>
   </div>`;
-
   if (pos){
-    html += `<div class="pos"><h3>현재 포지션</h3><div class="posgrid">
+    live += `<div class="pos"><h3>현재 포지션</h3><div class="posgrid">
       <div><div class="k">방향</div><div class="v ${posCls}">${pos.side>0?"롱 LONG":"숏 SHORT"}</div></div>
       <div><div class="k">진입가</div><div class="v">${fmt(pos.entryPrice)}</div></div>
       <div><div class="k">수량</div><div class="v">${fmt(pos.qty)}</div></div>
@@ -152,49 +159,149 @@ async function tick(){
     </div></div>`;
   }
 
-  // 성과 통계 (원장 집계)
-  if (st && st.n){
-    html += `<div class="pos"><h3>성과 통계 <span class="sub">원장 ${st.n}건</span></h3><div class="posgrid">
-      <div><div class="k">승률</div><div class="v">${st.winRate}%</div></div>
-      <div><div class="k">손익비 PF</div><div class="v">${st.profitFactor}</div></div>
-      <div><div class="k">총손익</div><div class="v ${st.totalPnl>=0?'g':'r'}">${st.totalPnl>=0?'+':''}${fmt(st.totalPnl)}</div></div>
-      <div><div class="k">최대낙폭 MDD</div><div class="v r">-${fmt(st.maxDrawdown)}</div></div>
-      <div><div class="k">평균손익</div><div class="v ${st.avgPnl>=0?'g':'r'}">${st.avgPnl>=0?'+':''}${fmt(st.avgPnl)}</div></div>
-    </div>`;
-    if (st.byStrategy && st.byStrategy.length>1){
-      html += `<h3 style="margin:14px 0 8px">전략별 성과</h3><table><thead><tr><th>전략</th><th>거래</th><th>승률</th><th>총손익</th><th>PF</th></tr></thead><tbody>`;
-      for (const b of st.byStrategy){
-        const nm=(b.strategy||'-').split('/').pop().replace('.json','');
-        html += `<tr><td>${nm}</td><td>${b.n}</td><td>${b.winRate}%</td>`
-          + `<td class="${b.totalPnl>=0?'g':'r'}">${b.totalPnl>=0?'+':''}${fmt(b.totalPnl)}</td><td>${b.profitFactor}</td></tr>`;
+  if (!$("live")) $("body").innerHTML = '<div id="live"></div><div id="history"></div>';
+  $("live").innerHTML = live;
+
+  // ── 히스토리 영역: 거래 수가 바뀔 때만 재구성(펼쳐둔 차트가 새로고침에 안 사라지게) ──
+  if (led.length !== window._lastTradeN){
+    window._lastTradeN = led.length;
+    let html = "";
+    if (st && st.n){
+      html += `<div class="pos"><h3>성과 통계 <span class="sub">원장 ${st.n}건</span></h3><div class="posgrid">
+        <div><div class="k">승률</div><div class="v">${st.winRate}%</div></div>
+        <div><div class="k">손익비 PF</div><div class="v">${st.profitFactor}</div></div>
+        <div><div class="k">총손익</div><div class="v ${st.totalPnl>=0?'g':'r'}">${st.totalPnl>=0?'+':''}${fmt(st.totalPnl)}</div></div>
+        <div><div class="k">최대낙폭 MDD</div><div class="v r">-${fmt(st.maxDrawdown)}</div></div>
+        <div><div class="k">평균손익</div><div class="v ${st.avgPnl>=0?'g':'r'}">${st.avgPnl>=0?'+':''}${fmt(st.avgPnl)}</div></div>
+      </div>`;
+      if (st.byStrategy && st.byStrategy.length>1){
+        html += `<h3 style="margin:14px 0 8px">전략별 성과</h3><table><thead><tr><th>전략</th><th>거래</th><th>승률</th><th>총손익</th><th>PF</th></tr></thead><tbody>`;
+        for (const b of st.byStrategy){
+          const nm=(b.strategy||'-').split('/').pop().replace('.json','');
+          html += `<tr><td>${nm}</td><td>${b.n}</td><td>${b.winRate}%</td>`
+            + `<td class="${b.totalPnl>=0?'g':'r'}">${b.totalPnl>=0?'+':''}${fmt(b.totalPnl)}</td><td>${b.profitFactor}</td></tr>`;
+        }
+        html += `</tbody></table>`;
+      }
+      html += `</div>`;
+    }
+    html += `<div class="pos"><h3>자산 곡선</h3><canvas id="eq"></canvas></div>`;
+
+    const trs = led.slice().reverse();
+    html += `<div class="trades pos"><h3>매매 기록 <span class="sub">${led.length}건 · 원장 · 행 클릭 시 차트</span></h3>`;
+    if (!trs.length) html += `<div class="empty">아직 매매 기록 없음</div>`;
+    else {
+      html += `<table><thead><tr><th></th><th>방향</th><th>전략</th><th>진입</th><th>청산</th><th>사유</th><th>손익</th><th>시각</th></tr></thead><tbody>`;
+      for (const t of trs.slice(0,100)){
+        const c = t.pnl>=0?"g":"r";
+        const nm=(t.strategy||'-').split('/').pop().replace('.json','');
+        html += `<tr class="trow" onclick="toggleTrade(${t.id})"><td class="cursor">▸</td>`
+          + `<td class="${t.side>0?'g':'r'}">${t.side>0?"롱":"숏"}</td>`
+          + `<td class="sub">${nm}</td><td>${fmt(t.entry_price)}</td><td>${fmt(t.exit_price)}</td>`
+          + `<td>${RN[t.reason]||t.reason}</td><td class="${c}">${t.pnl>=0?"+":""}${fmt(t.pnl)}</td>`
+          + `<td class="sub">${fmtT(t.exit_time)}</td></tr>`
+          + `<tr class="exprow" id="exp-${t.id}" style="display:none"><td colspan="8"><div class="tchart" id="tc-${t.id}"></div></td></tr>`;
       }
       html += `</tbody></table>`;
     }
     html += `</div>`;
+    $("history").innerHTML = html;
+    drawEquity(d.initialEquity, led);
   }
+}
 
-  // 자산곡선 (원장 누적손익)
-  html += `<div class="pos"><h3>자산 곡선</h3><canvas id="eq"></canvas></div>`;
+// 매매기록 행 펼치기 → 진입~청산 캔들+지표 차트
+window._charts = {};
+async function toggleTrade(id){
+  const row = document.getElementById("exp-"+id);
+  if (!row) return;
+  const caret = document.querySelector(`.trow[onclick="toggleTrade(${id})"] .cursor`);
+  if (row.style.display !== "none"){   // 접기
+    row.style.display = "none";
+    if (caret) caret.textContent = "▸";
+    if (window._charts[id]){ try{window._charts[id].remove();}catch(e){} delete window._charts[id]; }
+    return;
+  }
+  row.style.display = "";
+  if (caret) caret.textContent = "▾";
+  const cont = document.getElementById("tc-"+id);
+  cont.innerHTML = `<div class="caption">차트 불러오는 중…</div>`;
+  const mode = (window._lastState && window._lastState.mode) || "paper";
+  try {
+    const data = await (await fetch(`/api/trade_chart?id=${id}&mode=${mode}`,{cache:"no-store"})).json();
+    if (data.error){ cont.innerHTML = `<div class="err">${data.error}</div>`; return; }
+    cont.innerHTML = "";
+    window._charts[id] = drawTradeChart(cont, data);
+  } catch(e){ cont.innerHTML = `<div class="err">차트 실패: ${e}</div>`; }
+}
 
-  // 매매 기록 (원장 전체)
-  const trs = led.slice().reverse();
-  html += `<div class="trades pos"><h3>매매 기록 <span class="sub">${led.length}건 · 원장</span></h3>`;
-  if (!trs.length) html += `<div class="empty">아직 매매 기록 없음</div>`;
-  else {
-    html += `<table><thead><tr><th>방향</th><th>전략</th><th>진입</th><th>청산</th><th>사유</th><th>손익</th><th>시각</th></tr></thead><tbody>`;
-    for (const t of trs.slice(0,100)){
-      const c = t.pnl>=0?"g":"r";
-      const nm=(t.strategy||'-').split('/').pop().replace('.json','');
-      html += `<tr><td class="${t.side>0?'g':'r'}">${t.side>0?"롱":"숏"}</td>`
-        + `<td class="sub">${nm}</td><td>${fmt(t.entry_price)}</td><td>${fmt(t.exit_price)}</td>`
-        + `<td>${RN[t.reason]||t.reason}</td><td class="${c}">${t.pnl>=0?"+":""}${fmt(t.pnl)}</td>`
-        + `<td class="sub">${fmtT(t.exit_time)}</td></tr>`;
+function drawTradeChart(box, d){
+  const LC = window.LightweightCharts;
+  if (!LC){ box.innerHTML = `<div class="err">차트 라이브러리 로드 실패</div>`; return null; }
+  const inds = d.indicators || [];
+  const cap = document.createElement("div");
+  cap.className = "caption";
+  const nm = (d.strategy||'').split('/').pop().replace('.json','');
+  cap.innerHTML = `<b>${nm}</b> · ${d.symbol} ${d.timeframe} · ${d.entry.side>0?"롱":"숏"} `
+    + `${fmt(d.entry.price)} → ${fmt(d.exit.price)} · ${RN[d.exit.reason]||d.exit.reason} `
+    + `<b class="${d.exit.pnl>=0?'g':'r'}">${d.exit.pnl>=0?'+':''}${fmt(d.exit.pnl)}</b>`;
+  box.appendChild(cap);
+  const holder = document.createElement("div");
+  const oscPanes = new Set(inds.filter(i=>!i.overlay).map(i=>i.pane)).size;
+  holder.style.height = (280 + oscPanes*100) + "px";
+  box.appendChild(holder);
+
+  const chart = LC.createChart(holder, {
+    autoSize: true,
+    layout: { background:{color:"transparent"}, textColor:"#8a90a0", fontFamily:"system-ui, sans-serif", attributionLogo:false },
+    grid: { vertLines:{color:"rgba(255,255,255,.05)"}, horzLines:{color:"rgba(255,255,255,.05)"} },
+    crosshair: { mode: LC.CrosshairMode.Normal },
+    rightPriceScale: { borderColor:"rgba(255,255,255,.10)" },
+    timeScale: { borderColor:"rgba(255,255,255,.10)", timeVisible:true, secondsVisible:false },
+    localization: { timeFormatter: s => fmtT(s*1000) },
+  });
+  const candles = chart.addSeries(LC.CandlestickSeries, {
+    upColor:"#3aa76d", downColor:"#cf5b5b", borderVisible:false, wickUpColor:"#3aa76d", wickDownColor:"#cf5b5b" });
+  candles.setData(d.ohlc.map(b => ({ time:b[0]/1000, open:b[1], high:b[2], low:b[3], close:b[4] })));
+
+  const ohlc = d.ohlc, nn = ohlc.length;
+  const snap = t => { let a=0,b=nn-1,r=0; while(a<=b){ const m=(a+b)>>1; if(ohlc[m][0]<=t){r=m;a=m+1;}else b=m-1; } return ohlc[r][0]/1000; };
+  const win = d.exit.pnl > 0;
+  const mk = [
+    { time:snap(d.entry.time), position:d.entry.side>0?"belowBar":"aboveBar", color:"#4c9be8",
+      shape:d.entry.side>0?"arrowUp":"arrowDown", text:(d.entry.side>0?"롱 진입":"숏 진입") },
+    { time:snap(d.exit.time), position:d.entry.side>0?"aboveBar":"belowBar", color:win?"#26d07c":"#ff5c6c",
+      shape:"circle", text:(d.exit.pnl>0?"+":"")+fmt(d.exit.pnl) },
+  ].sort((a,b)=>a.time-b.time);
+  LC.createSeriesMarkers(candles, mk);
+
+  const te = snap(d.entry.time), tx = snap(d.exit.time);
+  if (tx > te){
+    for (const [pr,color] of [[d.entry.price,"rgba(76,155,232,.7)"],[d.exit.price, win?"rgba(38,208,124,.7)":"rgba(255,92,108,.7)"]]){
+      const s = chart.addSeries(LC.LineSeries, { color, lineWidth:1, lineStyle:LC.LineStyle.Dashed,
+        priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false });
+      s.setData([{ time:te, value:pr }, { time:tx, value:pr }]);
     }
-    html += `</tbody></table>`;
   }
-  html += `</div>`;
-  $("body").innerHTML = html;
-  drawEquity(d.initialEquity, led);
+
+  const paneOf = {}; let nextPane = 1;
+  for (const ind of inds){
+    let pane = 0;
+    if (!ind.overlay){ if (!(ind.pane in paneOf)) paneOf[ind.pane] = nextPane++; pane = paneOf[ind.pane]; }
+    if (ind.type === "histogram"){
+      const s = chart.addSeries(LC.HistogramSeries, { color:ind.color, priceLineVisible:false, lastValueVisible:false }, pane);
+      s.setData(ind.data.filter(p=>p[1]!=null).map(p => p[2] ? {time:p[0]/1000,value:p[1],color:p[2]} : {time:p[0]/1000,value:p[1]}));
+    } else {
+      const opt = { color:ind.color, lineWidth:ind.overlay?2:1, priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false, pointMarkersVisible:false };
+      let run = [];
+      const flush = () => { if (run.length){ const s = chart.addSeries(LC.LineSeries, opt, pane); s.setData(run); run=[]; } };
+      for (const p of ind.data){ if (p[1]==null) flush(); else run.push({ time:p[0]/1000, value:p[1] }); }
+      flush();
+    }
+  }
+  try { const panes = chart.panes(); if (panes.length>1){ panes[0].setStretchFactor(3); for (let i=1;i<panes.length;i++) panes[i].setStretchFactor(1); } } catch(e){}
+  chart.timeScale().fitContent();
+  return chart;
 }
 
 function drawEquity(initial, trades){

@@ -647,6 +647,15 @@ class Handler(BaseHTTPRequestHandler):
             q = parse_qs(urlparse(self.path).query)
             mode = q.get("mode", [None])[0]
             self._send(200, json.dumps(ledger.stats(mode=mode)))
+        elif self.path.split("?")[0] == "/api/trade_chart":  # 한 거래의 진입~청산 캔들+지표
+            from urllib.parse import parse_qs, urlparse
+            from . import trade_chart
+            q = parse_qs(urlparse(self.path).query)
+            try:
+                self._send(200, json.dumps(trade_chart.build(
+                    int(q.get("id", [0])[0]), mode=q.get("mode", ["paper"])[0])))
+            except Exception as e:
+                self._send(400, json.dumps({"error": str(e)}))
         else:
             self._send(404, b"not found", "text/plain")
 
