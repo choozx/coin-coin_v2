@@ -1,0 +1,47 @@
+# prod 브랜치 push → 페이퍼 트레이더 자동 배포 (VPS + SSH).
+#   main = 개발, prod = 배포. `git push origin prod` 하면 아래가 돈다.
+#   ① 이미지 빌드 검증(TA-Lib 컴파일 게이트) → ② VPS에 SSH로 코드 갱신 + 컨테이너 재기동.
+#
+# 필요한 GitHub Secrets (Settings → Secrets and variables → Actions):
+#   VPS_HOST     : 서버 IP/호스트
+#   VPS_USER     : SSH 유저 (예: ubuntu)
+#   VPS_SSH_KEY  : 개인키(전체 내용). VPS에 공개키 등록해둘 것
+#   VPS_PATH     : 서버의 레포 경로 (예: /home/ubuntu/auto_trading)
+#   VPS_PORT     : (선택) SSH 포트, 기본 22
+#
+# VPS 1회 준비: Docker 설치 + `git clone <repo>` + `.env` 작성(PRESET/NOTIFY_WEBHOOK 등)
+name: Deploy paper trader
+
+on:
+  push:
+    branches: [prod]
+  workflow_dispatch:            # 수동 실행도 허용
+
+jobs:
+  build-check:                  # ① 배포 전 이미지가 빌드되는지 검증(TA-Lib 등)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Docker 이미지 빌드 (배포 게이트)
+        run: docker build -t auto-trading-paper:ci .
+
+  deploy:                       # ② 빌드 통과 시에만 VPS 배포
+    needs: build-check
+    runs-on: ubuntu-latest
+    steps:
+      - name: VPS에 SSH 배포
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script: |
+            set -e
+            cd ${{ secrets.VPS_PATH }}
+            git fetch origin prod
+            git checkout -f prod
+            git reset --hard origin/prod
+            docker compose up -d --build
+            docker image prune -f
+            docker compose ps

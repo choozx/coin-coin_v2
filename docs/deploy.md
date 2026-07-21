@@ -46,6 +46,37 @@ docker compose down
 ## 알림 (선택)
 `NOTIFY_WEBHOOK`에 Discord/Slack 웹훅 URL을 넣으면 시작·진입·청산·에러를 받는다(stdlib만 사용).
 
+## 자동 배포 (prod 브랜치 push → VPS)
+`.github/workflows/deploy.yml` — **`main`=개발, `prod`=배포**. `prod`에 push하면
+① Docker 이미지 빌드 검증(TA-Lib 게이트) → ② VPS에 SSH로 `git pull` + `docker compose up -d --build`.
+
+**VPS 1회 준비:**
+```bash
+# 서버에서
+sudo apt-get update && sudo apt-get install -y docker.io docker-compose-plugin git
+git clone <레포URL> ~/auto_trading && cd ~/auto_trading
+cat > .env <<'ENV'
+PRESET=presets/saved/내전략.json
+INTERVAL=60
+NOTIFY_WEBHOOK=
+ENV
+# 공개키 등록: GitHub Actions가 쓸 키의 pubkey를 ~/.ssh/authorized_keys 에
+```
+
+**GitHub Secrets** (Settings → Secrets and variables → Actions):
+`VPS_HOST` · `VPS_USER` · `VPS_SSH_KEY`(개인키 전체) · `VPS_PATH`(예: `/home/ubuntu/auto_trading`) · `VPS_PORT`(선택).
+
+**배포하기:**
+```bash
+git checkout -b prod        # 최초 1회
+git push origin prod        # 이후 이 push가 배포 트리거
+# 또는 main에서 작업 후:  git push origin main:prod
+```
+
+> ⚠️ **실거래(실돈) 트레이더로 바꾸면** 자동배포에 안전장치 필수:
+> GitHub Environment 보호규칙(수동 승인) 또는 테스트 통과 게이트를 deploy 앞에 추가.
+> 나쁜 push가 곧장 실매매 봇을 갈아치우면 안 됨. (지금은 페이퍼라 자동배포 OK.)
+
 ## ⚠️ 실거래(실돈)로 넘어가기 전 반드시
 현재는 **페이퍼 전용**(실주문 없음). 실거래는 아래가 선행되어야 안전:
 1. **페이퍼로 며칠 실전 검증** (백테스트 가정 vs 실제 체결)
