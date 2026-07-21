@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>매매 대시보드</title>
+<title>트레이딩 봇</title>
 <style>
   :root { --bg:#0e1117; --panel:#161b22; --panel2:#1c2230; --line:#2a3140; --fg:#e6e9ef; --mut:#8a90a0;
           --up:#26d07c; --down:#ff5c6c; --blue:#4c9be8; }
@@ -75,7 +75,7 @@
 <script src="/vendor/lightweight-charts.js"></script>
 <div class="wrap">
   <header>
-    <h1 id="title">매매 대시보드</h1>
+    <h1 id="title">🤖 트레이딩 봇</h1>
     <a href="/" style="color:var(--blue);text-decoration:none;font-size:13px">🔬 백테스트</a>
     <span class="badge" id="status">…</span>
     <span class="sub" id="meta"></span>
@@ -231,8 +231,7 @@ async function tick(){
   renderControl(d);
   if (d.error){ window._lastTradeN=-1; $("body").innerHTML = `<div class="err">${d.error}</div>`; $("status").className="badge stale"; $("status").textContent="대기"; return; }
 
-  $("title").textContent = `${d.preset} · ${d.symbol} ${d.timeframe}`;
-  $("meta").textContent = `초기 ${fmt(d.initialEquity)} · ${d.mode==='live'?'실거래':'페이퍼'}`;
+  $("meta").textContent = `${d.preset} · ${d.symbol} ${d.timeframe} · ${d.mode==='live'?'실거래':'페이퍼'} · 초기 ${fmt(d.initialEquity)}`;
   const age = Date.now() - d.updatedAt;
   const alive = age < 3*60*1000;    // 3분 내 갱신이면 정상
   if (!alive){ $("status").className="badge stale"; $("status").textContent="🔴 멈춤/지연"; }
