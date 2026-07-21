@@ -50,6 +50,11 @@
   .exprow > td { padding:0; background:var(--panel2); border-bottom:1px solid var(--line); }
   .tchart { width:100%; padding:8px 4px; }
   .tchart .caption { color:var(--mut); font-size:12px; padding:4px 6px 8px; }
+  .pager { display:flex; align-items:center; justify-content:center; gap:14px; padding:12px 0 2px; }
+  .pager button { padding:5px 14px; border-radius:6px; border:1px solid var(--line); background:var(--panel2);
+                  color:var(--fg); cursor:pointer; font-size:13px; }
+  .pager button:hover:not(:disabled) { border-color:var(--blue); }
+  .pager button:disabled { opacity:.4; cursor:default; }
 </style>
 </head>
 <body>
@@ -187,27 +192,53 @@ async function tick(){
     }
     html += `<div class="pos"><h3>자산 곡선</h3><canvas id="eq"></canvas></div>`;
 
-    const trs = led.slice().reverse();
-    html += `<div class="trades pos"><h3>매매 기록 <span class="sub">${led.length}건 · 원장 · 행 클릭 시 차트</span></h3>`;
-    if (!trs.length) html += `<div class="empty">아직 매매 기록 없음</div>`;
-    else {
-      html += `<table><thead><tr><th></th><th>방향</th><th>전략</th><th>진입</th><th>청산</th><th>사유</th><th>손익</th><th>시각</th></tr></thead><tbody>`;
-      for (const t of trs.slice(0,100)){
-        const c = t.pnl>=0?"g":"r";
-        const nm=(t.strategy||'-').split('/').pop().replace('.json','');
-        html += `<tr class="trow" onclick="toggleTrade(${t.id})"><td class="cursor">▸</td>`
-          + `<td class="${t.side>0?'g':'r'}">${t.side>0?"롱":"숏"}</td>`
-          + `<td class="sub">${nm}</td><td>${fmt(t.entry_price)}</td><td>${fmt(t.exit_price)}</td>`
-          + `<td>${RN[t.reason]||t.reason}</td><td class="${c}">${t.pnl>=0?"+":""}${fmt(t.pnl)}</td>`
-          + `<td class="sub">${fmtT(t.exit_time)}</td></tr>`
-          + `<tr class="exprow" id="exp-${t.id}" style="display:none"><td colspan="8"><div class="tchart" id="tc-${t.id}"></div></td></tr>`;
-      }
-      html += `</tbody></table>`;
-    }
-    html += `</div>`;
+    html += `<div class="trades pos"><h3>매매 기록 <span class="sub">${led.length}건 · 원장 · 행 클릭 시 차트</span></h3>`
+      + `<div id="tradetable"></div><div id="tradepager" class="pager"></div></div>`;
     $("history").innerHTML = html;
+    window._led = led;
+    window._tradePage = 0;                 // 새 거래 생기면 최신(1쪽)부터
+    renderTrades();
     drawEquity(d.initialEquity, led);
   }
+}
+
+const PER_PAGE = 50;                        // 매매기록 한 쪽당 건수
+function renderTrades(){
+  const led = window._led || [];
+  const trs = led.slice().reverse();       // 최신 먼저
+  const tbl = document.getElementById("tradetable");
+  const pg = document.getElementById("tradepager");
+  if (!tbl) return;
+  if (!trs.length){ tbl.innerHTML = `<div class="empty">아직 매매 기록 없음</div>`; if(pg) pg.innerHTML=""; return; }
+  const pages = Math.max(1, Math.ceil(trs.length / PER_PAGE));
+  let page = Math.min(Math.max(window._tradePage||0, 0), pages-1);
+  window._tradePage = page;
+  const slice = trs.slice(page*PER_PAGE, page*PER_PAGE + PER_PAGE);
+
+  let h = `<table><thead><tr><th></th><th>방향</th><th>전략</th><th>진입</th><th>청산</th><th>사유</th><th>손익</th><th>시각</th></tr></thead><tbody>`;
+  for (const t of slice){
+    const c = t.pnl>=0?"g":"r";
+    const nm=(t.strategy||'-').split('/').pop().replace('.json','');
+    h += `<tr class="trow" onclick="toggleTrade(${t.id})"><td class="cursor">▸</td>`
+      + `<td class="${t.side>0?'g':'r'}">${t.side>0?"롱":"숏"}</td>`
+      + `<td class="sub">${nm}</td><td>${fmt(t.entry_price)}</td><td>${fmt(t.exit_price)}</td>`
+      + `<td>${RN[t.reason]||t.reason}</td><td class="${c}">${t.pnl>=0?"+":""}${fmt(t.pnl)}</td>`
+      + `<td class="sub">${fmtT(t.exit_time)}</td></tr>`
+      + `<tr class="exprow" id="exp-${t.id}" style="display:none"><td colspan="8"><div class="tchart" id="tc-${t.id}"></div></td></tr>`;
+  }
+  h += `</tbody></table>`;
+  tbl.innerHTML = h;
+
+  const from = page*PER_PAGE+1, to = page*PER_PAGE+slice.length;
+  if (pg) pg.innerHTML = `<button ${page<=0?'disabled':''} onclick="gotoTradePage(${page-1})">‹ 이전</button>`
+    + `<span class="sub">${from}–${to} / ${trs.length}건 · ${page+1}/${pages}쪽</span>`
+    + `<button ${page>=pages-1?'disabled':''} onclick="gotoTradePage(${page+1})">다음 ›</button>`;
+}
+function gotoTradePage(n){
+  window._charts = window._charts || {};   // 페이지 이동 → 펼친 차트 정리(DOM 교체됨)
+  for (const id in window._charts){ try{window._charts[id].remove();}catch(e){} delete window._charts[id]; }
+  window._tradePage = n;
+  renderTrades();
 }
 
 // 매매기록 행 펼치기 → 진입~청산 캔들+지표 차트
