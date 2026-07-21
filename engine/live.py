@@ -364,7 +364,15 @@ def main():
     ap.add_argument("--equity", type=float, default=10_000.0)
     ap.add_argument("--interval", type=int, default=60, help="폴링 간격(초)")
     ap.add_argument("--once", action="store_true", help="한 번만 폴링하고 종료(테스트용)")
+    ap.add_argument("--start-running", action="store_true",
+                    help="시작 시 바로 매매 활성. 기본은 안전하게 '멈춤'으로 시작(대시보드에서 재개).")
     args = ap.parse_args()
+
+    # 안전 기본값: 봇은 '멈춤' 상태로 시작 → 대시보드에서 명시적으로 켜야 새 진입 시작.
+    # (멈춤은 새 진입만 막음 — 기존 포지션 관리·청산은 계속. --start-running 으로 즉시 활성.)
+    if not args.start_running and not args.once:
+        control.set_service("trader", "paused")
+        print("🔒 안전 시작: 매매 '멈춤' 상태 — 대시보드에서 봇을 '재개'해야 새 진입이 시작됩니다.", flush=True)
 
     preset = load_preset_file(args.preset, validate=True)
     mk, tk = bm.fees_for_symbol(preset.symbol)
