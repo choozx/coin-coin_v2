@@ -119,6 +119,18 @@
       "description": "레버리지 매매의 절반. 얼마나 크게, 얼마나 위험하게 진입할지.",
       "properties": {
         "leverage": { "type": "integer", "minimum": 1, "maximum": 125 },
+        "leverageTiers": {
+          "type": "array", "minItems": 1,
+          "description": "잔고 구간별 레버리지. 진입 시 현재 자산이 속한 첫 티어의 레버리지 사용(있으면 leverage 무시). 오름차순, 마지막은 maxBalance 없이 '그 이상'.",
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["leverage"],
+            "properties": {
+              "maxBalance": { "type": ["number", "null"], "exclusiveMinimum": 0,
+                "description": "이 잔고 이하면 이 티어. null/생략=그 이상(마지막 티어)." },
+              "leverage": { "type": "integer", "minimum": 1, "maximum": 125 }
+            }
+          }
+        },
         "marginMode": { "type": "string", "enum": ["isolated", "cross"], "default": "isolated" },
         "size": {
           "type": "object",

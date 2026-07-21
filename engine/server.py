@@ -146,6 +146,17 @@ def _build_preset(p: dict) -> dict:
     }
     if float(p.get("minLiqBuffer", 0)) > 0:
         sizing["minLiquidationBuffer"] = float(p["minLiqBuffer"])
+    if p.get("levTierEnabled") and p.get("levTiers"):       # 잔고별 레버리지 티어
+        tiers = []
+        for t in p["levTiers"]:
+            row = {"leverage": int(t["leverage"])}
+            mb = t.get("maxBalance")
+            if mb not in (None, ""):
+                row["maxBalance"] = float(mb)
+            tiers.append(row)
+        tiers.sort(key=lambda x: x.get("maxBalance", float("inf")))   # 오름차순, ∞(상한없음) 마지막
+        if tiers:
+            sizing["leverageTiers"] = tiers
 
     filt = {}
     if int(p.get("cooldownBars", 0)) > 0:
@@ -524,6 +535,68 @@ def _cache_list() -> dict:
     return {"symbols": candle_store.list_stats()}
 
 
+_SAVED_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "presets", "saved")
+
+
+def _safe_name(name: str) -> str:
+    """파일명 안전화 — 경로구분자/제어문자만 치환(한글·공백은 유지)."""
+    out = "".join("_" if c in '/\\:*?"<>|' or ord(c) < 32 else c for c in (name or "").strip())
+    return (out or "preset")[:80]
+
+
+def _save_preset(p: dict) -> dict:
+    """현재 GUI 설정을 로컬 파일로 저장. p = {name, form, params}.
+
+    form = GUI 복원용 폼상태(cpSerialize), params = 백테스트 파라미터(collect).
+    저장 파일엔 폼상태 + 빌드된 프리셋(스키마형) 둘 다 담아 사람이/엔진이 바로 읽게 한다.
+    """
+    name = (p.get("name") or "").strip()
+    if not name:
+        raise ValueError("프리셋 이름이 없습니다")
+    os.makedirs(_SAVED_DIR, exist_ok=True)
+    record = {"name": name, "savedAt": int(time.time() * 1000),
+              "form": p.get("form"), "params": p.get("params")}
+    try:                                    # 스키마형 프리셋도 함께 저장(검증까지)
+        preset = _build_preset(p.get("params") or {})
+        Preset.from_dict(preset, validate=True)
+        record["preset"] = preset
+    except Exception as e:
+        record["presetError"] = str(e)      # 빌드 실패해도 폼상태는 저장
+    path = os.path.join(_SAVED_DIR, _safe_name(name) + ".json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(record, f, ensure_ascii=False, indent=2)
+    return {"ok": True, "name": name, "path": path,
+            "built": "preset" in record, "error": record.get("presetError")}
+
+
+def _delete_preset(p: dict) -> dict:
+    """저장된 프리셋 파일 삭제. p = {name}."""
+    name = (p.get("name") or "").strip()
+    if not name:
+        raise ValueError("프리셋 이름이 없습니다")
+    path = os.path.join(_SAVED_DIR, _safe_name(name) + ".json")
+    existed = os.path.exists(path)
+    if existed:
+        os.remove(path)
+    return {"ok": True, "deleted": existed, "name": name}
+
+
+def _list_saved_presets() -> dict:
+    """presets/saved/*.json 의 프리셋 목록 — GUI 복원용 form과 함께 반환."""
+    import glob
+    out = []
+    for fp in sorted(glob.glob(os.path.join(_SAVED_DIR, "*.json"))):
+        try:
+            with open(fp, encoding="utf-8") as f:
+                rec = json.load(f)
+            if rec.get("form"):
+                out.append({"name": rec.get("name") or os.path.basename(fp)[:-5],
+                            "form": rec["form"], "savedAt": rec.get("savedAt")})
+        except Exception:
+            continue
+    return {"presets": out}
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):  # 조용히
         pass
@@ -545,6 +618,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, f.read(), "application/javascript; charset=utf-8")
         elif self.path == "/api/cache":
             self._send(200, json.dumps(_cache_list()))
+        elif self.path == "/api/presets":
+            self._send(200, json.dumps(_list_saved_presets()))
         else:
             self._send(404, b"not found", "text/plain")
 
@@ -553,7 +628,8 @@ class Handler(BaseHTTPRequestHandler):
             self._optimize_stream()
             return
         routes = {"/api/backtest": _run_backtest,
-                  "/api/collect": _run_collect, "/api/collect_chunk": _run_collect_chunk}
+                  "/api/collect": _run_collect, "/api/collect_chunk": _run_collect_chunk,
+                  "/api/save_preset": _save_preset, "/api/delete_preset": _delete_preset}
         if self.path not in routes:
             self._send(404, b"not found", "text/plain")
             return

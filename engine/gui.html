@@ -287,7 +287,13 @@
     <div class="band"><span class="bnum">3</span> 포지션 · 리스크 <span class="bsub">수량 · 레버리지 · 필터</span></div>
     <div class="group">
       <h3>사이징 (레버리지)</h3>
-      <div class="row"><label>레버리지 (배)</label><input type="number" id="leverage" value="5" min="1" max="125"></div>
+      <div class="row"><label id="leverageLabel">레버리지 (배)</label><input type="number" id="leverage" value="5" min="1" max="125"></div>
+      <div class="row"><label><input type="checkbox" id="levTierEnabled"> 잔고별 레버리지 (티어)</label></div>
+      <div data-when="levtier">
+        <div id="levTierRows"></div>
+        <button id="levTierAdd" type="button" style="width:auto;padding:5px 10px;font-size:12px;background:var(--panel2);border:1px solid var(--line);color:var(--fg)">+ 구간 추가</button>
+        <div class="note">잔고가 '이하 $' 값보다 작거나 같으면 그 레버리지. 맨 아래(빈칸)=그 이상. 진입 시 현재 자산으로 자동 선택 → 위 고정 레버리지는 무시됨.</div>
+      </div>
       <div class="row"><label>사이징 방식</label>
         <select id="sizeType">
           <option value="equityPercent" selected>증거금 %</option>
@@ -366,8 +372,25 @@ const FIELDS = ["symbol","timeframe","days","equity",
   "exitCondEnabled","exitCondInd","exitCondPeriod","exitCondCmp","exitCondValue","timeStopBars",
   "exitStEnabled","exitStPeriod","exitStMult",
   "trailingEnabled","trailingCallback","trailingActivation",
-  "leverage","sizeType","sizeValue","minLiqBuffer","cooldownBars","avoidFundingMin",
+  "leverage","levTierEnabled","sizeType","sizeValue","minLiqBuffer","cooldownBars","avoidFundingMin",
   "entryType"];
+
+// ---- 잔고별 레버리지 티어 ----
+let levTiers = [{maxBalance:1000, leverage:20},{maxBalance:5000, leverage:10},{maxBalance:null, leverage:5}];
+function renderLevTiers(){
+  const box = $("levTierRows"); if (!box) return;
+  box.innerHTML = levTiers.map((t,i)=>{
+    const last = i===levTiers.length-1;
+    return `<div class="row" style="gap:6px;align-items:center">`
+      + `<input type="number" class="lt-max" data-i="${i}" placeholder="${last?'(그 이상)':'잔고 이하 $'}" value="${t.maxBalance==null?'':t.maxBalance}" min="1" style="width:120px">`
+      + `<span style="color:var(--mut)">→</span>`
+      + `<input type="number" class="lt-lev" data-i="${i}" value="${t.leverage}" min="1" max="125" style="width:60px"><span style="color:var(--mut)">x</span>`
+      + `<button type="button" class="lt-del" data-i="${i}" title="삭제" style="width:auto;padding:2px 8px;background:var(--panel2);border:1px solid var(--line);color:var(--fg)">✕</button></div>`;
+  }).join("");
+  box.querySelectorAll(".lt-max").forEach(el=>el.onchange=()=>{ const v=el.value.trim(); levTiers[+el.dataset.i].maxBalance = v===''?null:+v; });
+  box.querySelectorAll(".lt-lev").forEach(el=>el.onchange=()=>{ levTiers[+el.dataset.i].leverage = +el.value||1; });
+  box.querySelectorAll(".lt-del").forEach(el=>el.onclick=()=>{ levTiers.splice(+el.dataset.i,1); renderLevTiers(); });
+}
 
 function collect() {
   const p = {};
@@ -376,6 +399,7 @@ function collect() {
     p[f] = el.type === "checkbox" ? el.checked : el.value;
   }
   p.entryGroups = entryGroups.map(g => ({ side: g.side, conditions: g.conds.map(c => c.node) }));
+  p.levTiers = levTiers;                          // 서버는 levTierEnabled일 때만 사용
   return p;   // ((A&B)→롱) or ((C&D)→숏)
 }
 
@@ -650,8 +674,12 @@ function sync() {
   show("tp-st", tpT === "supertrend");
   show("exit-st", $("exitStEnabled").checked);
   $("entryTypeNote").textContent = $("entryType").value === "makerLimit"
-    ? "지정가 진입 — 신호봉 종가에 체결됐다고 가정하고 maker 수수료 적용(BTCUSDC면 0). 미체결·슬리피지는 모델링 안 함."
+    ? "지정가(BBO) 체결 가정 → 진입 + SuperTrend 청산 둘 다 maker 수수료(BTCUSDC면 0). 손절·강제청산은 시장가(taker) 유지. 미체결·슬리피지는 모델링 안 함."
     : "신호봉 종가에 즉시 시장가 체결(taker 수수료).";
+  const levTier = $("levTierEnabled").checked;
+  show("levtier", levTier);
+  $("leverageLabel").textContent = levTier ? "레버리지 (티어 사용중 — 무시)" : "레버리지 (배)";
+  $("leverage").disabled = levTier;
   $("slValueLabel").textContent = slT === "atrMultiple" ? "손절 ATR 배수" : "손절 % (가격)";
   $("slNote").textContent = slT === "swing"
     ? "룩백 구간(현재 봉 포함)의 최저/최고가 ± 버퍼%. 방향은 자동 — 롱은 전저점 아래, 숏은 전고점 위."
@@ -674,7 +702,9 @@ function sync() {
     : "";
   if (typeof updateHints === "function") updateHints();
 }
-["slType","tpType","sizeType","exitStEnabled","entryType"].forEach(id => $(id).addEventListener("change", sync));
+["slType","tpType","sizeType","exitStEnabled","entryType","levTierEnabled"].forEach(id => $(id).addEventListener("change", sync));
+$("levTierAdd").onclick = () => { levTiers.push({maxBalance:null, leverage:5}); renderLevTiers(); };
+renderLevTiers();
 
 const PRESETS = {
   scalp: { symbol:"BTCUSDT", timeframe:"1m", direction:"long",
@@ -733,6 +763,7 @@ function applyPreset(p) {
     const v = migrate(k, v0);
     if (el.type === "checkbox") el.checked = v; else el.value = v;
   }
+  if (Array.isArray(p.levTiers)) { levTiers = JSON.parse(JSON.stringify(p.levTiers)); renderLevTiers(); }
   setEntryGroups(p.entry);
   sync();
 }
@@ -750,30 +781,55 @@ function cpSerialize(){
   const p = {};
   for (const f of FIELDS){ const el = $(f); p[f] = el.type === "checkbox" ? el.checked : el.value; }
   p.entry = entryGroups.map(g => ({ side: g.side, conds: g.conds.map(c => ({ type: c.type, ...c.f })) }));
+  p.levTiers = JSON.parse(JSON.stringify(levTiers));
   return p;
 }
+let serverPresets = {};   // 서버 파일(presets/saved/) name -> form. 📁 로 표시.
+async function loadServerPresets(){
+  try { const r = await fetch("/api/presets"); const d = await r.json();
+    serverPresets = {}; (d.presets||[]).forEach(p => serverPresets[p.name] = p.form);
+  } catch(e){ serverPresets = {}; }
+  cpRender();
+}
 function cpRender(){
-  const all = cpLoad(), names = Object.keys(all);
+  const local = cpLoad();
+  const names = [...new Set([...Object.keys(local), ...Object.keys(serverPresets)])].sort();
   $("cpList").innerHTML = names.length
-    ? names.map(n => `<span class="cpreset"><button class="cp-load" data-name="${escapeHtml(n)}">${escapeHtml(n)}</button>`
-        + `<button class="cp-del" data-name="${escapeHtml(n)}" title="삭제">✕</button></span>`).join("")
+    ? names.map(n => {
+        const srvOnly = !(n in local) && (n in serverPresets);      // 서버에만 있는 프리셋
+        return `<span class="cpreset"><button class="cp-load" data-name="${escapeHtml(n)}">${srvOnly?"📁 ":""}${escapeHtml(n)}</button>`
+          + `<button class="cp-del" data-name="${escapeHtml(n)}" title="삭제">✕</button></span>`;
+      }).join("")
     : `<span class="cp-empty">저장된 프리셋 없음 — 세팅 후 “💾 현재 설정 저장”</span>`;
-  document.querySelectorAll(".cp-load").forEach(b => b.onclick = () => applyPreset(cpLoad()[b.dataset.name]));
-  document.querySelectorAll(".cp-del").forEach(b => b.onclick = () => {
+  document.querySelectorAll(".cp-load").forEach(b => b.onclick = () => {
+    const n = b.dataset.name; applyPreset(cpLoad()[n] || serverPresets[n]);
+  });
+  document.querySelectorAll(".cp-del").forEach(b => b.onclick = async () => {
     const n = b.dataset.name;
-    if (!confirm(`'${n}' 프리셋을 삭제할까?`)) return;
-    const all = cpLoad(); delete all[n]; cpStore(all); cpRender();
+    if (!confirm(`'${n}' 프리셋을 삭제할까? (브라우저 + 서버 파일 둘 다)`)) return;
+    const all = cpLoad(); if (n in all) { delete all[n]; cpStore(all); }         // 브라우저
+    try { await fetch("/api/delete_preset", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ name: n })}); } catch(e){ console.warn("서버 삭제 실패:", e); }
+    loadServerPresets();                                                          // 서버 목록 새로고침 + 재렌더
   });
 }
-$("savePreset").onclick = () => {
+$("savePreset").onclick = async () => {
   if (!entryGroups.length){ alert("저장할 진입 조건이 없어 — 진입 그룹을 먼저 만들어줘."); return; }
   const name = (prompt("프리셋 이름:", "") || "").trim();
   if (!name) return;
   const all = cpLoad();
   if (all[name] && !confirm(`'${name}' 이(가) 이미 있어. 덮어쓸까?`)) return;
-  all[name] = cpSerialize(); cpStore(all); cpRender();
+  const form = cpSerialize();
+  all[name] = form; cpStore(all); cpRender();          // 1) 브라우저 localStorage
+  try {                                                 // 2) 서버 로컬 파일 (presets/saved/)
+    const res = await fetch("/api/save_preset", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ name, form, params: collect() })});
+    const d = await res.json();
+    if (d.error) console.warn("서버 저장 경고:", d.error);
+    loadServerPresets();                                // 서버 목록 새로고침
+  } catch(e){ console.warn("서버 저장 실패(브라우저엔 저장됨):", e); }
 };
-cpRender();
+loadServerPresets();
 
 $("run").onclick = async () => {
   if (!entryGroups.length) { $("err").innerHTML = '<div class="err">진입 조건을 하나 이상 추가해줘 (진입 섹션)</div>'; return; }

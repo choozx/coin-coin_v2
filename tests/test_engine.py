@@ -110,6 +110,20 @@ def test_hawkeye_bull_bear_neutral():
     assert hv2[1] in (1.0, 0.0, -1.0)
 
 
+def test_leverage_tiers():
+    from engine.backtest import _leverage_for
+    s = {"leverageTiers": [{"maxBalance": 5000, "leverage": 20},
+                           {"maxBalance": 20000, "leverage": 10},
+                           {"maxBalance": None, "leverage": 5}]}
+    assert _leverage_for(s, 3000, 125) == 20     # <=5000
+    assert _leverage_for(s, 5000, 125) == 20     # 경계 포함
+    assert _leverage_for(s, 12000, 125) == 10    # 5000~20000
+    assert _leverage_for(s, 99999, 125) == 5     # 그 이상(∞)
+    assert _leverage_for(s, 3000, 8) == 8        # 계정 상한 클램프
+    # 티어 없으면 고정값
+    assert _leverage_for({"leverage": 7}, 10000, 125) == 7
+
+
 def test_maker_limit_entry():
     from engine.backtest import BacktestConfig, run
     from engine.preset import Preset

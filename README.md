@@ -146,10 +146,17 @@ vendor/         외부 JS. lightweight-charts.standalone.production.js
 - [ ] direction "both" 롱·숏 동시 (스키마 v2: entryLong/entryShort 분리)
 - [ ] **지정가 체결 현실화 (미체결·슬리피지 모델)** — 현재 `execution.entryType`은
       `taker`(시장가)와 `makerLimit`(지정가) 둘 다 **신호봉 종가에 체결됐다고 가정하고 수수료만
-      다르게** 적용(maker=지정가). 즉 지정가의 체결 불확실성은 모델링 안 함(낙관적). 실거래에선
-      지정가가 (a) 가격이 불리하게 올 때만 체결(역선택), (b) 신호 방향으로 튀면 미체결, 로 갈린다.
-      더 정직하게 하려면 두 방향: ① fill-if-touched + 타임아웃 미체결 스킵(패시브/역추세용),
-      ② **passive-then-aggressive** = post-only 지정가 먼저 → 타임아웃 내 미체결이면 시장가(taker)
-      추격(모멘텀용, 추격 슬리피지까지 반영). BTCUSDC(maker 0) 스캘핑의 실전 표준 체결 방식.
-      백테스트↔실거래 동일 로직 원칙에 부합. (fill-if-touched 상태머신은 커밋 eb4edcd에 있었으나
+      다르게** 적용(maker=지정가). maker 모드에선 **진입 + SuperTrend 전환 청산**이 maker,
+      가격 익절도 항상 maker, **손절·강제청산은 시장가(taker) 유지**. 즉 지정가의 체결 불확실성은
+      모델링 안 함(낙관적). 실거래에선 지정가가 (a) 가격이 불리하게 올 때만 체결(역선택),
+      (b) 신호 방향으로 튀면 미체결, 로 갈린다. 더 정직하게 하려면 ① fill-if-touched + 타임아웃
+      미체결 스킵(패시브/역추세용), ② **passive-then-aggressive** = post-only 지정가 먼저 →
+      타임아웃 내 미체결이면 시장가(taker) 추격(모멘텀용, 추격 슬리피지 반영). BTCUSDC(maker 0)
+      스캘핑의 실전 표준 체결. 백테스트↔실거래 동일 로직 원칙. (상태머신은 커밋 eb4edcd에 있었으나
       단순화하며 제거 — 필요 시 복구.)
+- [ ] **SuperTrend 청산의 실전 체결 정책 (BBO → 3초 → taker 폴백)** — 백테스트는 maker 모드에서
+      SuperTrend 전환 청산을 maker(BBO 지정가 체결)로 가정한다. 실거래 실행 규칙은:
+      **① 전환 신호 시 post-only 지정가(BBO)로 청산 주문 → ② 3초 내 미체결이면 그 주문 취소 →
+      ③ 시장가(taker)로 즉시 청산.** 대부분은 BBO에서 maker로 빠져나가 수수료 0(BTCUSDC), 급반전
+      등으로 안 잡히는 소수만 taker로 확실히 청산. 페이퍼/실거래 모듈이 이 규칙을 그대로 구현하면
+      백테스트(낙관적 maker 가정)와 실거래의 차이는 "3초 내 미체결분의 taker 수수료"로 한정된다.

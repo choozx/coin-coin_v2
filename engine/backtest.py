@@ -84,6 +84,22 @@ def _size_position(sizing: dict, equity: float, price: float, leverage: int, sto
     return None, None
 
 
+def _leverage_for(sizing: dict, equity: float, max_lev: int) -> int:
+    """진입 시점 자산(equity)에 맞는 레버리지. leverageTiers 있으면 잔고 구간 조회, 없으면 고정값.
+
+    티어 = [{maxBalance, leverage}...] (오름차순). 현재 자산이 속한 첫 티어(equity<=maxBalance,
+    maxBalance null이면 그 이상=∞)의 레버리지 사용. 모든 상한 초과 시 마지막 티어.
+    """
+    tiers = sizing.get("leverageTiers")
+    if tiers:
+        for t in tiers:
+            mx = t.get("maxBalance")
+            if mx is None or equity <= float(mx):
+                return max(1, min(int(t["leverage"]), max_lev))
+        return max(1, min(int(tiers[-1]["leverage"]), max_lev))
+    return max(1, min(int(sizing["leverage"]), max_lev))
+
+
 def _exit_level(cfg: dict, entry: float, side: int, atr_val: float, signal, sb: int):
     """익절/손절 목표가. cfg 없으면 nan.
 
@@ -173,17 +189,18 @@ def run(base: Candles, preset: Preset, cfg: BacktestConfig = None) -> Metrics:
     sizing = preset.sizing
     ex = preset.exit
     filt = preset.filter
-    lev = min(int(sizing["leverage"]), cfg.max_leverage)
+    # 레버리지: 진입 시점 자산 기준(leverageTiers면 잔고 구간 조회) — 진입부에서 계산.
 
     equity = cfg.initial_equity
     pos: _Position = None
     trades = []
     equity_curve = [(int(base.open_time[0]), equity)]
     last_exit_signal_idx = -10 ** 9
+    _cur_sb = 0                     # 현재 처리 중인 신호봉 인덱스(쿨다운 갱신용)
 
     def close_position(exit_price, exit_time, reason, is_maker=False):
         # 지정가 익절(가격 도달 체결)만 maker, 나머지(손절·트레일링·신호·강제청산 등 시장가)는 taker.
-        nonlocal equity, pos
+        nonlocal equity, pos, last_exit_signal_idx
         exit_fee = bm.trade_fee(exit_price, pos.qty, taker=not is_maker,
                                 taker_fee=cfg.taker_fee, maker_fee=cfg.maker_fee)
         gross = pos.side * (exit_price - pos.entry_price) * pos.qty
@@ -197,11 +214,13 @@ def run(base: Candles, preset: Preset, cfg: BacktestConfig = None) -> Metrics:
             stop_price=pos.stop_price, tp_price=pos.tp_price,
         ))
         equity_curve.append((int(exit_time), equity))
+        last_exit_signal_idx = _cur_sb          # 청산한 신호봉 → 쿨다운 기준 갱신
         pos = None
 
     n = len(base)
     for t in range(n):
         ot = int(base.open_time[t])
+        _cur_sb = int(bar_of[t])                # 이 1분봉이 속한 신호봉
         hi, lo, cl = base.high[t], base.low[t], base.close[t]
 
         # ---- 포지션 보유 중: 1분봉 해상도 관리 ----
@@ -257,7 +276,9 @@ def run(base: Candles, preset: Preset, cfg: BacktestConfig = None) -> Metrics:
                 if st_exit is not None and _supertrend_flip_exit(resolver, st_exit, pos.side, sb):
                     st_reason = {"stopLoss": "stop_loss", "exit": "supertrend"}.get(
                         st_exit.get("as"), "take_profit")
-                    close_position(sig_close, fill_time, st_reason)
+                    # maker 모드(지정가 진입)면 SuperTrend 청산도 BBO 지정가로 체결됐다고 가정 → maker.
+                    # (실전: post-only 걸고 3초 내 미체결이면 취소 후 taker 청산 — README 참고.)
+                    close_position(sig_close, fill_time, st_reason, is_maker=maker_entry)
                 elif cond is not None and evaluate(cond, resolver, sb):
                     close_position(sig_close, fill_time, "signal")
                 elif time_stop is not None:
@@ -278,6 +299,7 @@ def run(base: Candles, preset: Preset, cfg: BacktestConfig = None) -> Metrics:
                     side = entry_side
                 if side is not None:
                     # taker든 maker(지정가)든 신호봉 종가에 체결. 차이는 수수료(maker=지정가)뿐.
+                    lev = _leverage_for(sizing, equity, cfg.max_leverage)   # 현재 자산 기준 레버리지
                     p = _open_position(preset, sizing, ex, sig_close, fill_time, sb,
                                        side, lev, equity, cfg, atr_series, signal, entry_maker=maker_entry)
                     if p is not None:

@@ -7,3 +7,6 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# 사용자가 GUI에서 저장한 개인 프리셋 (로컬 전용)
+presets/saved/
