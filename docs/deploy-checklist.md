@@ -154,28 +154,35 @@ cd ~/auto_trading
 
 ---
 
-## 단계 5 — GitHub 준비: Secrets · ghcr 패키지   `GitHub · 10분`
+## 단계 5 — 배포 폴러 설치 (풀 방식)   `EC2 · 5분`
 
-- [ ] Repo Secrets 등록 (Settings → Secrets and variables → Actions)
-- [ ] ghcr 패키지 접근 결정: public 전환 **또는** GHCR_PAT
+- [ ] `deploy/install-poll-timer.sh` 실행 → systemd 타이머 등록
 
-**Secrets 목록**
-| 이름 | 값 |
-|---|---|
-| `VPS_HOST` | EC2 **탄력적 IP**(단계 2-2) |
-| `VPS_USER` | `ec2-user` *(Ubuntu면 `ubuntu`)* |
-| `VPS_SSH_KEY` | `~/.ssh/deploy_key` **개인키 전체** (-----BEGIN…END-----) |
-| `VPS_PATH` | `/home/ec2-user/auto_trading` *(Ubuntu면 `/home/ubuntu/…`)* |
-| `VPS_PORT` | (선택) 기본 22 |
-| `GHCR_PAT` | (이미지 private일 때만) read:packages PAT |
+**왜 SSH 푸시가 아니라 풀인가**
+CI가 EC2에 SSH로 들어와 배포하려면 **Actions 러너 IP를 보안그룹에 허용**해야 하는데,
+그 대역이 **7000개 이상**(`api.github.com/meta`)이라 규칙 60개 한도로는 불가능하다.
+22번을 `0.0.0.0/0`으로 여는 건 (곧 실거래 키가 들어올 서버라) 논외.
+→ **서버가 먼저 물어보게** 한다. 부수효과로 GitHub에 서버 접속키를 안 맡겨도 된다.
 
-> ✅ `GITHUB_TOKEN` 은 등록 불필요 — Actions가 ghcr push에 자동 사용.
+**방법** (EC2에서)
+```bash
+cd ~/auto_trading
+git fetch origin prod && git checkout -f prod    # 최초 1회 (clone은 main 기준)
+./deploy/install-poll-timer.sh
+systemctl list-timers deploy-poll                # NEXT/LAST 확인
+```
 
-**ghcr 접근** (첫 배포 후 이미지 패키지 생김, 기본 private)
-- **간단:** GitHub → Packages → 해당 패키지 → Settings → **Change visibility → Public**
-  (코드가 아니라 빌드된 이미지만 공개) → EC2가 인증 없이 pull
-- **private 유지:** Developer settings → Personal access token(classic, `read:packages`) 발급
-  → `GHCR_PAT` 시크릿에 → deploy가 EC2에서 자동 `docker login ghcr.io`
+- 2분마다 `git fetch origin prod` → **새 커밋 없으면 즉시 종료**(수 KB, 비용 사실상 0)
+- 새 커밋이면 그 커밋의 **40자 SHA 태그 이미지**로 `.env`의 `IMAGE`를 고정하고 pull → `up -d`
+- 이미지가 아직 빌드 중이면 조용히 다음 주기 재시도(**기존 컨테이너는 안 멈춤**)
+- 로그: `journalctl -u deploy-poll -f` / 즉시 배포: `sudo systemctl start deploy-poll`
+
+> ✅ **GitHub Secrets는 하나도 필요 없다.** `VPS_HOST`/`VPS_USER`/`VPS_SSH_KEY`/`VPS_PATH` 를
+> 등록했다면 **삭제할 것**. EC2 `~/.ssh/authorized_keys` 의 배포용 공개키 줄도 지워도 된다.
+> `GITHUB_TOKEN` 은 Actions가 ghcr push에 자동 사용(등록 불필요).
+
+> **ghcr 접근:** 레포가 public이면 이미지 패키지도 public이라 EC2가 인증 없이 pull 된다.
+> 레포를 private로 바꾸면 EC2에서 `read:packages` PAT로 `docker login ghcr.io` 를 1회 해둘 것.
 
 ---
 
@@ -208,11 +215,14 @@ ENV
 ```bash
 # 로컬에서 배포 트리거
 git push origin main:prod
-# → GitHub Actions 탭: ① 빌드→ghcr push  ② EC2 SSH pull·재기동
+# → GitHub Actions: 빌드 → ghcr push (3~20분. TA-Lib 재컴파일 없으면 짧음)
+# → EC2의 deploy-poll 타이머가 2분 내에 알아서 가져감 (기다리기 싫으면 아래 systemctl start)
 
 # EC2에서 확인 (동시에 대시보드 터널도 열어둠 — 단계 2-4)
-ssh -i ~/Downloads/mykey.pem -L 8080:localhost:8080 ec2-user@<EIP>
+ssh -i ~/.ssh/mykey.pem -L 8080:localhost:8080 ec2-user@<EIP>
 cd ~/auto_trading
+sudo systemctl start deploy-poll   # 2분 안 기다리고 즉시 배포하고 싶을 때
+journalctl -u deploy-poll -n 20    # "배포: ... → ghcr.io/...:<sha>" 확인
 docker compose ps               # trader/collector/dashboard Up
 docker compose logs -f trader   # 워밍업·폴링 로그
 docker stats --no-stream        # mem_limit 내 사용량

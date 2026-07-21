@@ -96,11 +96,16 @@ docker compose down
 ## 알림 (선택)
 `NOTIFY_WEBHOOK`에 Discord/Slack 웹훅 URL을 넣으면 시작·진입·청산·에러를 받는다(stdlib만 사용).
 
-## 자동 배포 (prod 브랜치 push → EC2)
+## 자동 배포 (prod 브랜치 push → EC2가 스스로 가져감)
 `.github/workflows/deploy.yml` — **`main`=개발, `prod`=배포**. `prod`에 push하면
-① **GitHub Actions가 이미지 빌드(TA-Lib 컴파일) → ghcr.io에 push** →
-② EC2는 SSH로 compose/preset만 갱신 + **`docker compose pull` (컴파일 없음)** → 재기동.
-무거운 빌드는 Actions 러너가 하고 **EC2(1GB)는 완성 이미지만 받는다** → 프리티어 안전.
+① **GitHub Actions가 이미지 빌드(TA-Lib 컴파일) → ghcr.io에 push.** 여기까지가 CI.
+② **EC2가 2분마다 `prod`를 폴링**(`deploy/pull-deploy.sh` + systemd 타이머)해서 새 커밋이면
+그 커밋 SHA 이미지로 `.env`의 `IMAGE`를 고정하고 `pull` → `up -d`.
+무거운 빌드는 Actions 러너가 하고 **EC2는 완성 이미지만 받는다**.
+
+**왜 CI가 SSH로 밀지 않는가:** Actions 러너 IP 대역이 7000개 이상이라 보안그룹(60규칙)으로
+허용 불가. 22번을 전체 공개하는 대신 서버가 먼저 물어보게 했다. 덕분에 **GitHub에 서버
+접속키를 안 맡겨도 된다**(`VPS_*` 시크릿 전부 불필요).
 
 **VPS 1회 준비:**
 ```bash
@@ -117,18 +122,14 @@ EQUITY=10000
 COLLECT_SYMBOLS=BTCUSDC
 NOTIFY_WEBHOOK=
 ENV
-# 공개키 등록: GitHub Actions가 쓸 키의 pubkey를 ~/.ssh/authorized_keys 에
+./deploy/install-poll-timer.sh    # 배포 폴러(systemd 타이머, 2분) 등록
 ```
 
-**ghcr 이미지 접근:** ghcr 패키지를 **public으로** 두면 EC2가 인증 없이 pull(가장 간단).
-private로 유지하려면 `GHCR_PAT` 시크릿(read:packages 권한 PAT) 등록 → deploy가 EC2에서
-자동 `docker login ghcr.io` 한다.
+**ghcr 이미지 접근:** 레포가 public이면 패키지도 public이라 EC2가 인증 없이 pull 된다.
+private로 바꾸면 EC2에서 `read:packages` PAT로 `docker login ghcr.io` 를 1회 해둘 것.
 
-**GitHub Secrets** (Settings → Secrets and variables → Actions):
-`VPS_HOST`(탄력적 IP 권장) · `VPS_USER`(AL2023=`ec2-user`) · `VPS_SSH_KEY`(개인키 전체) ·
-`VPS_PATH`(예: `/home/ec2-user/auto_trading`) ·
-`VPS_PORT`(선택) · `GHCR_PAT`(이미지 private일 때만). `GITHUB_TOKEN`은 Actions가 ghcr push에
-자동 사용(별도 등록 불필요).
+**GitHub Secrets: 없음.** 풀 방식이라 CI가 서버에 접속하지 않는다 — `VPS_*` 시크릿은
+등록했다면 삭제. `GITHUB_TOKEN`은 Actions가 ghcr push에 자동 사용(등록 불필요).
 
 **배포하기:**
 ```bash
