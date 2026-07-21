@@ -22,20 +22,22 @@ services:
       - ./presets:/app/presets:ro
     logging: { driver: json-file, options: { max-size: "10m", max-file: "5" } }
 
-  dashboard:                                # 모니터링 웹 — 이것만 재배포해도 봇 안 멈춤
-    build: .
+  dashboard:                                # 대시보드만 (모니터 + 봇 멈춤/재개). 백테스트는 프로덕션에 안 올림.
+    build: .                                # 이것만 재배포해도 trader/collector 안 멈춤. 가볍고 안전.
     image: auto-trading
     restart: unless-stopped
     command: python -m engine.dashboard --port 8080
     environment:
       STATE_PATH: /app/data/state.json      # trader가 기록한 상태를 읽음
-      CONTROL_PATH: /app/data/control.json  # 멈춤/재개 제어 파일(대시보드가 씀)
+      CONTROL_PATH: /app/data/control.json  # 멈춤/재개 제어 파일
       TZ: UTC
     ports:
-      - "${DASH_PORT:-8080}:8080"
+      - "${DASH_PORT:-8080}:8080"           # 대시보드만 노출(내 IP 제한 권장)
     volumes:
       - ./data:/app/data                    # state 읽기 + control 쓰기(멈춤/재개)
     logging: { driver: json-file, options: { max-size: "10m", max-file: "3" } }
+    # 로컬에서 백테스트+대시보드 둘 다 보려면(프로덕션 아님):
+    #   python3 -m engine.server            # http://localhost:8765  (/ 백테스트, /dashboard 대시보드)
 
   collector:                                # 캔들 수집 — 24/7 (trader도 자체 수집하나, 워치리스트 유지용)
     build: .

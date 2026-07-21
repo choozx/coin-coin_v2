@@ -16,10 +16,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .backtest import BacktestConfig, run
 from . import binance_math as bm
+from . import control
 from .candles import resample, TIMEFRAME_MINUTES
 from .preset import Preset
 
 _HTML = os.path.join(os.path.dirname(__file__), "gui.html")
+_DASH_HTML = os.path.join(os.path.dirname(__file__), "dashboard.html")   # 매매 대시보드(같은 포트 /dashboard)
+STATE_PATH = os.environ.get("STATE_PATH", "data/state.json")
 # 차트 라이브러리(TradingView Lightweight Charts, Apache 2.0). 벤더링해서 오프라인에서도 동작.
 _CHARTS_JS = os.path.join(os.path.dirname(__file__), "vendor",
                           "lightweight-charts.standalone.production.js")
@@ -620,12 +623,31 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps(_cache_list()))
         elif self.path == "/api/presets":
             self._send(200, json.dumps(_list_saved_presets()))
+        elif self.path in ("/dashboard", "/dashboard/"):     # 같은 포트로 매매 대시보드
+            with open(_DASH_HTML, "rb") as f:
+                self._send(200, f.read(), "text/html; charset=utf-8")
+        elif self.path == "/api/state":
+            try:
+                with open(STATE_PATH, encoding="utf-8") as f:
+                    self._send(200, f.read())
+            except FileNotFoundError:
+                self._send(200, json.dumps({"error": "상태 없음 — 봇이 아직 안 돌았거나 state.json 미생성"}))
+        elif self.path == "/api/control":
+            self._send(200, json.dumps(control.read_control()))
         else:
             self._send(404, b"not found", "text/plain")
 
     def do_POST(self):
         if self.path == "/api/optimize":
             self._optimize_stream()
+            return
+        if self.path == "/api/control":                      # 봇/수집기 멈춤·재개
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length))
+                self._send(200, json.dumps({"ok": True, "control": control.set_service(body["service"], body["state"])}))
+            except Exception as e:
+                self._send(400, json.dumps({"error": str(e)}))
             return
         routes = {"/api/backtest": _run_backtest,
                   "/api/collect": _run_collect, "/api/collect_chunk": _run_collect_chunk,

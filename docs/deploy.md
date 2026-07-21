@@ -7,7 +7,7 @@
 `docker-compose.yml`에 **독립 컨테이너 3개** — 하나만 재배포해도 나머지는 안 멈춘다.
 - **trader** : `engine.live` 페이퍼 봇 (1분봉 폴링 → 백테스트와 같은 로직 → 페이퍼 매매). 상태를 `data/state.json`에 기록.
 - **collector** : `engine.collector --loop` 캔들 수집 (워치리스트 유지). *(trader도 자체 수집함)*
-- **dashboard** : `engine.dashboard` 모니터링 웹(:8080). `state.json`만 읽는 read-only.
+- **dashboard** : `engine.dashboard` 모니터링 웹(:8080) + 봇 멈춤/재개 제어. **백테스트는 프로덕션에 안 올림**(CPU·보안).
 
 ```bash
 docker compose up -d --build              # 전체
@@ -15,11 +15,15 @@ docker compose up -d --build dashboard    # 대시보드만 재배포 (trader/co
 ```
 셋 다 `./data` 볼륨 공유(캔들 캐시 + 봇 상태). 대시보드는 봇과 완전 디커플 — 상태 파일로만 통신.
 
-## 대시보드 로컬 확인
+## 로컬: 백테스트 + 대시보드 한 포트로
+연구·백테스트는 **로컬에서** (프로덕션엔 안 올림). 통합 서버가 둘 다 서빙:
 ```bash
-python3 -m engine.dashboard --port 8080   # http://localhost:8080
+python3 -m engine.server                  # http://localhost:8765
+#   /           → 백테스트 스튜디오
+#   /dashboard  → 매매 대시보드
 ```
-잔고·수익률·현재 포지션·최근 트레이드·자산곡선. 3초마다 자동 새로고침, 3분 이상 갱신 없으면 🔴 표시.
+대시보드만 가볍게 보려면: `python3 -m engine.dashboard --port 8080`.
+대시보드 = 잔고·수익률·포지션·최근 트레이드·자산곡선 + 봇/수집기 멈춤·재개. 3초 자동 새로고침.
 
 ## 추천 인프라
 - **작은 VPS + Docker** (DigitalOcean/Vultr/EC2, ~$5~10/mo).
