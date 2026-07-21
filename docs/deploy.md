@@ -104,8 +104,9 @@ docker compose down
 
 **VPS 1회 준비:**
 ```bash
-# 서버에서
-sudo apt-get update && sudo apt-get install -y docker.io docker-compose-plugin git
+# 서버에서 (Amazon Linux 2023. compose 플러그인은 dnf에 없어 수동 설치 — docs/deploy-checklist.md 단계 4)
+sudo dnf install -y docker git && sudo systemctl enable --now docker
+# Ubuntu면: sudo apt-get install -y docker.io docker-compose-plugin git
 git clone <레포URL> ~/auto_trading && cd ~/auto_trading
 # 스왑 2GB (위 "프리티어" 절 참고) — 프리티어면 반드시
 cat > .env <<'ENV'
@@ -124,7 +125,8 @@ private로 유지하려면 `GHCR_PAT` 시크릿(read:packages 권한 PAT) 등록
 자동 `docker login ghcr.io` 한다.
 
 **GitHub Secrets** (Settings → Secrets and variables → Actions):
-`VPS_HOST` · `VPS_USER` · `VPS_SSH_KEY`(개인키 전체) · `VPS_PATH`(예: `/home/ubuntu/auto_trading`) ·
+`VPS_HOST`(탄력적 IP 권장) · `VPS_USER`(AL2023=`ec2-user`) · `VPS_SSH_KEY`(개인키 전체) ·
+`VPS_PATH`(예: `/home/ec2-user/auto_trading`) ·
 `VPS_PORT`(선택) · `GHCR_PAT`(이미지 private일 때만). `GITHUB_TOKEN`은 Actions가 ghcr push에
 자동 사용(별도 등록 불필요).
 

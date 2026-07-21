@@ -8,9 +8,9 @@
 #
 # 필요한 GitHub Secrets (Settings → Secrets and variables → Actions):
 #   VPS_HOST     : 서버 IP/호스트
-#   VPS_USER     : SSH 유저 (예: ubuntu)
+#   VPS_USER     : SSH 유저 (Amazon Linux=ec2-user, Ubuntu=ubuntu)
 #   VPS_SSH_KEY  : 개인키(전체 내용). VPS에 공개키 등록해둘 것
-#   VPS_PATH     : 서버의 레포 경로 (예: /home/ubuntu/auto_trading)
+#   VPS_PATH     : 서버의 레포 경로 (예: /home/ec2-user/auto_trading)
 #   VPS_PORT     : (선택) SSH 포트, 기본 22
 #   GHCR_PAT     : (이미지가 private일 때만) EC2가 ghcr pull에 쓸 PAT(read:packages).
 #                  → 패키지를 public으로 바꾸면 이 시크릿·로그인 단계는 불필요.
