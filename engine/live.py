@@ -17,9 +17,28 @@
 from __future__ import annotations
 
 import argparse
+import json as _json
+import os
 import time
+import urllib.request
 
 import numpy as np
+
+
+def notify(msg: str) -> None:
+    """선택적 알림 — 환경변수 NOTIFY_WEBHOOK(Discord/Slack 호환 {content})로 POST. 없으면 무시.
+
+    배포 시 봇이 죽거나 진입/청산할 때 텔레그램/디스코드로 받기 위함. stdlib만 사용.
+    """
+    url = os.environ.get("NOTIFY_WEBHOOK")
+    if not url:
+        return
+    try:
+        data = _json.dumps({"content": msg}).encode()
+        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=5)
+    except Exception:
+        pass    # 알림 실패가 트레이딩을 막으면 안 됨
 
 from . import binance_math as bm
 from . import candle_store
@@ -177,18 +196,28 @@ class LiveTrader:
     def run(self, interval: int = 60, once: bool = False):
         """폴링 루프. once=True면 한 번만. interval초마다 poll_once(now)."""
         self.bootstrap()
+        notify(f"▶️ 페이퍼 시작 {self.preset.name} {self.preset.symbol} {self.preset.timeframe} 잔고 {self.ex.equity():.0f}")
+        fails = 0
         while True:
             now = int(time.time() * 1000)
             try:
                 events = self.poll_once(now_ms=now)
                 for e in events:
                     print(f"  [{e['type']}] {e}", flush=True)
+                    if e["type"] == "open":
+                        notify(f"🟢 진입 {'롱' if e['side']>0 else '숏'} @{e['price']:.2f} x{e['lev']} ({self.preset.symbol})")
+                    elif e["type"] == "close":
+                        notify(f"🔴 청산 {e['reason']} @{e['price']:.2f} pnl {e['pnl']:+.2f} 잔고 {self.ex.equity():.0f}")
                 st = f"잔고 {self.ex.equity():.2f}"
                 pos = self.ex.position
                 st += f" | 포지션 {'롱' if pos.side>0 else '숏'} @{pos.entry_price:.2f}" if pos else " | 무포지션"
                 print(f"{time.strftime('%H:%M:%S')}  {st}", flush=True)
+                fails = 0
             except Exception as e:
+                fails += 1
                 print(f"  [에러] {e}", flush=True)
+                if fails in (1, 5, 20):      # 반복 실패 시 알림(스팸 방지)
+                    notify(f"⚠️ 에러({fails}회): {e}")
             if once:
                 break
             time.sleep(interval)
