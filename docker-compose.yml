@@ -29,6 +29,7 @@ services:
       BINANCE_API_KEY: ${BINANCE_API_KEY:-}
       BINANCE_API_SECRET: ${BINANCE_API_SECRET:-}
       BINANCE_TESTNET: ${BINANCE_TESTNET:-1}
+      PYTHONUNBUFFERED: 1                   # 도커 stdout은 파이프 → 블록버퍼링. 없으면 로그가 안 보임
       TZ: UTC
     volumes:
       - ./data:/app/data                    # 캔들 캐시 + state.json(대시보드가 읽음)
@@ -46,6 +47,7 @@ services:
       STATE_PATH: /app/data/state.json      # trader가 기록한 상태를 읽음
       CONTROL_PATH: /app/data/control.json  # 멈춤/재개 제어 파일
       LEDGER_PATH: /app/data/trades.db      # 매매 원장 읽기(이력·통계·거래별 차트)
+      PYTHONUNBUFFERED: 1
       TZ: UTC
     ports:
       - "${DASH_PORT:-8080}:8080"           # 대시보드만 노출(내 IP 제한 권장)
@@ -67,6 +69,7 @@ services:
       COLLECT_SYMBOLS: ${COLLECT_SYMBOLS:-BTCUSDC}
       INTERVAL: ${INTERVAL:-60}
       CONTROL_PATH: /app/data/control.json  # 대시보드의 멈춤/재개 신호를 읽음
+      PYTHONUNBUFFERED: 1                   # ★ 수집기는 flush=True가 거의 없어 이게 없으면 로그가 통째로 안 보임
       TZ: UTC
     volumes:
       - ./data:/app/data
