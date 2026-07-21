@@ -43,6 +43,7 @@ def notify(msg: str) -> None:
 from . import binance_math as bm
 from . import candle_store
 from . import control
+from . import ledger
 from . import indicators as ind
 from .candles import resample, signal_close_index, TIMEFRAME_MINUTES, MINUTE_MS
 from .conditions import SeriesResolver, evaluate
@@ -58,13 +59,16 @@ class LiveTrader:
     """실시간 봉 스트림(폴링)을 백테스트와 같은 로직으로 처리해 Executor에 주문."""
 
     def __init__(self, preset: Preset, executor, cfg: BacktestConfig = None, warmup_days: float = 10,
-                 state_path: str = "data/state.json", strategy_path: str = None):
+                 state_path: str = "data/state.json", strategy_path: str = None,
+                 mode: str = "paper", ledger_path: str = None):
         self.preset = preset
         self.ex = executor
         self.cfg = cfg or BacktestConfig()
         self.warmup_days = warmup_days
         self.state_path = state_path         # 대시보드가 읽을 상태 스냅샷(포지션·트레이드·잔고)
         self.strategy_path = strategy_path   # 현재 활성 전략 파일 경로(대시보드 선택과 비교)
+        self.mode = mode                     # 'paper' | 'live' — 원장 분리 저장
+        self.ledger_path = ledger_path or ledger.LEDGER_PATH
         self._pending_strategy = None        # 전환 대기(포지션 청산 후 적용할 전략)
         self._strategy_error = None
         self._apply_derived(preset)          # tf_min/entry_rules/entry_side/maker_entry
@@ -72,6 +76,25 @@ class LiveTrader:
         self._last_exit_sb = -10 ** 9        # 쿨다운용
         self._started_at = int(time.time() * 1000)
         self._paused = False                 # control.json에서 읽음(멈춤=새 진입 차단)
+        self._restore_from_ledger()          # 원장에서 잔고·이력 복원(재시작해도 안 사라짐)
+
+    def _restore_from_ledger(self):
+        """원장(같은 mode)에서 과거 거래를 읽어 잔고·트레이드 이력 복원.
+        페이퍼: 잔고 = 초기 + 누적손익. (포지션은 복원 안 함 — 플랫 시작; 실거래는 거래소서 동기화)"""
+        from .executor import ClosedTrade
+        rows = ledger.load(self.ledger_path, mode=self.mode)
+        if not rows:
+            return
+        restored = [ClosedTrade(
+            side=r["side"], entry_time=r["entry_time"], entry_price=r["entry_price"],
+            exit_time=r["exit_time"], exit_price=r["exit_price"], qty=r["qty"],
+            leverage=r["leverage"], pnl=r["pnl"], fees=r["fees"], funding=r["funding"],
+            reason=r["reason"]) for r in rows]
+        if hasattr(self.ex, "trades"):
+            self.ex.trades = restored
+        if hasattr(self.ex, "_equity"):
+            self.ex._equity = self.cfg.initial_equity + sum(r["pnl"] for r in rows)
+        print(f"원장 복원: {len(rows)}건, 잔고 {self.ex.equity():.2f} ({self.mode})", flush=True)
 
     def _apply_derived(self, preset: Preset):
         """프리셋에서 파생되는 실행 파라미터 세팅(전환 시 재호출)."""
@@ -140,6 +163,7 @@ class LiveTrader:
             "preset": self.preset.name, "symbol": self.preset.symbol, "timeframe": self.preset.timeframe,
             "startedAt": self._started_at, "updatedAt": int(time.time() * 1000),
             "paused": self._paused,
+            "mode": self.mode,                           # paper | live (원장 조회용)
             "strategy": self.strategy_path,              # 현재 활성 전략 파일 경로
             "pendingStrategy": self._pending_strategy,   # 전환 대기(포지션 청산 후) 경로 or None
             "strategyError": self._strategy_error,
@@ -279,6 +303,12 @@ class LiveTrader:
     def _do_close(self, price, reason, ts, is_maker, sb, events):
         tr = self.ex.close(price, reason, ts, is_maker=is_maker)
         self._last_exit_sb = sb          # 쿨다운 기준 신호봉(backtest last_exit_signal_idx와 동일)
+        try:                             # 원장에 append(영구 기록) — 실패해도 트레이딩은 계속
+            ledger.record(tr, symbol=self.preset.symbol,
+                          strategy=self.strategy_path or self.preset.name,
+                          mode=self.mode, equity_after=self.ex.equity(), db_path=self.ledger_path)
+        except Exception as e:
+            print(f"  [원장기록 실패] {e}", flush=True)
         events.append({"type": "close", "reason": reason, "price": price, "time": ts, "pnl": round(tr.pnl, 2)})
 
     def bootstrap(self, now_ms: int = None):
@@ -341,7 +371,8 @@ def main():
         ex = LiveExecutor()              # NotImplementedError
     else:
         ex = PaperExecutor(equity=args.equity, maker_fee=mk, taker_fee=tk)
-    trader = LiveTrader(preset, ex, cfg, strategy_path=args.preset)
+    trader = LiveTrader(preset, ex, cfg, strategy_path=args.preset,
+                        mode="live" if args.live else "paper")
     print(f"[{'페이퍼' if not args.live else '실거래'}] {preset.name} · {preset.symbol} {preset.timeframe} "
           f"· 수수료 maker {mk*100:.3f}%/taker {tk*100:.3f}% · 초기잔고 {args.equity:.0f}")
     trader.run(interval=args.interval, once=args.once)

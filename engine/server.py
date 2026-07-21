@@ -19,6 +19,7 @@ from . import binance_math as bm
 from . import control
 from .candles import resample, TIMEFRAME_MINUTES
 from .preset import Preset, list_strategies, select_strategy
+from . import ledger
 
 _HTML = os.path.join(os.path.dirname(__file__), "gui.html")
 _DASH_HTML = os.path.join(os.path.dirname(__file__), "dashboard.html")   # 매매 대시보드(같은 포트 /dashboard)
@@ -636,6 +637,16 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps(control.read_control()))
         elif self.path == "/api/strategies":                 # 봇이 고를 수 있는 전략 목록
             self._send(200, json.dumps({"strategies": list_strategies()}))
+        elif self.path.split("?")[0] == "/api/trades":       # 매매 원장 전체 이력
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            mode = q.get("mode", [None])[0]
+            self._send(200, json.dumps({"trades": ledger.load(mode=mode, limit=1000)}))
+        elif self.path.split("?")[0] == "/api/stats":        # 원장 집계(승률·손익비·MDD·전략별)
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            mode = q.get("mode", [None])[0]
+            self._send(200, json.dumps(ledger.stats(mode=mode)))
         else:
             self._send(404, b"not found", "text/plain")
 

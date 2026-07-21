@@ -14,6 +14,7 @@ import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import control
+from . import ledger
 from .preset import list_strategies, select_strategy
 
 _HTML = os.path.join(os.path.dirname(__file__), "dashboard.html")
@@ -46,6 +47,14 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps(control.read_control()))
         elif self.path == "/api/strategies":
             self._send(200, json.dumps({"strategies": list_strategies()}))
+        elif self.path.split("?")[0] == "/api/trades":
+            from urllib.parse import parse_qs, urlparse
+            mode = parse_qs(urlparse(self.path).query).get("mode", [None])[0]
+            self._send(200, json.dumps({"trades": ledger.load(mode=mode, limit=1000)}))
+        elif self.path.split("?")[0] == "/api/stats":
+            from urllib.parse import parse_qs, urlparse
+            mode = parse_qs(urlparse(self.path).query).get("mode", [None])[0]
+            self._send(200, json.dumps(ledger.stats(mode=mode)))
         else:
             self._send(404, b"not found", "text/plain")
 

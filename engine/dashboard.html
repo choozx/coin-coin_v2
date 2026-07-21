@@ -115,13 +115,19 @@ async function tick(){
   if (d.error){ $("body").innerHTML = `<div class="err">${d.error}</div>`; $("status").className="badge stale"; $("status").textContent="대기"; return; }
 
   $("title").textContent = `${d.preset} · ${d.symbol} ${d.timeframe}`;
-  $("meta").textContent = `초기 ${fmt(d.initialEquity)} · 페이퍼`;
+  $("meta").textContent = `초기 ${fmt(d.initialEquity)} · ${d.mode==='live'?'실거래':'페이퍼'}`;
   const age = Date.now() - d.updatedAt;
   const alive = age < 3*60*1000;    // 3분 내 갱신이면 정상
   if (!alive){ $("status").className="badge stale"; $("status").textContent="🔴 멈춤/지연"; }
   else if (d.paused){ $("status").className="badge"; $("status").style.cssText="background:rgba(224,160,48,.15);color:#e0a030"; $("status").textContent="⏸ 일시정지(새 진입 차단)"; }
   else { $("status").className="badge ok"; $("status").style.cssText=""; $("status").textContent="🟢 정상"; }
   $("updated").textContent = `갱신 ${fmtT(d.updatedAt)} (${Math.round(age/1000)}s 전)`;
+
+  // 원장에서 전체 매매기록·통계 조회(대시보드 표시는 스냅샷 아닌 영구 원장 기준)
+  const mode = d.mode || "paper";
+  let led = [], st = null;
+  try { led = ((await (await fetch(`/api/trades?mode=${mode}`,{cache:"no-store"})).json()).trades)||[]; } catch(e){}
+  try { st = await (await fetch(`/api/stats?mode=${mode}`,{cache:"no-store"})).json(); } catch(e){}
 
   const retCls = d.returnPct>=0 ? "g" : "r";
   const pos = d.position;
@@ -130,7 +136,7 @@ async function tick(){
     <div class="card"><div class="k">잔고</div><div class="v">${fmt(d.equity)}</div></div>
     <div class="card"><div class="k">수익률</div><div class="v ${retCls}">${d.returnPct>=0?"+":""}${fmt(d.returnPct)}%</div></div>
     <div class="card"><div class="k">포지션</div><div class="v ${posCls}">${pos?(pos.side>0?"롱":"숏"):"없음"}</div></div>
-    <div class="card"><div class="k">트레이드</div><div class="v">${d.numTrades}</div></div>
+    <div class="card"><div class="k">총 거래</div><div class="v">${st?st.n:d.numTrades}</div></div>
   </div>`;
 
   if (pos){
@@ -146,35 +152,57 @@ async function tick(){
     </div></div>`;
   }
 
-  // 자산곡선 (트레이드 누적손익)
+  // 성과 통계 (원장 집계)
+  if (st && st.n){
+    html += `<div class="pos"><h3>성과 통계 <span class="sub">원장 ${st.n}건</span></h3><div class="posgrid">
+      <div><div class="k">승률</div><div class="v">${st.winRate}%</div></div>
+      <div><div class="k">손익비 PF</div><div class="v">${st.profitFactor}</div></div>
+      <div><div class="k">총손익</div><div class="v ${st.totalPnl>=0?'g':'r'}">${st.totalPnl>=0?'+':''}${fmt(st.totalPnl)}</div></div>
+      <div><div class="k">최대낙폭 MDD</div><div class="v r">-${fmt(st.maxDrawdown)}</div></div>
+      <div><div class="k">평균손익</div><div class="v ${st.avgPnl>=0?'g':'r'}">${st.avgPnl>=0?'+':''}${fmt(st.avgPnl)}</div></div>
+    </div>`;
+    if (st.byStrategy && st.byStrategy.length>1){
+      html += `<h3 style="margin:14px 0 8px">전략별 성과</h3><table><thead><tr><th>전략</th><th>거래</th><th>승률</th><th>총손익</th><th>PF</th></tr></thead><tbody>`;
+      for (const b of st.byStrategy){
+        const nm=(b.strategy||'-').split('/').pop().replace('.json','');
+        html += `<tr><td>${nm}</td><td>${b.n}</td><td>${b.winRate}%</td>`
+          + `<td class="${b.totalPnl>=0?'g':'r'}">${b.totalPnl>=0?'+':''}${fmt(b.totalPnl)}</td><td>${b.profitFactor}</td></tr>`;
+      }
+      html += `</tbody></table>`;
+    }
+    html += `</div>`;
+  }
+
+  // 자산곡선 (원장 누적손익)
   html += `<div class="pos"><h3>자산 곡선</h3><canvas id="eq"></canvas></div>`;
 
-  // 최근 트레이드
-  const trs = (d.trades||[]).slice().reverse();
-  html += `<div class="trades pos"><h3>최근 트레이드 (${trs.length})</h3>`;
-  if (!trs.length) html += `<div class="empty">아직 트레이드 없음</div>`;
+  // 매매 기록 (원장 전체)
+  const trs = led.slice().reverse();
+  html += `<div class="trades pos"><h3>매매 기록 <span class="sub">${led.length}건 · 원장</span></h3>`;
+  if (!trs.length) html += `<div class="empty">아직 매매 기록 없음</div>`;
   else {
-    html += `<table><thead><tr><th>방향</th><th>진입</th><th>청산</th><th>사유</th><th>손익</th><th>시각</th></tr></thead><tbody>`;
-    for (const t of trs.slice(0,50)){
+    html += `<table><thead><tr><th>방향</th><th>전략</th><th>진입</th><th>청산</th><th>사유</th><th>손익</th><th>시각</th></tr></thead><tbody>`;
+    for (const t of trs.slice(0,100)){
       const c = t.pnl>=0?"g":"r";
+      const nm=(t.strategy||'-').split('/').pop().replace('.json','');
       html += `<tr><td class="${t.side>0?'g':'r'}">${t.side>0?"롱":"숏"}</td>`
-        + `<td>${fmt(t.entryPrice)}</td><td>${fmt(t.exitPrice)}</td>`
+        + `<td class="sub">${nm}</td><td>${fmt(t.entry_price)}</td><td>${fmt(t.exit_price)}</td>`
         + `<td>${RN[t.reason]||t.reason}</td><td class="${c}">${t.pnl>=0?"+":""}${fmt(t.pnl)}</td>`
-        + `<td class="sub">${fmtT(t.exitTime)}</td></tr>`;
+        + `<td class="sub">${fmtT(t.exit_time)}</td></tr>`;
     }
     html += `</tbody></table>`;
   }
   html += `</div>`;
   $("body").innerHTML = html;
-  drawEquity(d);
+  drawEquity(d.initialEquity, led);
 }
 
-function drawEquity(d){
+function drawEquity(initial, trades){
   const cv = $("eq"); if (!cv) return;
   const dpr = window.devicePixelRatio||1, W=cv.clientWidth, H=120;
   cv.width=W*dpr; cv.height=H*dpr; const ctx=cv.getContext("2d"); ctx.scale(dpr,dpr);
-  let eq=d.initialEquity; const pts=[eq];
-  for (const t of (d.trades||[])) { eq+=t.pnl; pts.push(eq); }
+  let eq=initial; const pts=[eq];
+  for (const t of (trades||[])) { eq+=t.pnl; pts.push(eq); }
   if (pts.length<2){ ctx.fillStyle="#8a90a0"; ctx.fillText("데이터 부족", 10, 60); return; }
   const mn=Math.min(...pts), mx=Math.max(...pts), rng=(mx-mn)||1;
   const x=i=>i/(pts.length-1)*(W-8)+4, y=v=>H-8-((v-mn)/rng)*(H-16);
@@ -182,7 +210,7 @@ function drawEquity(d){
   for (let i=1;i<pts.length;i++) ctx.lineTo(x(i),y(pts[i]));
   ctx.strokeStyle = pts[pts.length-1]>=pts[0] ? "#26d07c" : "#ff5c6c"; ctx.lineWidth=2; ctx.stroke();
   ctx.strokeStyle="rgba(255,255,255,.12)"; ctx.setLineDash([3,3]);
-  ctx.beginPath(); ctx.moveTo(4,y(d.initialEquity)); ctx.lineTo(W-4,y(d.initialEquity)); ctx.stroke(); ctx.setLineDash([]);
+  ctx.beginPath(); ctx.moveTo(4,y(initial)); ctx.lineTo(W-4,y(initial)); ctx.stroke(); ctx.setLineDash([]);
 }
 
 loadStrategies().then(tick); setInterval(tick, 3000);   // 전략 목록 로드 후 3초마다 새로고침
