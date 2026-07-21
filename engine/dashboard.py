@@ -70,6 +70,15 @@ class Handler(BaseHTTPRequestHandler):
                     int(q.get("id", [0])[0]), mode=q.get("mode", ["paper"])[0])))
             except Exception as e:
                 self._send(400, json.dumps({"error": str(e)}))
+        elif self.path.split("?")[0] == "/api/symbols":   # 바이낸스 상장 심볼(자동완성·오타검증)
+            from urllib.parse import parse_qs, urlparse
+            from . import binance_data
+            refresh = parse_qs(urlparse(self.path).query).get("refresh", ["0"])[0] == "1"
+            try:
+                self._send(200, json.dumps(binance_data.list_symbols(refresh=refresh)))
+            except Exception as e:
+                # 목록을 못 받아도 편집기는 자유입력으로 계속 동작해야 한다(검증만 비활성).
+                self._send(200, json.dumps({"symbols": [], "error": str(e)}))
         elif self.path == "/api/candles":
             import os as _os
             info = {"symbols": candle_store.coverage_report(),

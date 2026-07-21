@@ -6,6 +6,7 @@ candle-collector와 동일한 엔드포인트(fapi.binance.com/fapi/v1/klines).
 from __future__ import annotations
 
 import json
+import os
 import time
 import urllib.request
 import urllib.parse
@@ -16,8 +17,13 @@ import numpy as np
 from .candles import Candles, MINUTE_MS
 
 BASE = "https://fapi.binance.com/fapi/v1/klines"
+EXCHANGE_INFO = "https://fapi.binance.com/fapi/v1/exchangeInfo"
 MAX_LIMIT = 1500          # 요청당 최대 캔들 수 (weight 10)
 PAGE_SLEEP = 0.3          # 페이지 간 대기 (레이트리밋 여유: ~3.3req/s < 2400 weight/min)
+
+SYMBOLS_CACHE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                             "data", "symbols.json")
+SYMBOLS_TTL = 24 * 3600   # 상장/폐지는 드물다 → 하루 캐시로 충분
 
 
 def _get(symbol: str, interval: str, start_ms: int, end_ms: int, limit: int, retries: int = 4):
@@ -105,6 +111,57 @@ def fetch(symbol: str = "BTCUSDT", interval: str = "1m", days: float = 5,
 
     tf_min = {"1m": 1, "3m": 3, "5m": 5, "15m": 15, "1h": 60}[interval]
     return Candles.from_rows(rows, timeframe_min=tf_min)
+
+
+def list_symbols(refresh: bool = False, cache_path: str = None) -> dict:
+    """거래 가능한 USDⓈ-M **무기한** 선물 심볼 목록 (exchangeInfo).
+
+    수집 심볼을 손으로 타이핑하면 오타(BTCUSCD 등)를 내도 조용히 빈 캔들만 쌓인다.
+    대시보드가 이 목록으로 자동완성·검증하게 하려고 뽑는다.
+
+    반환: {"symbols": [{"symbol","base","quote"}...], "fetchedAt": ms, "stale": bool}
+      stale=True 는 "네트워크 실패로 캐시(오래됐을 수 있음)를 대신 돌려줬다"는 뜻.
+
+    응답이 수 MB라 하루(SYMBOLS_TTL) 캐시한다. 상장/폐지는 드물어 문제되지 않고,
+    새 상장을 바로 보고 싶으면 refresh=True.
+    """
+    path = cache_path or SYMBOLS_CACHE
+    now_ms = int(time.time() * 1000)
+
+    cached = None
+    try:
+        with open(path, encoding="utf-8") as f:
+            cached = json.load(f)
+    except Exception:
+        pass
+    if not refresh and cached and (now_ms - cached.get("fetchedAt", 0)) < SYMBOLS_TTL * 1000:
+        return {**cached, "stale": False}
+
+    try:
+        req = urllib.request.Request(EXCHANGE_INFO, headers={"User-Agent": "auto-trading/0.1"})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read())
+    except Exception:
+        if cached:                        # 네트워크가 죽어도 편집기는 계속 쓸 수 있어야 한다
+            return {**cached, "stale": True}
+        raise
+
+    out = []
+    for s in data.get("symbols", []):
+        # PERPETUAL 만 — 분기물(CURRENT_QUARTER 등)은 만기가 있어 워치리스트에 부적합.
+        if s.get("status") == "TRADING" and s.get("contractType") == "PERPETUAL":
+            out.append({"symbol": s["symbol"], "base": s.get("baseAsset", ""),
+                        "quote": s.get("quoteAsset", "")})
+    out.sort(key=lambda d: d["symbol"])
+
+    result = {"symbols": out, "fetchedAt": now_ms}
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(result, f)
+    except OSError:
+        pass                              # 캐시 못 써도 조회 자체는 성공 — 다음에 다시 받으면 됨
+    return {**result, "stale": False}
 
 
 def fetch_funding(symbol: str = "BTCUSDT", days: float = 5, end_ms: int = None):

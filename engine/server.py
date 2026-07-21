@@ -656,6 +656,14 @@ class Handler(BaseHTTPRequestHandler):
                     int(q.get("id", [0])[0]), mode=q.get("mode", ["paper"])[0])))
             except Exception as e:
                 self._send(400, json.dumps({"error": str(e)}))
+        elif self.path.split("?")[0] == "/api/symbols":       # 데이터탭: 바이낸스 상장 심볼(자동완성)
+            from urllib.parse import parse_qs, urlparse
+            from . import binance_data
+            refresh = parse_qs(urlparse(self.path).query).get("refresh", ["0"])[0] == "1"
+            try:
+                self._send(200, json.dumps(binance_data.list_symbols(refresh=refresh)))
+            except Exception as e:
+                self._send(200, json.dumps({"symbols": [], "error": str(e)}))
         elif self.path == "/api/candles":                    # 데이터탭: 심볼별 커버리지·신선도·구멍
             from . import candle_store
             info = {"symbols": candle_store.coverage_report(),

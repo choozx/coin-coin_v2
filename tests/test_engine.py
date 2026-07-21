@@ -351,6 +351,48 @@ def test_example_presets_smoke():
         assert isinstance(m.summary(), str)
 
 
+def test_list_symbols_cache_and_offline_fallback():
+    """심볼 목록: 캐시 재사용 + 네트워크 실패 시 캐시로 버티기 (네트워크 없이 검증).
+
+    대시보드 심볼 편집기가 이걸 쓴다. 바이낸스가 잠깐 죽었다고 편집기가 못 쓰게 되면
+    안 되므로, 캐시가 있으면 stale=True 로 살려주는 경로를 고정한다.
+    """
+    import json
+    import tempfile
+    import time as _time
+    from engine import binance_data as bd
+
+    path = os.path.join(tempfile.mkdtemp(), "symbols.json")
+    fresh = {"symbols": [{"symbol": "BTCUSDC", "base": "BTC", "quote": "USDC"}],
+             "fetchedAt": int(_time.time() * 1000)}
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(fresh, f)
+
+    orig = bd.EXCHANGE_INFO
+    bd.EXCHANGE_INFO = "http://127.0.0.1:1/nope"     # 네트워크 차단(즉시 실패)
+    try:
+        # TTL 안이면 네트워크를 아예 안 탄다 → 실패 URL이어도 성공해야 함
+        r = bd.list_symbols(cache_path=path)
+        assert r["stale"] is False and len(r["symbols"]) == 1
+
+        # 만료됐지만 네트워크가 죽은 경우 → 낡은 캐시라도 돌려주고 stale 표시
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({**fresh, "fetchedAt": 0}, f)
+        r = bd.list_symbols(cache_path=path)
+        assert r["stale"] is True and len(r["symbols"]) == 1
+
+        # 캐시도 없고 네트워크도 죽었으면 예외를 삼키지 말 것(호출자가 알아야 함)
+        try:
+            bd.list_symbols(cache_path=os.path.join(tempfile.mkdtemp(), "none.json"))
+            raise AssertionError("예외가 발생해야 함")
+        except AssertionError:
+            raise
+        except Exception:
+            pass
+    finally:
+        bd.EXCHANGE_INFO = orig
+
+
 if __name__ == "__main__":
     import traceback
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

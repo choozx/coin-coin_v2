@@ -170,9 +170,11 @@ async function renderData(){
   h += `<div class="pos"><h3>수집 심볼 <span class="sub">${syms.length}개 · 재시작 없이 반영</span></h3>`
     + `<div class="chips">${chips || '<span class="sub">미설정 → 수집기 시작 인자(COLLECT_SYMBOLS) 사용</span>'}</div>`
     + `<div style="margin-top:10px;display:flex;gap:6px">`
-    + `<input id="symInput" class="syminput" placeholder="심볼 추가 (예: ETHUSDT)" onkeydown="if(event.key==='Enter')addSym()">`
+    + `<input id="symInput" class="syminput" list="symList" autocomplete="off"`
+    + ` placeholder="심볼 추가 (예: ETHUSDT)" onkeydown="if(event.key==='Enter')addSym()">`
+    + `<datalist id="symList"></datalist>`
     + `<span class="svc"><button onclick="addSym()">+ 추가</button></span></div>`
-    + `<div class="sub" style="margin-top:8px">트레이더가 매매하는 심볼은 프리셋이 정함. 여기는 미리 캔들을 채워둘 워치리스트.</div></div>`;
+    + `<div id="symHint" class="sub" style="margin-top:8px">트레이더가 매매하는 심볼은 프리셋이 정함. 여기는 미리 캔들을 채워둘 워치리스트.</div></div>`;
 
   h += `<div class="pos"><h3>캔들 커버리지 <span class="sub">${(info.symbols||[]).length}개 심볼</span></h3>`;
   if (!info.symbols || !info.symbols.length) h += `<div class="empty">수집된 캔들 없음</div>`;
@@ -194,16 +196,48 @@ async function renderData(){
   h += `<div class="sub" style="margin-top:10px">신선도=마지막 캔들 시각. 수집기가 살아있으면 수분 내. · 구멍=중간 결측 1분봉(자가치유 매시간).</div>`;
   h += `</div>`;
   box.innerHTML = h;
+  fillSymbolDatalist();            // 자동완성 목록 주입(첫 호출만 네트워크, 이후 캐시)
 }
 async function saveSyms(){
   try { await fetch("/api/collect_symbols",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({symbols:window._collectSyms||[]})}); }
   catch(e){ alert("저장 실패: "+e); }
   renderData();
 }
-function addSym(){
+// 바이낸스 상장 심볼 — 자동완성 + 오타 검증용. 실패해도 편집기는 자유입력으로 동작.
+async function loadSymbolList(){
+  if (window._binanceSyms) return window._binanceSyms;
+  try {
+    const r = await (await fetch("/api/symbols")).json();
+    window._binanceSyms = (r.symbols||[]).map(s => s.symbol);
+    window._binanceStale = !!r.stale;
+  } catch(e){ window._binanceSyms = []; }
+  return window._binanceSyms;
+}
+async function fillSymbolDatalist(){
+  const list = await loadSymbolList();
+  const dl = document.getElementById("symList"); if (!dl) return;
+  // USDC 무기한을 위로(현재 전략이 BTCUSDC 계열) — 나머지는 알파벳 순.
+  const rank = s => s.endsWith("USDC") ? 0 : 1;
+  dl.innerHTML = list.slice().sort((a,b) => rank(a)-rank(b) || a.localeCompare(b))
+                     .map(s => `<option value="${s}">`).join("");
+  const hint = document.getElementById("symHint");
+  if (hint && list.length)
+    hint.innerHTML = `트레이더가 매매하는 심볼은 프리셋이 정함. 여기는 미리 캔들을 채워둘 워치리스트.`
+      + ` · 바이낸스 무기한 선물 <b>${list.length}개</b> 자동완성`
+      + (window._binanceStale ? ` <span class="fresh-y">(캐시 — 목록 갱신 실패)</span>` : ``);
+}
+async function addSym(){
   const inp = document.getElementById("symInput"); if (!inp) return;
   const v = (inp.value||"").toUpperCase().replace(/[^A-Z0-9]/g,"");
   if (!v) return;
+  const list = await loadSymbolList();
+  // 목록을 받았을 때만 검증한다(네트워크 실패 시 입력을 막아버리면 안 되므로).
+  if (list.length && !list.includes(v)){
+    const near = list.filter(s => s.startsWith(v.slice(0,3))).slice(0,6).join(", ");
+    alert(`바이낸스 무기한 선물에 없는 심볼입니다: ${v}\n`
+          + (near ? `\n비슷한 심볼: ${near}` : `\n자동완성 목록에서 골라주세요.`));
+    return;
+  }
   window._collectSyms = window._collectSyms || [];
   if (!window._collectSyms.includes(v)) window._collectSyms.push(v);
   saveSyms();
