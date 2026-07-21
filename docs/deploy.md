@@ -3,9 +3,23 @@
 `engine.live` 페이퍼 트레이더를 VPS 등 클라우드에서 24/7 돌리는 뼈대.
 **실주문은 안 나감**(PaperExecutor) — 인프라·재시작·알림을 실돈 전에 안전하게 검증하기 위함.
 
-## 무엇이 도나
-- GUI/백테스트 아님. `python -m engine.live <preset> --paper --interval 60` 루프 하나.
-- 1분봉을 주기 폴링 → 백테스트와 같은 로직으로 페이퍼 매매 → 잔고/포지션 로그.
+## 무엇이 도나 (멀티서비스)
+`docker-compose.yml`에 **독립 컨테이너 3개** — 하나만 재배포해도 나머지는 안 멈춘다.
+- **trader** : `engine.live` 페이퍼 봇 (1분봉 폴링 → 백테스트와 같은 로직 → 페이퍼 매매). 상태를 `data/state.json`에 기록.
+- **collector** : `engine.collector --loop` 캔들 수집 (워치리스트 유지). *(trader도 자체 수집함)*
+- **dashboard** : `engine.dashboard` 모니터링 웹(:8080). `state.json`만 읽는 read-only.
+
+```bash
+docker compose up -d --build              # 전체
+docker compose up -d --build dashboard    # 대시보드만 재배포 (trader/collector 계속 돔) ✅
+```
+셋 다 `./data` 볼륨 공유(캔들 캐시 + 봇 상태). 대시보드는 봇과 완전 디커플 — 상태 파일로만 통신.
+
+## 대시보드 로컬 확인
+```bash
+python3 -m engine.dashboard --port 8080   # http://localhost:8080
+```
+잔고·수익률·현재 포지션·최근 트레이드·자산곡선. 3초마다 자동 새로고침, 3분 이상 갱신 없으면 🔴 표시.
 
 ## 추천 인프라
 - **작은 VPS + Docker** (DigitalOcean/Vultr/EC2, ~$5~10/mo).

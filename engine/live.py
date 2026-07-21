@@ -56,11 +56,13 @@ from .backtest import (
 class LiveTrader:
     """실시간 봉 스트림(폴링)을 백테스트와 같은 로직으로 처리해 Executor에 주문."""
 
-    def __init__(self, preset: Preset, executor, cfg: BacktestConfig = None, warmup_days: float = 10):
+    def __init__(self, preset: Preset, executor, cfg: BacktestConfig = None, warmup_days: float = 10,
+                 state_path: str = "data/state.json"):
         self.preset = preset
         self.ex = executor
         self.cfg = cfg or BacktestConfig()
         self.warmup_days = warmup_days
+        self.state_path = state_path         # 대시보드가 읽을 상태 스냅샷(포지션·트레이드·잔고)
         self.tf_min = TIMEFRAME_MINUTES[preset.timeframe]
         self.entry_rules = preset.data.get("entryRules")
         self.entry_side = -1 if preset.direction == "short" else 1
@@ -68,6 +70,43 @@ class LiveTrader:
         self.maker_entry = execution.get("entryType") == "makerLimit"
         self._last_ot = None                 # 마지막으로 처리한 1분봉 open_time
         self._last_exit_sb = -10 ** 9        # 쿨다운용
+        self._started_at = int(time.time() * 1000)
+
+    def _write_state(self):
+        """포지션·트레이드·잔고 스냅샷을 state_path에 원자적으로 기록(대시보드용)."""
+        if not self.state_path:
+            return
+        ex = self.ex
+        pos = ex.position
+
+        def _px(x):
+            return None if x is None or (isinstance(x, float) and np.isnan(x)) else round(float(x), 2)
+
+        trades = getattr(ex, "trades", [])
+        state = {
+            "preset": self.preset.name, "symbol": self.preset.symbol, "timeframe": self.preset.timeframe,
+            "startedAt": self._started_at, "updatedAt": int(time.time() * 1000),
+            "equity": round(ex.equity(), 2), "initialEquity": round(self.cfg.initial_equity, 2),
+            "returnPct": round((ex.equity() / self.cfg.initial_equity - 1) * 100, 2),
+            "numTrades": len(trades),
+            "position": None if pos is None else {
+                "side": pos.side, "entryPrice": _px(pos.entry_price), "qty": round(pos.qty, 6),
+                "leverage": pos.leverage, "stop": _px(pos.stop_price), "tp": _px(pos.tp_price),
+                "liq": _px(pos.liq_price), "entryTime": int(pos.entry_time)},
+            "trades": [{
+                "side": t.side, "entryTime": int(t.entry_time), "entryPrice": _px(t.entry_price),
+                "exitTime": int(t.exit_time), "exitPrice": _px(t.exit_price),
+                "pnl": round(t.pnl, 2), "reason": t.reason} for t in trades[-100:]],
+        }
+        try:
+            import os
+            os.makedirs(os.path.dirname(self.state_path) or ".", exist_ok=True)
+            tmp = self.state_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                _json.dump(state, f, ensure_ascii=False)
+            os.replace(tmp, self.state_path)     # 원자적 교체
+        except Exception as e:
+            print(f"  [상태기록 실패] {e}", flush=True)
 
     # ---- 데이터 확보 (실시간: 최신 닫힌 봉까지) ----
     def _fetch(self, now_ms: int):
@@ -196,12 +235,14 @@ class LiveTrader:
     def run(self, interval: int = 60, once: bool = False):
         """폴링 루프. once=True면 한 번만. interval초마다 poll_once(now)."""
         self.bootstrap()
+        self._write_state()
         notify(f"▶️ 페이퍼 시작 {self.preset.name} {self.preset.symbol} {self.preset.timeframe} 잔고 {self.ex.equity():.0f}")
         fails = 0
         while True:
             now = int(time.time() * 1000)
             try:
                 events = self.poll_once(now_ms=now)
+                self._write_state()
                 for e in events:
                     print(f"  [{e['type']}] {e}", flush=True)
                     if e["type"] == "open":

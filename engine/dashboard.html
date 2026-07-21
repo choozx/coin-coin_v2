@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>매매 대시보드</title>
+<style>
+  :root { --bg:#0e1117; --panel:#161b22; --panel2:#1c2230; --line:#2a3140; --fg:#e6e9ef; --mut:#8a90a0;
+          --up:#26d07c; --down:#ff5c6c; --blue:#4c9be8; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font-family:system-ui,-apple-system,sans-serif; }
+  .wrap { max-width:1000px; margin:0 auto; padding:20px; }
+  header { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
+  h1 { font-size:18px; margin:0; }
+  .badge { padding:3px 10px; border-radius:20px; font-size:12px; font-weight:600; }
+  .ok { background:rgba(38,208,124,.15); color:var(--up); }
+  .stale { background:rgba(255,92,108,.15); color:var(--down); }
+  .sub { color:var(--mut); font-size:13px; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-bottom:16px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
+  .card .k { color:var(--mut); font-size:12px; margin-bottom:6px; }
+  .card .v { font-size:24px; font-weight:700; }
+  .pos { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin-bottom:16px; }
+  .pos h3, .trades h3 { margin:0 0 10px; font-size:14px; color:var(--mut); font-weight:600; }
+  .posgrid { display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:10px; }
+  .posgrid .k { color:var(--mut); font-size:11px; } .posgrid .v { font-size:15px; font-weight:600; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:right; padding:6px 8px; border-bottom:1px solid var(--line); }
+  th:first-child, td:first-child { text-align:left; }
+  th { color:var(--mut); font-weight:600; font-size:12px; }
+  .g { color:var(--up); } .r { color:var(--down); }
+  canvas { width:100%; height:120px; display:block; }
+  .empty { color:var(--mut); padding:20px; text-align:center; }
+  .err { background:rgba(255,92,108,.1); border:1px solid var(--down); color:var(--down);
+         padding:12px; border-radius:8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1 id="title">매매 대시보드</h1>
+    <span class="badge" id="status">…</span>
+    <span class="sub" id="meta"></span>
+    <span class="sub" style="margin-left:auto" id="updated"></span>
+  </header>
+  <div id="body"><div class="empty">상태 불러오는 중…</div></div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const fmt = n => n==null ? "–" : Number(n).toLocaleString(undefined,{maximumFractionDigits:2});
+const fmtT = ms => { const d=new Date(ms); return d.toLocaleString('ko-KR',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}); };
+const RN = {take_profit:"익절", stop_loss:"손절", trailing:"트레일링", signal:"신호청산", time:"시간청산", supertrend:"ST전환", liquidation:"강제청산"};
+
+async function tick(){
+  let d;
+  try { d = await (await fetch("/api/state",{cache:"no-store"})).json(); }
+  catch(e){ $("body").innerHTML = `<div class="err">상태 서버 응답 없음: ${e}</div>`; return; }
+  if (d.error){ $("body").innerHTML = `<div class="err">${d.error}</div>`; $("status").className="badge stale"; $("status").textContent="대기"; return; }
+
+  $("title").textContent = `${d.preset} · ${d.symbol} ${d.timeframe}`;
+  $("meta").textContent = `초기 ${fmt(d.initialEquity)} · 페이퍼`;
+  const age = Date.now() - d.updatedAt;
+  const alive = age < 3*60*1000;    // 3분 내 갱신이면 정상
+  $("status").className = "badge " + (alive?"ok":"stale");
+  $("status").textContent = alive ? "🟢 정상" : "🔴 멈춤/지연";
+  $("updated").textContent = `갱신 ${fmtT(d.updatedAt)} (${Math.round(age/1000)}s 전)`;
+
+  const retCls = d.returnPct>=0 ? "g" : "r";
+  const pos = d.position;
+  const posCls = pos ? (pos.side>0?"g":"r") : "";
+  let html = `<div class="cards">
+    <div class="card"><div class="k">잔고</div><div class="v">${fmt(d.equity)}</div></div>
+    <div class="card"><div class="k">수익률</div><div class="v ${retCls}">${d.returnPct>=0?"+":""}${fmt(d.returnPct)}%</div></div>
+    <div class="card"><div class="k">포지션</div><div class="v ${posCls}">${pos?(pos.side>0?"롱":"숏"):"없음"}</div></div>
+    <div class="card"><div class="k">트레이드</div><div class="v">${d.numTrades}</div></div>
+  </div>`;
+
+  if (pos){
+    html += `<div class="pos"><h3>현재 포지션</h3><div class="posgrid">
+      <div><div class="k">방향</div><div class="v ${posCls}">${pos.side>0?"롱 LONG":"숏 SHORT"}</div></div>
+      <div><div class="k">진입가</div><div class="v">${fmt(pos.entryPrice)}</div></div>
+      <div><div class="k">수량</div><div class="v">${fmt(pos.qty)}</div></div>
+      <div><div class="k">레버리지</div><div class="v">${pos.leverage}x</div></div>
+      <div><div class="k">손절</div><div class="v">${pos.stop==null?"–":fmt(pos.stop)}</div></div>
+      <div><div class="k">익절</div><div class="v">${pos.tp==null?"–":fmt(pos.tp)}</div></div>
+      <div><div class="k">청산가</div><div class="v r">${fmt(pos.liq)}</div></div>
+      <div><div class="k">진입시각</div><div class="v">${fmtT(pos.entryTime)}</div></div>
+    </div></div>`;
+  }
+
+  // 자산곡선 (트레이드 누적손익)
+  html += `<div class="pos"><h3>자산 곡선</h3><canvas id="eq"></canvas></div>`;
+
+  // 최근 트레이드
+  const trs = (d.trades||[]).slice().reverse();
+  html += `<div class="trades pos"><h3>최근 트레이드 (${trs.length})</h3>`;
+  if (!trs.length) html += `<div class="empty">아직 트레이드 없음</div>`;
+  else {
+    html += `<table><thead><tr><th>방향</th><th>진입</th><th>청산</th><th>사유</th><th>손익</th><th>시각</th></tr></thead><tbody>`;
+    for (const t of trs.slice(0,50)){
+      const c = t.pnl>=0?"g":"r";
+      html += `<tr><td class="${t.side>0?'g':'r'}">${t.side>0?"롱":"숏"}</td>`
+        + `<td>${fmt(t.entryPrice)}</td><td>${fmt(t.exitPrice)}</td>`
+        + `<td>${RN[t.reason]||t.reason}</td><td class="${c}">${t.pnl>=0?"+":""}${fmt(t.pnl)}</td>`
+        + `<td class="sub">${fmtT(t.exitTime)}</td></tr>`;
+    }
+    html += `</tbody></table>`;
+  }
+  html += `</div>`;
+  $("body").innerHTML = html;
+  drawEquity(d);
+}
+
+function drawEquity(d){
+  const cv = $("eq"); if (!cv) return;
+  const dpr = window.devicePixelRatio||1, W=cv.clientWidth, H=120;
+  cv.width=W*dpr; cv.height=H*dpr; const ctx=cv.getContext("2d"); ctx.scale(dpr,dpr);
+  let eq=d.initialEquity; const pts=[eq];
+  for (const t of (d.trades||[])) { eq+=t.pnl; pts.push(eq); }
+  if (pts.length<2){ ctx.fillStyle="#8a90a0"; ctx.fillText("데이터 부족", 10, 60); return; }
+  const mn=Math.min(...pts), mx=Math.max(...pts), rng=(mx-mn)||1;
+  const x=i=>i/(pts.length-1)*(W-8)+4, y=v=>H-8-((v-mn)/rng)*(H-16);
+  ctx.beginPath(); ctx.moveTo(x(0),y(pts[0]));
+  for (let i=1;i<pts.length;i++) ctx.lineTo(x(i),y(pts[i]));
+  ctx.strokeStyle = pts[pts.length-1]>=pts[0] ? "#26d07c" : "#ff5c6c"; ctx.lineWidth=2; ctx.stroke();
+  ctx.strokeStyle="rgba(255,255,255,.12)"; ctx.setLineDash([3,3]);
+  ctx.beginPath(); ctx.moveTo(4,y(d.initialEquity)); ctx.lineTo(W-4,y(d.initialEquity)); ctx.stroke(); ctx.setLineDash([]);
+}
+
+tick(); setInterval(tick, 3000);   // 3초마다 새로고침
+</script>
+</body>
+</html>
