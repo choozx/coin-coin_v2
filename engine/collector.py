@@ -95,9 +95,13 @@ def main():
         print(f"완료: 신규 {n:,}개")
         return
 
+    from . import control
     try:
         while True:
-            collect_once(symbols, args.seed_days, with_funding)
+            if control.service_state("collector") == "paused":
+                print("  [멈춤] 수집 건너뜀", flush=True)
+            else:
+                collect_once(symbols, args.seed_days, with_funding)
             time.sleep(args.loop)
     except KeyboardInterrupt:
         print("\n수집기 종료")

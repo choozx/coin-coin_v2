@@ -33,6 +33,14 @@
   .empty { color:var(--mut); padding:20px; text-align:center; }
   .err { background:rgba(255,92,108,.1); border:1px solid var(--down); color:var(--down);
          padding:12px; border-radius:8px; }
+  .ctrlbar { display:flex; gap:16px; flex-wrap:wrap; background:var(--panel); border:1px solid var(--line);
+             border-radius:10px; padding:10px 14px; margin-bottom:16px; }
+  .svc { display:flex; align-items:center; gap:8px; font-size:13px; }
+  .dot { width:8px; height:8px; border-radius:50%; display:inline-block; }
+  .dot.r { background:var(--up); } .dot.p { background:#e0a030; }
+  .svc button { padding:4px 12px; border-radius:6px; border:1px solid var(--line); background:var(--panel2);
+                color:var(--fg); cursor:pointer; font-size:12px; }
+  .svc button:hover { border-color:var(--blue); }
 </style>
 </head>
 <body>
@@ -43,6 +51,7 @@
     <span class="sub" id="meta"></span>
     <span class="sub" style="margin-left:auto" id="updated"></span>
   </header>
+  <div id="control" class="ctrlbar"></div>
   <div id="body"><div class="empty">상태 불러오는 중…</div></div>
 </div>
 <script>
@@ -51,7 +60,24 @@ const fmt = n => n==null ? "–" : Number(n).toLocaleString(undefined,{maximumFr
 const fmtT = ms => { const d=new Date(ms); return d.toLocaleString('ko-KR',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}); };
 const RN = {take_profit:"익절", stop_loss:"손절", trailing:"트레일링", signal:"신호청산", time:"시간청산", supertrend:"ST전환", liquidation:"강제청산"};
 
+function svcBtn(svc, label, state){
+  const paused = state === "paused";
+  return `<span class="svc"><b>${label}</b> <span class="dot ${paused?'p':'r'}"></span>${paused?'멈춤':'실행중'} `
+    + `<button onclick="setSvc('${svc}','${paused?'running':'paused'}')">${paused?'▶ 재개':'⏸ 멈춤'}</button></span>`;
+}
+async function renderControl(){
+  let c = {};
+  try { c = await (await fetch("/api/control",{cache:"no-store"})).json(); } catch(e){}
+  $("control").innerHTML = svcBtn("trader","봇", c.trader||"running") + svcBtn("collector","수집기", c.collector||"running");
+}
+async function setSvc(svc, state){
+  try { await fetch("/api/control",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:svc,state})}); }
+  catch(e){ alert("제어 실패: "+e); }
+  renderControl();
+}
+
 async function tick(){
+  renderControl();
   let d;
   try { d = await (await fetch("/api/state",{cache:"no-store"})).json(); }
   catch(e){ $("body").innerHTML = `<div class="err">상태 서버 응답 없음: ${e}</div>`; return; }
@@ -61,8 +87,9 @@ async function tick(){
   $("meta").textContent = `초기 ${fmt(d.initialEquity)} · 페이퍼`;
   const age = Date.now() - d.updatedAt;
   const alive = age < 3*60*1000;    // 3분 내 갱신이면 정상
-  $("status").className = "badge " + (alive?"ok":"stale");
-  $("status").textContent = alive ? "🟢 정상" : "🔴 멈춤/지연";
+  if (!alive){ $("status").className="badge stale"; $("status").textContent="🔴 멈춤/지연"; }
+  else if (d.paused){ $("status").className="badge"; $("status").style.cssText="background:rgba(224,160,48,.15);color:#e0a030"; $("status").textContent="⏸ 일시정지(새 진입 차단)"; }
+  else { $("status").className="badge ok"; $("status").style.cssText=""; $("status").textContent="🟢 정상"; }
   $("updated").textContent = `갱신 ${fmtT(d.updatedAt)} (${Math.round(age/1000)}s 전)`;
 
   const retCls = d.returnPct>=0 ? "g" : "r";

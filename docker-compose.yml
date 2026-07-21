@@ -15,6 +15,7 @@ services:
       INTERVAL: ${INTERVAL:-60}
       EQUITY: ${EQUITY:-10000}
       NOTIFY_WEBHOOK: ${NOTIFY_WEBHOOK:-}
+      CONTROL_PATH: /app/data/control.json  # 대시보드의 멈춤/재개 신호를 읽음
       TZ: UTC
     volumes:
       - ./data:/app/data                    # 캔들 캐시 + state.json(대시보드가 읽음)
@@ -28,11 +29,12 @@ services:
     command: python -m engine.dashboard --port 8080
     environment:
       STATE_PATH: /app/data/state.json      # trader가 기록한 상태를 읽음
+      CONTROL_PATH: /app/data/control.json  # 멈춤/재개 제어 파일(대시보드가 씀)
       TZ: UTC
     ports:
       - "${DASH_PORT:-8080}:8080"
     volumes:
-      - ./data:/app/data:ro                 # 상태 파일 읽기 전용
+      - ./data:/app/data                    # state 읽기 + control 쓰기(멈춤/재개)
     logging: { driver: json-file, options: { max-size: "10m", max-file: "3" } }
 
   collector:                                # 캔들 수집 — 24/7 (trader도 자체 수집하나, 워치리스트 유지용)
@@ -44,6 +46,7 @@ services:
     environment:
       COLLECT_SYMBOLS: ${COLLECT_SYMBOLS:-BTCUSDC}
       INTERVAL: ${INTERVAL:-60}
+      CONTROL_PATH: /app/data/control.json  # 대시보드의 멈춤/재개 신호를 읽음
       TZ: UTC
     volumes:
       - ./data:/app/data

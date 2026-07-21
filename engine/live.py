@@ -42,6 +42,7 @@ def notify(msg: str) -> None:
 
 from . import binance_math as bm
 from . import candle_store
+from . import control
 from . import indicators as ind
 from .candles import resample, signal_close_index, TIMEFRAME_MINUTES, MINUTE_MS
 from .conditions import SeriesResolver, evaluate
@@ -71,6 +72,7 @@ class LiveTrader:
         self._last_ot = None                 # 마지막으로 처리한 1분봉 open_time
         self._last_exit_sb = -10 ** 9        # 쿨다운용
         self._started_at = int(time.time() * 1000)
+        self._paused = False                 # control.json에서 읽음(멈춤=새 진입 차단)
 
     def _write_state(self):
         """포지션·트레이드·잔고 스냅샷을 state_path에 원자적으로 기록(대시보드용)."""
@@ -86,6 +88,7 @@ class LiveTrader:
         state = {
             "preset": self.preset.name, "symbol": self.preset.symbol, "timeframe": self.preset.timeframe,
             "startedAt": self._started_at, "updatedAt": int(time.time() * 1000),
+            "paused": self._paused,
             "equity": round(ex.equity(), 2), "initialEquity": round(self.cfg.initial_equity, 2),
             "returnPct": round((ex.equity() / self.cfg.initial_equity - 1) * 100, 2),
             "numTrades": len(trades),
@@ -130,6 +133,7 @@ class LiveTrader:
             base = self._fetch(now_ms)
         if len(base) < 2:
             return []
+        self._paused = control.service_state("trader") == "paused"   # 멈춤이면 새 진입 차단
         signal = resample(base, self.tf_min)
         bar_of, is_close = signal_close_index(base, self.tf_min)
         atr_series = ind.atr(signal.high, signal.low, signal.close, 14)
@@ -197,8 +201,9 @@ class LiveTrader:
             if time_stop is not None and (sb - pos.entry_signal_idx) >= time_stop["maxBars"]:
                 self._do_close(sig_close, "time", fill_time, False, sb, events); return
 
-        # 진입
-        if ex.position is None and _entry_allowed(sb, fill_time, self.preset.filter, self._last_exit_sb, cfg):
+        # 진입 (멈춤 상태면 새 진입 안 함 — 기존 포지션은 위에서 계속 관리됨)
+        if ex.position is None and not self._paused \
+                and _entry_allowed(sb, fill_time, self.preset.filter, self._last_exit_sb, cfg):
             side = None
             if self.entry_rules:
                 for rule in self.entry_rules:

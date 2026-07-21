@@ -13,6 +13,8 @@ import json
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from . import control
+
 _HTML = os.path.join(os.path.dirname(__file__), "dashboard.html")
 STATE_PATH = os.environ.get("STATE_PATH", "data/state.json")
 
@@ -39,8 +41,23 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, json.dumps({"error": "상태 없음 — 봇이 아직 안 돌았거나 state.json 미생성"}))
             except Exception as e:
                 self._send(200, json.dumps({"error": str(e)}))
+        elif self.path == "/api/control":
+            self._send(200, json.dumps(control.read_control()))
         else:
             self._send(404, b"not found", "text/plain")
+
+    def do_POST(self):
+        # 멈춤/재개 제어 — {"service":"trader"|"collector","state":"running"|"paused"}
+        if self.path != "/api/control":
+            self._send(404, b"not found", "text/plain")
+            return
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length))
+            ctrl = control.set_service(body["service"], body["state"])
+            self._send(200, json.dumps({"ok": True, "control": ctrl}))
+        except Exception as e:
+            self._send(400, json.dumps({"error": str(e)}))
 
     def log_message(self, *a):
         pass
