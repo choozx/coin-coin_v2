@@ -10,8 +10,11 @@
 - **dashboard** : `engine.dashboard` 모니터링 웹(:8080) + 봇 멈춤/재개 제어. **백테스트는 프로덕션에 안 올림**(CPU·보안).
 
 ```bash
+# 로컬(직접 빌드):
 docker compose up -d --build              # 전체
 docker compose up -d --build dashboard    # 대시보드만 재배포 (trader/collector 계속 돔) ✅
+# 프로덕션(EC2, ghcr 이미지 pull — 컴파일 없음):
+docker compose pull && docker compose up -d --no-build
 ```
 셋 다 `./data` 볼륨 공유(캔들 캐시 + 봇 상태). 대시보드는 봇과 완전 디커플 — 상태 파일로만 통신.
 
@@ -28,6 +31,31 @@ python3 -m engine.server                  # http://localhost:8765
 ## 추천 인프라
 - **작은 VPS + Docker** (DigitalOcean/Vultr/EC2, ~$5~10/mo).
 - **리전은 바이낸스 근처**(도쿄/싱가포르) — 실주문 붙일 때 지연 최소화.
+- **EC2 하나로 충분** — trader+collector+dashboard가 워크로드가 가벼움(60초 폴링). 백테스트를
+  프로덕션에서 뺀 덕에 CPU 부담이 작아 프리티어(t2/t3.micro, 1vCPU·1GB)로도 돌아간다.
+
+## ⚠️ 프리티어(1GB RAM)에서 돌릴 때 — 3가지 안전장치
+1GB는 세 컨테이너(각 numpy+TA-Lib)에 **아슬아슬**하다. 아래 셋으로 OOM을 막는다.
+
+**① EC2에서 이미지 빌드 금지 → CI가 빌드, EC2는 pull만** (제일 중요)
+TA-Lib C 컴파일은 1GB에서 빌드 중 OOM/타임아웃 위험. 그래서 자동배포가 **GitHub Actions에서
+빌드→ghcr.io push**, EC2는 `docker compose pull`만 한다(아래 "자동 배포" 참고). EC2에서
+`--build`는 쓰지 말 것.
+
+**② 스왑 2GB — 순간 피크 완충 (사실상 필수).** VPS에서 1회:
+```bash
+sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
+sudo mkswap /swapfile && sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab   # 재부팅 후에도 유지
+free -h                                                       # Swap: 2.0Gi 확인
+```
+
+**③ 컨테이너 메모리 상한** — `docker-compose.yml`의 `mem_limit`으로 이미 설정
+(trader 340M / collector 200M / dashboard 160M ≈ 700M < 1GB). 한 놈이 다 먹고
+전체를 죽이는 것 방지. 여전히 빡빡하면 트레이더 `warmup_days`를 10→3~5로 낮춘다.
+
+> 프리티어 조건: **750h/월** = 인스턴스 **1개 24/7면 무료**(2개면 초과 과금). **12개월 한정**,
+> 이후 t3.micro ~$8~10/mo. EBS 30GB 무료 → 캔들 DB 넉넉.
 
 ## 로컬에서 먼저 (Docker 없이)
 ```bash
@@ -64,25 +92,37 @@ docker compose down
 ## 알림 (선택)
 `NOTIFY_WEBHOOK`에 Discord/Slack 웹훅 URL을 넣으면 시작·진입·청산·에러를 받는다(stdlib만 사용).
 
-## 자동 배포 (prod 브랜치 push → VPS)
+## 자동 배포 (prod 브랜치 push → EC2)
 `.github/workflows/deploy.yml` — **`main`=개발, `prod`=배포**. `prod`에 push하면
-① Docker 이미지 빌드 검증(TA-Lib 게이트) → ② VPS에 SSH로 `git pull` + `docker compose up -d --build`.
+① **GitHub Actions가 이미지 빌드(TA-Lib 컴파일) → ghcr.io에 push** →
+② EC2는 SSH로 compose/preset만 갱신 + **`docker compose pull` (컴파일 없음)** → 재기동.
+무거운 빌드는 Actions 러너가 하고 **EC2(1GB)는 완성 이미지만 받는다** → 프리티어 안전.
 
 **VPS 1회 준비:**
 ```bash
 # 서버에서
 sudo apt-get update && sudo apt-get install -y docker.io docker-compose-plugin git
 git clone <레포URL> ~/auto_trading && cd ~/auto_trading
+# 스왑 2GB (위 "프리티어" 절 참고) — 프리티어면 반드시
 cat > .env <<'ENV'
+IMAGE=ghcr.io/choozx/coin-coin_v2:latest   # ← ghcr 이미지. 배포 시 커밋 SHA로 자동 고정됨
 PRESET=presets/saved/내전략.json
 INTERVAL=60
+EQUITY=10000
+COLLECT_SYMBOLS=BTCUSDC
 NOTIFY_WEBHOOK=
 ENV
 # 공개키 등록: GitHub Actions가 쓸 키의 pubkey를 ~/.ssh/authorized_keys 에
 ```
 
+**ghcr 이미지 접근:** ghcr 패키지를 **public으로** 두면 EC2가 인증 없이 pull(가장 간단).
+private로 유지하려면 `GHCR_PAT` 시크릿(read:packages 권한 PAT) 등록 → deploy가 EC2에서
+자동 `docker login ghcr.io` 한다.
+
 **GitHub Secrets** (Settings → Secrets and variables → Actions):
-`VPS_HOST` · `VPS_USER` · `VPS_SSH_KEY`(개인키 전체) · `VPS_PATH`(예: `/home/ubuntu/auto_trading`) · `VPS_PORT`(선택).
+`VPS_HOST` · `VPS_USER` · `VPS_SSH_KEY`(개인키 전체) · `VPS_PATH`(예: `/home/ubuntu/auto_trading`) ·
+`VPS_PORT`(선택) · `GHCR_PAT`(이미지 private일 때만). `GITHUB_TOKEN`은 Actions가 ghcr push에
+자동 사용(별도 등록 불필요).
 
 **배포하기:**
 ```bash

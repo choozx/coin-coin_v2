@@ -29,6 +29,11 @@ DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 def _conn(path=DB_PATH):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     c = sqlite3.connect(path)
+    # 동시 쓰기 안전: trader와 collector가 같은 candles.db에 붙는다.
+    #   WAL      → 읽기/쓰기 동시 가능(리더가 라이터를 막지 않음).
+    #   busy_timeout → 락 걸리면 즉시 에러 대신 5초 대기 → 'database is locked' 회피.
+    c.execute("PRAGMA journal_mode=WAL")
+    c.execute("PRAGMA busy_timeout=5000")
     c.execute("""CREATE TABLE IF NOT EXISTS candle(
         symbol TEXT, open_time INTEGER,
         open REAL, high REAL, low REAL, close REAL, volume REAL,
