@@ -231,7 +231,9 @@ def run(base: Candles, preset: Preset, cfg: BacktestConfig = None) -> Metrics:
                 rate = cfg.funding_schedule.get(ot, cfg.funding_rate) if cfg.funding_schedule else cfg.funding_rate
                 f = bm.funding_fee(cl, pos.qty, pos.side, rate)
                 pos.funding_accum += f
-                equity += f  # 현금흐름 즉시 반영
+                # equity 반영은 청산 시 pnl(= gross - fees + funding_accum)로 한 번만.
+                # 여기서 즉시 더하면 청산 때 또 더해져 펀딩이 이중 계상된다(자산곡선·MDD·수익률이 틀어짐).
+                # PaperExecutor.accrue_funding 과 같은 규칙 — 백테스트/페이퍼/실거래가 같아야 한다.
 
             # 2) 청산 (손절보다 먼저!)
             liquidated = (pos.side == 1 and lo <= pos.liq_price) or \
