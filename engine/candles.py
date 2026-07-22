@@ -110,13 +110,16 @@ def signal_close_index(base: Candles, target_min: int):
     반환: (signal_bar_of, is_close)
       signal_bar_of[t] = t가 속한 상위봉 인덱스
       is_close[t]       = t가 그 상위봉의 마지막 1분봉인가 (신호 판정 시점)
+
+    판정은 **시각으로만** 한다(뒤 원소를 보지 않는다). 예전엔 "다음 봉의 bucket이 다르거나
+    배열의 마지막"이었는데, 그러면 배열 끝이 **항상** 마감으로 잡혔다. 실시간에선 매 폴링의
+    마지막 1분봉이 거기 걸려 **아직 형성 중인 상위봉을 마감된 것처럼 판정** → 라이브가
+    백테스트와 다른 시점에 매매했다. 데이터에 결측이 있을 때도 마지막 '남아있는' 분을
+    마감으로 오인했다. 진짜 마감 = 그 분이 끝나는 순간이 상위봉 경계와 같을 때.
     """
     bucket_ms = target_min * MINUTE_MS
     bucket = (base.open_time // bucket_ms) * bucket_ms
     uniq, inv = np.unique(bucket, return_inverse=True)
     signal_bar_of = inv  # 0..n-1
-    # 각 상위봉의 마지막 1분봉 = 다음 원소의 bucket이 다르거나 마지막
-    is_close = np.zeros(len(base), dtype=bool)
-    is_close[-1] = True
-    is_close[:-1] = np.diff(inv) != 0
+    is_close = (base.open_time + MINUTE_MS) % bucket_ms == 0
     return signal_bar_of, is_close

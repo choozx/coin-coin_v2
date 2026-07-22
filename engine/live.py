@@ -317,11 +317,27 @@ class LiveTrader:
         ex, cfg = self.ex, self.cfg
         ot = int(base.open_time[t]); hi, lo, cl = base.high[t], base.low[t], base.close[t]
         sb = int(bar_of[t])                  # 이 1분봉이 속한 신호봉 인덱스(쿨다운·청산사유용)
+
+        # 보유 포지션의 1분봉 해상도 관리(펀딩→청산→손절/트레일링/익절)를 먼저.
+        # ★ 별도 메서드인 이유: 청산 시 return이 '이 블록'만 끝내야 한다. 예전엔 _step 전체를
+        #   빠져나가서, 청산이 일어난 봉에선 진입 판정을 통째로 건너뛰었다 → backtest.run()은
+        #   같은 봉에서 청산 후 곧바로 진입하므로 라이브만 한 봉 늦게 진입(대조 테스트로 발견).
+        self._manage_position(ot, hi, lo, cl, sb, events)
+
+        if not is_close[t]:
+            return
+        self._signal_step(signal, atr_series, resolver, ot, sb, events)
+
+    def _manage_position(self, ot, hi, lo, cl, sb, events):
+        """보유 중 1분봉 관리: 펀딩 정산 → 청산 → 손절/트레일링/익절 (backtest.run()과 같은 순서)."""
+        ex, cfg = self.ex, self.cfg
         pos = ex.position
 
         if pos is not None:
             if bm.is_funding_time(ot):
-                ex.accrue_funding(cl, cfg.funding_rate)
+                # 실제 펀딩 히스토리가 있으면 그걸 쓴다(없는 구간만 상수 근사) — backtest.run()과 동일 규칙.
+                rate = cfg.funding_schedule.get(ot, cfg.funding_rate) if cfg.funding_schedule else cfg.funding_rate
+                ex.accrue_funding(cl, rate)
             # 청산(손절보다 먼저)
             liq = (pos.side == 1 and lo <= pos.liq_price) or (pos.side == -1 and hi >= pos.liq_price)
             if liq:
@@ -345,8 +361,9 @@ class LiveTrader:
                 if not np.isnan(pos.tp_price) and lo <= pos.tp_price:
                     self._do_close(pos.tp_price, "take_profit", ot, True, sb, events); return
 
-        if not is_close[t]:
-            return
+    def _signal_step(self, signal, atr_series, resolver, ot, sb, events):
+        """신호봉 마감 시점: 신호 기반 청산 → 진입 판정 (backtest.run()의 is_close 블록과 동일)."""
+        ex, cfg = self.ex, self.cfg
         sig_close = signal.close[sb]; fill_time = ot + MINUTE_MS
         ex_block = self.preset.exit
 
@@ -355,13 +372,15 @@ class LiveTrader:
             pos = ex.position
             st_exit = ex_block.get("supertrendExit")
             cond = ex_block.get("condition"); time_stop = ex_block.get("timeStop")
+            # elif 체인 + return 없음: 하나만 발동하고, 청산 후엔 아래 진입 판정으로 떨어진다.
+            # (backtest.run()도 신호 청산 직후 같은 신호봉에서 재진입을 허용 — 플립 전략의 전제)
             if st_exit is not None and _supertrend_flip_exit(resolver, st_exit, pos.side, sb):
                 reason = {"stopLoss": "stop_loss", "exit": "supertrend"}.get(st_exit.get("as"), "take_profit")
-                self._do_close(sig_close, reason, fill_time, self.maker_entry, sb, events); return
-            if cond is not None and evaluate(cond, resolver, sb):
-                self._do_close(sig_close, "signal", fill_time, False, sb, events); return
-            if time_stop is not None and (sb - pos.entry_signal_idx) >= time_stop["maxBars"]:
-                self._do_close(sig_close, "time", fill_time, False, sb, events); return
+                self._do_close(sig_close, reason, fill_time, self.maker_entry, sb, events)
+            elif cond is not None and evaluate(cond, resolver, sb):
+                self._do_close(sig_close, "signal", fill_time, False, sb, events)
+            elif time_stop is not None and (sb - pos.entry_signal_idx) >= time_stop["maxBars"]:
+                self._do_close(sig_close, "time", fill_time, False, sb, events)
 
         # 진입 (멈춤·가드레일 발동 시 새 진입 안 함 — 기존 포지션은 위에서 계속 관리됨)
         if ex.position is None and not self._paused and self._check_guardrail() is None \
