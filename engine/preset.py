@@ -76,8 +76,17 @@ class Preset:
 
 
 # --- 전략 선택 (매매 봇이 어떤 프리셋으로 돌지) --------------------------------
-# 봇이 고를 수 있는 전략 = presets/examples + presets/saved 의 프리셋들.
-STRATEGY_DIRS = ("presets/examples", "presets/saved")
+# 봇이 고를 수 있는 전략 =
+#   presets/examples : git에 있는 것 → 이미지에 구워져 배포된다(재현 가능·버전 관리됨)
+#   presets/saved    : GUI가 로컬에 저장한 개인 프리셋(gitignore, 컨테이너엔 없음)
+#   data/strategies  : ★ 공유 볼륨. 배포와 무관하게 파일만 던져 넣으면 목록에 뜬다.
+#     프로덕션에서 "코드 배포 없이 새 전략을 투입"하는 통로 —
+#       scp my.json ec2:~/auto_trading/data/strategies/ → 대시보드에서 선택(무포지션이면 핫스왑)
+#     ⚠️ git 밖이라 버전 관리가 안 된다. 계속 쓸 전략은 presets/examples 로 커밋할 것 —
+#        원장(trades.db)의 strategy 컬럼이 이 경로를 가리키므로, 파일이 사라지면 나중에
+#        "이 거래는 어떤 전략이 친 건가"를 재현할 수 없다(tools/fill_audit.py 도 이 경로를 쓴다).
+STRATEGY_DIR_DATA = os.environ.get("STRATEGY_DIR_DATA", "data/strategies")
+STRATEGY_DIRS = ("presets/examples", "presets/saved", STRATEGY_DIR_DATA)
 
 
 # --- 라이브 봇: 프리셋(신호) + 봇 설정(실행/리스크) 병합 -----------------------

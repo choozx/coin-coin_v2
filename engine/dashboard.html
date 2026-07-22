@@ -130,7 +130,9 @@ function stratSelector(d, selPath){
   const pending = (running && running !== active) ? active : null;   // 골랐지만 봇이 아직 안 바꿈
   const cur = STRATS.find(s => s.path === active);
   window._stratActivePath = active || "";
-  const curLabel = cur ? ((cur.source==="saved"?"📁 ":"")+cur.name) : "";
+  // 전략 출처: examples=배포된 것(git) · saved=로컬 GUI · strategies=볼륨에 던져넣은 것(배포 무관)
+  const srcIcon = (s) => s === "saved" ? "📁 " : s === "strategies" ? "📤 " : "";
+  const curLabel = cur ? (srcIcon(cur.source)+cur.name) : "";
   window._stratCurLabel = curLabel;                      // 선택값(포커스 해제 시 복원)
   // 심볼 검색과 같은 콤보박스: 선택값을 입력창에 표시, 포커스=검색, 클릭/Enter로 선택
   let html = `<span class="svc"><b>전략</b>`
@@ -159,7 +161,7 @@ function _stratOptsHTML(q){
   window._stratMatches = matches; window._stratIdx = -1;
   if (!matches.length) return `<div class="empty2">일치하는 전략 없음</div>`;
   return matches.map(s => {
-    const mark = (s.source==="saved"?"📁 ":"") + (s.path===active?"✓ ":"");
+    const mark = srcIcon(s.source) + (s.path===active?"✓ ":"");
     return `<div class="opt" data-path="${s.path}" onmousedown="stratPick(event)">${mark}${s.name}</div>`;
   }).join("");
 }

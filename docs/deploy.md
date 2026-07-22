@@ -73,10 +73,11 @@ python3 -m engine.live presets/examples/rsi-oversold-long.json --paper --interva
 ```bash
 # 1) 설정 (.env — gitignore됨)
 cat > .env <<'ENV'
-PRESET=presets/saved/내전략.json
+PRESET=presets/examples/live-strategy.json   # git에 있는 프리셋만 이미지에 들어간다
 INTERVAL=60
 EQUITY=10000
-NOTIFY_WEBHOOK=            # (선택) Discord/Slack 웹훅 URL — 진입/청산/에러 알림
+# (선택) Discord/Slack 웹훅 URL — 진입/청산/에러 알림
+NOTIFY_WEBHOOK=
 ENV
 
 # 2) 빌드 & 실행 (백그라운드, 자동 재시작)
@@ -123,7 +124,7 @@ git clone <레포URL> ~/auto_trading && cd ~/auto_trading
 # 스왑 2GB (위 "프리티어" 절 참고) — 프리티어면 반드시
 cat > .env <<'ENV'
 IMAGE=ghcr.io/choozx/coin-coin_v2:latest   # ← ghcr 이미지. 배포 시 커밋 SHA로 자동 고정됨
-PRESET=presets/saved/내전략.json
+PRESET=presets/examples/live-strategy.json   # presets/saved 는 이미지에 없다(gitignore)
 INTERVAL=60
 EQUITY=10000
 COLLECT_SYMBOLS=BTCUSDC
@@ -157,6 +158,31 @@ git push origin prod        # 이후 이 push가 배포 트리거
   (collector·dashboard엔 불필요). 재배포해도 `.env`는 서버에 유지 → 키가 GitHub를 안 거침.
 - 키 발급: **Reading+Futures / 출금(Withdrawals) OFF / IP 화이트리스트**. 처음엔 `BINANCE_TESTNET=1`.
 - 키가 없으면 `LiveExecutor` 생성 시 명확한 에러 → **페이퍼(`--paper`)로만 동작**(실주문 불가).
+
+## 전략 투입 — 코드 배포 없이 (평상시)
+
+로컬에서 백테스트로 만든 프리셋을 **배포와 무관하게** 돌리고 싶을 때. 봇이 고르는 전략 목록은
+세 곳을 스캔한다(`engine/preset.py` `STRATEGY_DIRS`):
+
+| 디렉토리 | 배포 경로 | 용도 |
+|---|---|---|
+| `presets/examples/` | git → 이미지에 구워짐 | **계속 쓸 전략**. 버전 관리·재현 가능 |
+| `presets/saved/` | gitignore, **컨테이너엔 없음** | 로컬 GUI 저장용(프로덕션에서 이 경로를 쓰지 말 것) |
+| `data/strategies/` | 공유 볼륨 | **평상시 투입 통로.** 파일만 던지면 목록에 뜬다 |
+
+```bash
+# 로컬 → EC2 (재배포·재시작 없음)
+scp -i ~/.ssh/key.pem my-strategy.json ec2-user@<EIP>:~/auto_trading/data/strategies/
+# 대시보드(SSH 터널 http://localhost:8080) → 전략 목록에 📤 로 뜬다 → 선택
+```
+
+선택하면 봇이 다음 폴링에 **무포지션이면 교체**한다(포지션 보유 중이면 청산 후로 미룸 — 안전).
+`.env` 를 고치거나 컨테이너를 재시작할 필요가 없다.
+
+> ⚠️ `data/strategies/` 는 git 밖이라 **버전 관리가 안 된다.** 원장(`trades.db`)의 `strategy`
+> 컬럼이 이 경로를 가리키므로, 파일을 지우면 나중에 "이 거래는 어떤 전략이 친 건가"를 재현할 수
+> 없다(`tools/fill_audit.py` 도 이 경로로 프리셋을 찾는다). **계속 쓸 전략은 `presets/examples/`
+> 로 커밋할 것** — 프리셋만 바뀌어도 trader 컨테이너가 자동 교체된다(`trader_extra=^presets/`).
 
 ## ⚠️ 실거래(실돈)로 넘어가기 전 반드시
 현재는 **페이퍼 전용**(실주문 없음). `LiveExecutor`는 배선 골격만 — env 로드·ccxt 연결·읽기전용
