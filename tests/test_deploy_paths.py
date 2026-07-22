@@ -91,6 +91,33 @@ def test_every_engine_module_is_covered():
     )
 
 
+def _conf_extra_patterns() -> list[str]:
+    """모든 *_extra 정규식(서비스별 + all_extra)."""
+    out = []
+    for line in CONF.read_text(encoding="utf-8").splitlines():
+        if "_extra=" in line and not line.startswith("#"):
+            pat = line.split("=", 1)[1].strip()
+            if pat:
+                out.append(pat)
+    return out
+
+
+def test_every_frontend_file_is_covered():
+    """engine/*.html 도 어느 *_extra 에는 잡혀야 한다.
+
+    모듈(.py)만 검사하다 collector.html 이 dashboard_extra 에서 빠진 채 지나갔다 —
+    UI를 고쳐도 대시보드 컨테이너가 안 바뀌어 '배포 성공'인데 화면은 옛것.
+    """
+    import re
+    pats = [re.compile(p) for p in _conf_extra_patterns()]
+    orphans = [f"engine/{p.name}" for p in sorted(ENGINE.glob("*.html"))
+               if not any(rx.search(f"engine/{p.name}") for rx in pats)]
+    assert not orphans, (
+        f"어느 *_extra 에도 안 잡히는 프론트엔드 파일: {orphans} — 이 파일만 고친 배포는 "
+        f"아무 컨테이너도 교체하지 않는다. deploy/service-deps.conf 의 해당 *_extra 에 추가할 것."
+    )
+
+
 if __name__ == "__main__":
     passed = 0
     for name, fn in sorted(globals().items()):
