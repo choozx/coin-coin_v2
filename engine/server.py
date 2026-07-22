@@ -3,8 +3,8 @@
     python3 -m engine.server            # http://localhost:8765 접속
     python3 -m engine.server --port 9000
 
-라우트:  /(랜딩)=매매 대시보드(/dashboard 별칭) · /backtest=백테스트 스튜디오 · /collector=데이터·수집기
-프론트엔드: dashboard.html · gui.html · collector.html.
+라우트:  /(랜딩)=매매 대시보드(/dashboard 별칭) · /backtest=백테스트 스튜디오 · /collector=데이터·수집기 · /settings=글로벌 설정
+프론트엔드: dashboard.html · gui.html · collector.html · settings.html.
 """
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ from . import ledger
 _HTML = os.path.join(os.path.dirname(__file__), "gui.html")
 _DASH_HTML = os.path.join(os.path.dirname(__file__), "dashboard.html")   # 매매 대시보드(같은 포트 /dashboard)
 _COLLECTOR_HTML = os.path.join(os.path.dirname(__file__), "collector.html")   # 데이터·수집기 관리(/collector)
+_SETTINGS_HTML = os.path.join(os.path.dirname(__file__), "settings.html")     # 글로벌 설정(/settings)
 STATE_PATH = os.environ.get("STATE_PATH", "data/state.json")
 # 차트 라이브러리(TradingView Lightweight Charts, Apache 2.0). 벤더링해서 오프라인에서도 동작.
 _CHARTS_JS = os.path.join(os.path.dirname(__file__), "vendor",
@@ -628,6 +629,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps(_cache_list()))
         elif self.path == "/api/presets":
             self._send(200, json.dumps(_list_saved_presets()))
+        elif self.path in ("/settings", "/settings/"):       # 글로벌 설정(가드레일·레버리지 티어)
+            with open(_SETTINGS_HTML, "rb") as f:
+                self._send(200, f.read(), "text/html; charset=utf-8")
         elif self.path in ("/collector", "/collector/"):     # 데이터·수집기 관리 페이지
             with open(_COLLECTOR_HTML, "rb") as f:
                 self._send(200, f.read(), "text/html; charset=utf-8")

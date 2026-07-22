@@ -18,6 +18,9 @@ CONF = ROOT / "deploy" / "service-deps.conf"
 
 ENTRY = {"trader": "live", "collector": "collector", "dashboard": "dashboard"}
 
+# 프로덕션 대시보드(engine.dashboard)가 서빙하는 페이지들 — 새 페이지를 추가하면 여기에도 넣을 것.
+PROD_PAGES = ("dashboard.html", "collector.html", "settings.html")
+
 
 def _local_modules() -> dict[str, pathlib.Path]:
     return {p.stem: p for p in ENGINE.glob("*.py")}
@@ -132,7 +135,7 @@ def test_prod_dashboard_serves_every_api_its_pages_call():
     import re
     dash_py = (ENGINE / "dashboard.py").read_text(encoding="utf-8")
     served = set(re.findall(r'"(/api/[a-z_-]+)"', dash_py))
-    for page in ("dashboard.html", "collector.html"):
+    for page in PROD_PAGES:
         called = set(re.findall(r'["\'`](/api/[a-z_-]+)', (ENGINE / page).read_text(encoding="utf-8")))
         missing = called - served
         assert not missing, (
@@ -151,7 +154,7 @@ def test_prod_dashboard_has_no_dead_page_links():
     """
     import re
     dash_py = (ENGINE / "dashboard.py").read_text(encoding="utf-8")
-    for page in ("dashboard.html", "collector.html"):
+    for page in PROD_PAGES:
         html = (ENGINE / page).read_text(encoding="utf-8")
         for m in re.finditer(r'<a\s+href="(/[^"#]*)"([^>]*)>', html):
             href, attrs = m.group(1), m.group(2)

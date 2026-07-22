@@ -21,6 +21,7 @@ from . import settings
 
 _HTML = os.path.join(os.path.dirname(__file__), "dashboard.html")
 _COLLECTOR_HTML = os.path.join(os.path.dirname(__file__), "collector.html")   # 데이터·수집기 관리
+_SETTINGS_HTML = os.path.join(os.path.dirname(__file__), "settings.html")     # 글로벌 설정(가드레일·레버리지 티어)
 _CHARTS_JS = os.path.join(os.path.dirname(__file__), "vendor",
                           "lightweight-charts.standalone.production.js")
 # 대시보드에는 백테스트 스튜디오가 없다(server.py 전용, 프로덕션 이미지에서 제외).
@@ -43,6 +44,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/" or self.path.startswith("/?"):
             with open(_HTML, "rb") as f:
                 # 플래그를 **앞에** — 페이지 하단 스크립트가 이 값을 읽으므로 순서가 뒤집히면 안 된다.
+                self._send(200, _NO_STUDIO + f.read(), "text/html; charset=utf-8")
+        elif self.path in ("/settings", "/settings/"):
+            with open(_SETTINGS_HTML, "rb") as f:
                 self._send(200, _NO_STUDIO + f.read(), "text/html; charset=utf-8")
         elif self.path in ("/collector", "/collector/"):
             # 수집 심볼 관리·구멍 복구는 프로덕션에서 더 필요하다(수집기가 24/7 도는 곳이니까).
