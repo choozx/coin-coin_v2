@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>데이터·수집기</title>
+<style>
+  :root { --bg:#0e1117; --panel:#161b22; --panel2:#1c2230; --line:#2a3140; --fg:#e6e9ef; --mut:#8a90a0;
+          --up:#26d07c; --down:#ff5c6c; --blue:#4c9be8; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font-family:system-ui,-apple-system,sans-serif; }
+  .wrap { max-width:1000px; margin:0 auto; padding:20px; }
+  header { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
+  h1 { font-size:18px; margin:0; }
+  .badge { padding:3px 10px; border-radius:20px; font-size:12px; font-weight:600; }
+  .ok { background:rgba(38,208,124,.15); color:var(--up); }
+  .stale { background:rgba(255,92,108,.15); color:var(--down); }
+  .sub { color:var(--mut); font-size:13px; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-bottom:16px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
+  .card .k { color:var(--mut); font-size:12px; margin-bottom:6px; }
+  .card .v { font-size:24px; font-weight:700; }
+  .pos { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin-bottom:16px; }
+  .pos h3, .trades h3 { margin:0 0 10px; font-size:14px; color:var(--mut); font-weight:600; }
+  .posgrid { display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:10px; }
+  .posgrid .k { color:var(--mut); font-size:11px; } .posgrid .v { font-size:15px; font-weight:600; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:right; padding:6px 8px; border-bottom:1px solid var(--line); }
+  th:first-child, td:first-child { text-align:left; }
+  th { color:var(--mut); font-weight:600; font-size:12px; }
+  .g { color:var(--up); } .r { color:var(--down); }
+  canvas { width:100%; height:120px; display:block; }
+  .empty { color:var(--mut); padding:20px; text-align:center; }
+  .err { background:rgba(255,92,108,.1); border:1px solid var(--down); color:var(--down);
+         padding:12px; border-radius:8px; }
+  .ctrlbar { display:flex; gap:16px; flex-wrap:wrap; background:var(--panel); border:1px solid var(--line);
+             border-radius:10px; padding:10px 14px; margin-bottom:16px; }
+  .svc { display:flex; align-items:center; gap:8px; font-size:13px; }
+  .dot { width:8px; height:8px; border-radius:50%; display:inline-block; }
+  .dot.r { background:var(--up); } .dot.p { background:#e0a030; }
+  .svc button { padding:4px 12px; border-radius:6px; border:1px solid var(--line); background:var(--panel2);
+                color:var(--fg); cursor:pointer; font-size:12px; }
+  .svc button:hover { border-color:var(--blue); }
+  .svc select { background:var(--panel2); color:var(--fg); border:1px solid var(--line); border-radius:6px;
+                padding:4px 8px; font-size:12px; cursor:pointer; max-width:260px; }
+  .svc select:hover { border-color:var(--blue); }
+  .trow { cursor:pointer; }
+  .trow:hover td { background:rgba(255,255,255,.04); }
+  .trow .cursor { color:var(--mut); font-size:10px; }
+  .exprow > td { padding:0; background:var(--panel2); border-bottom:1px solid var(--line); }
+  .tchart { width:100%; padding:8px 4px; }
+  .tchart .caption { color:var(--mut); font-size:12px; padding:4px 6px 8px; }
+  .pager { display:flex; align-items:center; justify-content:center; gap:14px; padding:12px 0 2px; }
+  .pager button { padding:5px 14px; border-radius:6px; border:1px solid var(--line); background:var(--panel2);
+                  color:var(--fg); cursor:pointer; font-size:13px; }
+  .pager button:hover:not(:disabled) { border-color:var(--blue); }
+  .pager button:disabled { opacity:.4; cursor:default; }
+  .tabs { display:flex; gap:4px; margin-bottom:16px; border-bottom:1px solid var(--line); }
+  .tab { padding:9px 18px; background:none; border:none; border-bottom:2px solid transparent;
+         color:var(--mut); cursor:pointer; font-size:14px; font-weight:600; }
+  .tab.active { color:var(--fg); border-bottom-color:var(--blue); }
+  .tab:hover { color:var(--fg); }
+  .fresh-g { color:var(--up); } .fresh-y { color:#e0a030; } .fresh-r { color:var(--down); }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; }
+  .chip { background:var(--panel2); border:1px solid var(--line); border-radius:6px; padding:3px 9px;
+          font-family:ui-monospace,monospace; font-size:12px; }
+  .chip b { cursor:pointer; color:var(--mut); margin-left:5px; font-weight:600; }
+  .chip b:hover { color:var(--down); }
+  .syminput { background:var(--panel2); color:var(--fg); border:1px solid var(--line); border-radius:6px;
+              padding:5px 10px; font-size:13px; width:100%; font-family:ui-monospace,monospace; }
+  /* 심볼 자동완성 콤보박스 — 백테스트 스튜디오(gui.html)와 같은 패턴 */
+  .combo { position:relative; max-width:260px; }
+  .dropdown { position:absolute; top:100%; left:0; right:0; z-index:30; margin-top:3px;
+    background:var(--panel); border:1px solid var(--line); border-radius:7px; max-height:260px;
+    overflow-y:auto; box-shadow:0 6px 20px rgba(0,0,0,.4); }
+  .dropdown .opt { padding:7px 10px; cursor:pointer; font-size:13px; display:flex;
+    justify-content:space-between; gap:10px; align-items:center; font-family:ui-monospace,monospace; }
+  .dropdown .opt:hover, .dropdown .opt.active { background:var(--panel2); }
+  .dropdown .opt.dim { opacity:.45; cursor:default; }
+  .dropdown .opt .r { color:var(--mut); font-size:10px; white-space:nowrap; font-family:inherit; }
+  .dropdown .empty2 { padding:9px 10px; color:var(--mut); font-size:12px; }
+  .syminput:focus { outline:none; border-color:var(--blue); }
+  .progress { height:10px; background:var(--panel2); border-radius:5px; overflow:hidden; margin:12px 0 6px; }
+  .progress .pfill { height:100%; width:0%; background:var(--blue); transition:width .2s; }
+  .btn-go { padding:7px 14px; border-radius:7px; border:0; background:var(--blue); color:#fff; cursor:pointer; font-size:13px; }
+  .btn-stop { padding:7px 14px; border-radius:7px; border:0; background:var(--down); color:#fff; cursor:pointer; font-size:13px; }
+  .field { display:flex; align-items:center; gap:8px; margin:8px 0; font-size:13px; }
+  .field label { color:var(--mut); min-width:80px; }
+  .field input { background:var(--panel2); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:6px 9px; font-size:13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>📥 데이터·수집기</h1>
+    <a href="/backtest" style="color:var(--blue);text-decoration:none;font-size:13px">🔬 백테스트</a>
+    <a href="/" style="color:var(--blue);text-decoration:none;font-size:13px">🤖 매매</a>
+    <span class="sub" style="margin-left:auto">바이낸스 USDⓈ-M 선물 · 캔들 캐시 관리</span>
+  </header>
+  <div id="tab-data"><div class="empty">데이터 정보 불러오는 중…</div></div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const fmt = n => n==null ? "–" : Number(n).toLocaleString(undefined,{maximumFractionDigits:2});
+const fmtT = ms => { const d=new Date(ms); return d.toLocaleString('ko-KR',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}); };
+window._activeTab = "data";                        // 단일 페이지 — 항상 데이터
+
+function svcBtn(svc, label, state){
+  const paused = state === "paused";
+  return `<span class="svc"><b>${label}</b> <span class="dot ${paused?'p':'r'}"></span>${paused?'멈춤':'실행중'} `
+    + `<button onclick="setSvc('${svc}','${paused?'running':'paused'}')">${paused?'▶ 재개':'⏸ 멈춤'}</button></span>`;
+}
+async function setSvc(svc, state){                 // 수집기 멈춤/재개
+  try { await fetch("/api/control",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:svc,state})}); }
+  catch(e){ alert("제어 실패: "+e); }
+  refreshDataDynamic();                            // 상태 pill 갱신(폼은 유지)
+}
+
+// 폴링 — 1분봉은 매분 :00에 새로 확정된다. 그래서 폴링을 '다음 :00 + 여유(POLL_OFFSET)'에 정렬한다.
+// → 카운트다운은 페이지 로드가 아니라 '다음 분 경계까지 남은 초'를 보여줌(새로고침해도 60이 아니라 실제 남은 초).
+// 오프셋: 수집기가 :00+~2초에 캔들을 받으므로, 프론트는 :00+5초에 폴링해 그 캔들을 확실히 본다.
+const POLL_OFFSET_MS = 5000;
+let _cacheTimer = null, _cacheCd = null, _nextPollAt = 0;
+function _nextMinutePoll(){                       // 다음 분 경계(:00) + 오프셋, 항상 현재보다 미래
+  const now = Date.now();
+  let t = Math.ceil((now - POLL_OFFSET_MS) / 60000) * 60000 + POLL_OFFSET_MS;
+  if (t <= now) t += 60000;
+  return t;
+}
+function pollRemain(){ return _nextPollAt ? Math.max(0, Math.ceil((_nextPollAt - Date.now())/1000)) : Math.ceil((_nextMinutePoll()-Date.now())/1000); }
+function _schedulePoll(){
+  _nextPollAt = _nextMinutePoll();
+  _cacheTimer = setTimeout(async () => {
+    if (!document.hidden && window._activeTab==="data") await refreshDataDynamic();  // 데이터탭 볼 때만, 동적 부분만
+    _schedulePoll();
+  }, _nextPollAt - Date.now());
+}
+function startCachePoll(){
+  stopCachePoll();
+  _schedulePoll();
+  _cacheCd = setInterval(() => {                 // 표시만 갱신 — 남은 초는 항상 _nextPollAt에서 재계산
+    const el = document.getElementById("cachePollCd");
+    if (el) el.textContent = pollRemain();
+  }, 250);
+}
+function stopCachePoll(){
+  if (_cacheTimer){ clearTimeout(_cacheTimer); _cacheTimer = null; }
+  if (_cacheCd){ clearInterval(_cacheCd); _cacheCd = null; }
+  _nextPollAt = 0;
+}
+
+const fmtBytes = b => !b ? "0" : b>1e9 ? (b/1e9).toFixed(1)+"GB" : b>1e6 ? (b/1e6).toFixed(0)+"MB" : (b/1e3).toFixed(0)+"KB";
+// ── 데이터/수집기 섹션 ─────────────────────────────────────────────
+// 폴링(60초)이 입력폼·수집진행을 지우지 않도록: 정적 셸(폼) + 동적갱신(상태·커버리지) 분리.
+// 폴링은 refreshDataDynamic()만 부르고, renderData()(전체 재빌드)는 탭 진입/사용자 액션에만.
+function ctrlbarHTML(info){
+  return svcBtn("collector","수집기", info.collector||"running")
+    + `<span class="svc"><button onclick="healGaps()">🩹 구멍 복구</button></span>`
+    + `<span class="svc"><button onclick="refreshDataDynamic()">↻ 갱신</button></span>`
+    + `<span class="sub" style="margin-left:auto">DB ${fmtBytes(info.dbBytes)} · 다음 갱신 <b id="cachePollCd">${pollRemain()}</b>초</span>`;
+}
+function coverageHTML(info){
+  const syms = info.symbols || [];
+  let h = `<h3>캔들 커버리지 <span class="sub">${syms.length}개 심볼</span></h3>`;
+  if (!syms.length) return h + `<div class="empty">수집된 캔들 없음 — 아래에서 수집하세요</div>`;
+  h += `<table><thead><tr><th>심볼</th><th>봉 수</th><th>범위(UTC)</th><th>신선도</th><th>구멍</th></tr></thead><tbody>`;
+  for (const s of syms){
+    let fresh = "–";
+    if (s.ageMin != null){
+      if (s.ageMin < 10) fresh = `<span class="fresh-g">🟢 ${s.ageMin}분 전</span>`;
+      else if (s.ageMin < 1440) fresh = `<span class="fresh-y">🟡 ${Math.round(s.ageMin)}분 전</span>`;
+      else fresh = `<span class="fresh-r">🔴 ${(s.ageMin/1440).toFixed(1)}일 전</span>`;
+    }
+    const gap = s.gaps===0 ? `<span class="g">0 ✅</span>` : `<span class="r">${s.gaps}</span>`;
+    h += `<tr><td><b>${s.symbol}</b></td><td>${(s.count||0).toLocaleString()}</td>`
+      + `<td class="sub">${fmtT(s.min)} ~ ${fmtT(s.max)}</td><td>${fresh}</td><td>${gap}</td></tr>`;
+  }
+  return h + `</tbody></table><div class="sub" style="margin-top:10px">신선도=마지막 캔들 시각(수집기 살아있으면 수분 내) · 구멍=중간 결측 1분봉(자가치유 매시간).</div>`;
+}
+function watchHTML(){
+  const syms = window._collectSyms || [];
+  const chips = syms.map(s => `<span class="chip">${s} <b onclick="removeSym('${s}')">✕</b></span>`).join("");
+  return `<h3>수집 심볼 (실시간 유지) <span class="sub">${syms.length}개 · 재시작 없이 반영</span></h3>`
+    + `<div class="chips">${chips || '<span class="sub">미설정 → 수집기 시작 인자(COLLECT_SYMBOLS) 사용</span>'}</div>`
+    + `<div style="margin-top:10px;display:flex;gap:6px;align-items:flex-start">`
+    + `<div class="combo">`
+    + `<input id="symInput" class="syminput" autocomplete="off" placeholder="심볼 검색 (예: ETH, USDC)"`
+    + ` onfocus="showSymDrop(true)" oninput="showSymDrop(false)" onkeydown="symKey(event)"`
+    + ` onblur="setTimeout(hideSymDrop,150)">`
+    + `<div class="dropdown" id="symDrop" style="display:none"></div></div>`
+    + `<span class="svc"><button onclick="addSym()">+ 추가</button></span></div>`
+    + `<div id="symHint" class="sub" style="margin-top:8px">수집기가 이 워치리스트의 캔들을 <b>실시간</b> 유지. 트레이더 매매 심볼은 프리셋이 정함.</div>`;
+}
+function collectHTML(){
+  // 과거 데이터 수집 (스튜디오에서 이전) — 시작일 지정, 최신→과거 청크 수집, 중지 가능
+  const def = new Date(Date.now() - 30*86400000).toISOString().slice(0,10);   // 기본 30일 전
+  const sym0 = (window._collectSyms||[])[0] || "";
+  return `<h3>과거 데이터 수집 <span class="sub">백테스트용 과거 구간 채우기</span></h3>`
+    + `<div class="sub" style="margin-bottom:8px">시작일부터 <b>지금까지</b>를 <b>최신→과거</b> 순으로 수집. 이미 있는 구간은 스킵, 중지해도 최신 구간은 빈틈없음.</div>`
+    + `<div class="field"><label>심볼</label><input id="colSymbol" placeholder="예: BTCUSDC" value="${sym0}"></div>`
+    + `<div class="field"><label>시작일(UTC)</label><input id="colStart" type="date" value="${def}"><span class="sub">종료 = 지금 고정</span></div>`
+    + `<div id="colProgWrap" style="display:none"><div class="progress"><div class="pfill" id="colProg"></div></div><div class="sub" id="colProgText"></div></div>`
+    + `<button class="btn-go" id="collectBtn" onclick="startCollect()">📥 수집 시작</button>`
+    + `<button class="btn-stop" id="colStopBtn" style="display:none" onclick="stopCollect()">■ 중지</button>`
+    + `<div class="sub" id="colInfo" style="margin-top:10px"></div>`;
+}
+
+async function renderData(){                    // 전체 셸 빌드 — 탭 진입/사용자 액션 시
+  const box = $("tab-data");
+  let info;
+  try { info = await (await fetch("/api/candles",{cache:"no-store"})).json(); }
+  catch(e){ box.innerHTML = `<div class="err">데이터 정보 실패: ${e}</div>`; return; }
+  window._collectSyms = (info.collectSymbols||[]).slice();
+  window._coverage = Object.fromEntries((info.symbols||[]).map(s => [s.symbol, s.count||0]));
+  box.innerHTML =
+      `<div class="ctrlbar" id="dataCtrlbar">${ctrlbarHTML(info)}</div>`
+    + `<div class="pos" id="watchBox">${watchHTML()}</div>`
+    + `<div class="pos" id="collectBox">${collectHTML()}</div>`
+    + `<div class="pos" id="coverageBox">${coverageHTML(info)}</div>`;
+  loadSymbolList().then(updateSymHint);
+}
+async function refreshDataDynamic(){            // 폴링/갱신 — 동적 부분만(폼은 안 건드림)
+  let info;
+  try { info = await (await fetch("/api/candles",{cache:"no-store"})).json(); }
+  catch(e){ return; }
+  window._coverage = Object.fromEntries((info.symbols||[]).map(s => [s.symbol, s.count||0]));
+  const cb = $("dataCtrlbar"), cov = $("coverageBox");
+  if (cb && cov){ cb.innerHTML = ctrlbarHTML(info); cov.innerHTML = coverageHTML(info); }
+  else renderData();                            // 셸이 아직 없으면(첫 진입) 전체 빌드
+}
+function renderWatch(){ const w = $("watchBox"); if (w){ w.innerHTML = watchHTML(); loadSymbolList().then(updateSymHint); } }
+
+async function saveSyms(){
+  try { await fetch("/api/collect_symbols",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({symbols:window._collectSyms||[]})}); }
+  catch(e){ alert("저장 실패: "+e); }
+  renderWatch();
+  refreshDataDynamic();
+}
+
+// 과거 데이터 수집 — 최신→과거 청크 반복(진행바+중지). 중지해도 최신 구간은 빈틈없음.
+let _colStop = false;
+const COL_CHUNK_MS = 1500 * 60000;
+function stopCollect(){ _colStop = true; const b = $("colStopBtn"); if (b) b.textContent = "중지 중..."; }
+async function startCollect(){
+  const symbol = ($("colSymbol").value||"").trim().toUpperCase();
+  const s = $("colStart").value;
+  if (!symbol || !s){ alert("심볼·시작일을 정해줘"); return; }
+  const startMs = Date.parse(s + "T00:00:00Z"), endMs = Date.now();
+  if (startMs >= endMs){ alert("시작일은 과거여야 해"); return; }
+  const totalChunks = Math.ceil((endMs - startMs)/COL_CHUNK_MS);
+  _colStop = false;
+  $("collectBtn").style.display = "none";
+  $("colStopBtn").style.display = ""; $("colStopBtn").textContent = "■ 중지";
+  $("colProgWrap").style.display = ""; $("colInfo").textContent = ""; $("colProg").style.width = "0%";
+  let cursor = endMs, done = 0, total = 0;
+  try {
+    while (cursor > startMs && !_colStop){
+      const from = Math.max(startMs, cursor - COL_CHUNK_MS);
+      const r = await (await fetch("/api/collect_chunk",{method:"POST",headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ symbol, fromMs: from, toMs: cursor })})).json();
+      if (r.error) throw new Error(r.error);
+      total += r.fetched; done++;
+      cursor = from - 60000;                    // 다음 청크는 더 과거로
+      const pct = Math.min(100, Math.round(100*done/totalChunks));
+      $("colProg").style.width = pct + "%";
+      $("colProgText").textContent = `${pct}% · ${done}/${totalChunks} 청크 · 신규 ${total.toLocaleString()}개 · ${new Date(from).toISOString().slice(0,10)}까지`;
+      if (done % 8 === 0) refreshDataDynamic();
+    }
+    if (_colStop) $("colInfo").innerHTML = `⏹ 중지됨 · 신규 <b>${total.toLocaleString()}</b>개 저장. 최신 구간은 빈틈없음 — 나중에 이어받으면 돼.`;
+    else { $("colProg").style.width = "100%"; $("colInfo").innerHTML = `✅ 완료 · 신규 <b>${total.toLocaleString()}</b>개 저장.`; }
+  } catch(err){
+    $("colInfo").innerHTML = `<span style="color:var(--down)">에러: ${err.message} (지금까지 ${total.toLocaleString()}개는 저장됨)</span>`;
+  } finally {
+    const gb = $("collectBtn"), sb = $("colStopBtn");
+    if (gb) gb.style.display = ""; if (sb) sb.style.display = "none";
+    refreshDataDynamic();
+  }
+}
+// 바이낸스 상장 심볼 — 자동완성 + 오타 검증용. 실패해도 편집기는 자유입력으로 동작.
+async function loadSymbolList(){
+  if (window._binanceSyms) return window._binanceSyms;
+  try {
+    const r = await (await fetch("/api/symbols")).json();
+    window._binanceSyms = r.symbols || [];      // [{symbol, base, quote}] — quote로 정렬하므로 객체 유지
+    window._binanceStale = !!r.stale;
+  } catch(e){ window._binanceSyms = []; }
+  return window._binanceSyms;
+}
+// 심볼 자동완성 콤보박스 — 백테스트 스튜디오(gui.html)의 심볼 선택과 같은 조작감.
+// 포커스=전체 목록 / 입력=필터 / ↑↓ 이동 / Enter·클릭 선택 / Esc 닫기.
+const SYM_DROP_MAX = 60;               // 573개를 전부 그리면 무거움 → 상위만, 나머지는 안내
+let _symActive = -1;
+
+function hideSymDrop(){
+  const dd = document.getElementById("symDrop");
+  if (dd) dd.style.display = "none";
+  _symActive = -1;
+}
+async function showSymDrop(all){
+  const dd = document.getElementById("symDrop"), inp = document.getElementById("symInput");
+  if (!dd || !inp) return;
+  const list = await loadSymbolList();
+  const q = all ? "" : (inp.value||"").toUpperCase().replace(/[^A-Z0-9]/g,"");
+  const have = new Set(window._collectSyms||[]), cov = window._coverage||{};
+
+  if (!list.length){          // 목록을 못 받은 경우 — 자유입력으로 계속 쓸 수 있게 안내만
+    dd.innerHTML = `<div class="empty2">바이낸스 심볼 목록을 못 받았습니다 — 직접 입력해 추가할 수 있어요</div>`;
+    dd.style.display = ""; return;
+  }
+  const m = list.filter(s => s.symbol.includes(q)).sort((a,b) =>
+        (a.symbol.startsWith(q)?0:1) - (b.symbol.startsWith(q)?0:1)   // 접두 일치 우선
+     || (a.quote==="USDC"?0:1) - (b.quote==="USDC"?0:1)               // USDC 무기한 우선
+     || a.symbol.localeCompare(b.symbol));
+  const shown = m.slice(0, SYM_DROP_MAX);
+
+  if (!shown.length){
+    dd.innerHTML = `<div class="empty2">'${q}' 와 일치하는 무기한 선물 없음</div>`;
+  } else {
+    dd.innerHTML = shown.map(s => {
+      const added = have.has(s.symbol), n = cov[s.symbol];
+      const right = added ? "✓ 수집중" : n ? `${n.toLocaleString()}봉 보유` : s.quote;
+      return `<div class="opt${added?" dim":""}" data-sym="${s.symbol}">`
+           + `<span>${s.symbol}</span><span class="r">${right}</span></div>`;
+    }).join("") + (m.length > SYM_DROP_MAX
+        ? `<div class="empty2">외 ${m.length - SYM_DROP_MAX}개 — 더 입력해 좁혀보세요</div>` : "");
+    // mousedown: blur보다 먼저 발생 → 드롭다운이 닫히기 전에 선택된다
+    dd.querySelectorAll(".opt:not(.dim)").forEach(o =>
+      o.addEventListener("mousedown", e => { e.preventDefault(); pickSym(o.dataset.sym); }));
+  }
+  _symActive = -1;
+  dd.style.display = "";
+}
+function pickSym(sym){
+  const inp = document.getElementById("symInput");
+  if (inp) inp.value = "";
+  hideSymDrop();
+  addSymRaw(sym);                      // 고르는 즉시 추가(칩 편집기라 한 번 더 누를 이유가 없음)
+}
+function symKey(e){
+  const dd = document.getElementById("symDrop");
+  const opts = dd ? [...dd.querySelectorAll(".opt:not(.dim)")] : [];
+  if (e.key === "Escape") { hideSymDrop(); return; }
+  if (!dd || dd.style.display === "none" || !opts.length){
+    if (e.key === "Enter") addSym();    // 드롭다운이 없으면 입력값 그대로 추가
+    return;
+  }
+  if (e.key === "ArrowDown") { _symActive = Math.min(_symActive+1, opts.length-1); e.preventDefault(); }
+  else if (e.key === "ArrowUp") { _symActive = Math.max(_symActive-1, 0); e.preventDefault(); }
+  else if (e.key === "Enter") {
+    e.preventDefault();
+    pickSym(_symActive >= 0 ? opts[_symActive].dataset.sym : opts[0].dataset.sym);
+    return;
+  } else return;
+  opts.forEach((o,i) => o.classList.toggle("active", i === _symActive));
+  opts[_symActive].scrollIntoView({ block:"nearest" });
+}
+function updateSymHint(){
+  const hint = document.getElementById("symHint"), list = window._binanceSyms;
+  if (!hint || !list || !list.length) return;
+  hint.innerHTML = `트레이더가 매매하는 심볼은 프리셋이 정함. 여기는 미리 캔들을 채워둘 워치리스트.`
+    + ` · 바이낸스 무기한 선물 <b>${list.length}개</b>에서 검색`
+    + (window._binanceStale ? ` <span class="fresh-y">(캐시 — 목록 갱신 실패)</span>` : ``);
+}
+async function addSym(){
+  const inp = document.getElementById("symInput"); if (!inp) return;
+  const v = (inp.value||"").toUpperCase().replace(/[^A-Z0-9]/g,"");
+  if (!v) return;
+  inp.value = "";
+  hideSymDrop();
+  addSymRaw(v);
+}
+async function addSymRaw(v){
+  const names = (await loadSymbolList()).map(s => s.symbol);
+  // 목록을 받았을 때만 검증한다(네트워크 실패 시 입력을 막아버리면 안 되므로).
+  if (names.length && !names.includes(v)){
+    const near = names.filter(s => s.startsWith(v.slice(0,3))).slice(0,6).join(", ");
+    alert(`바이낸스 무기한 선물에 없는 심볼입니다: ${v}\n`
+          + (near ? `\n비슷한 심볼: ${near}` : `\n목록에서 골라주세요.`));
+    return;
+  }
+  window._collectSyms = window._collectSyms || [];
+  if (!window._collectSyms.includes(v)) window._collectSyms.push(v);
+  saveSyms();
+}
+function removeSym(s){
+  window._collectSyms = (window._collectSyms||[]).filter(x => x!==s);
+  saveSyms();
+}
+async function healGaps(){
+  if (!confirm("모든 심볼의 캔들 구멍을 바이낸스에서 재수집합니다. 진행할까요?")) return;
+  const box = document.getElementById("tab-data");
+  box.insertAdjacentHTML("afterbegin", `<div class="sub" id="healmsg" style="padding:8px">🩹 구멍 복구 중… (구멍 많으면 잠시 걸릴 수 있어요)</div>`);
+  try {
+    const r = await (await fetch("/api/heal",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"})).json();
+    if (r.error) alert("복구 실패: "+r.error);
+  } catch(e){ alert("복구 실패: "+e); }
+  const m = document.getElementById("healmsg"); if (m) m.remove();
+  refreshDataDynamic();
+}
+
+// 초기화 — 데이터 섹션 빌드 + 폴링 시작(단일 페이지라 항상 가동)
+renderData();
+startCachePoll();
+</script>
+</body>
+</html>

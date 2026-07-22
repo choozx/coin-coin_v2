@@ -80,6 +80,13 @@
   .dropdown .opt .r { color:var(--mut); font-size:10px; white-space:nowrap; font-family:inherit; }
   .dropdown .empty2 { padding:9px 10px; color:var(--mut); font-size:12px; }
   .syminput:focus { outline:none; border-color:var(--blue); }
+  .progress { height:10px; background:var(--panel2); border-radius:5px; overflow:hidden; margin:12px 0 6px; }
+  .progress .pfill { height:100%; width:0%; background:var(--blue); transition:width .2s; }
+  .btn-go { padding:7px 14px; border-radius:7px; border:0; background:var(--blue); color:#fff; cursor:pointer; font-size:13px; }
+  .btn-stop { padding:7px 14px; border-radius:7px; border:0; background:var(--down); color:#fff; cursor:pointer; font-size:13px; }
+  .field { display:flex; align-items:center; gap:8px; margin:8px 0; font-size:13px; }
+  .field label { color:var(--mut); min-width:80px; }
+  .field input { background:var(--panel2); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:6px 9px; font-size:13px; }
 </style>
 </head>
 <body>
@@ -87,20 +94,16 @@
 <div class="wrap">
   <header>
     <h1 id="title">🤖 트레이딩 봇</h1>
-    <a href="/" style="color:var(--blue);text-decoration:none;font-size:13px">🔬 백테스트</a>
+    <a href="/backtest" style="color:var(--blue);text-decoration:none;font-size:13px">🔬 백테스트</a>
+    <a href="/collector" style="color:var(--blue);text-decoration:none;font-size:13px">📥 데이터·수집기</a>
     <span class="badge" id="status">…</span>
     <span class="sub" id="meta"></span>
     <span class="sub" style="margin-left:auto" id="updated"></span>
   </header>
-  <div class="tabs">
-    <button class="tab active" id="tabbtn-trading" onclick="switchTab('trading')">📊 매매</button>
-    <button class="tab" id="tabbtn-data" onclick="switchTab('data')">📈 데이터/수집기</button>
-  </div>
   <div id="tab-trading">
     <div id="control" class="ctrlbar"></div>
     <div id="body"><div class="empty">상태 불러오는 중…</div></div>
   </div>
-  <div id="tab-data" style="display:none"><div class="empty">데이터 정보 불러오는 중…</div></div>
 </div>
 <script>
 const $ = id => document.getElementById(id);
@@ -148,195 +151,6 @@ async function setSvc(svc, state){
   try { await fetch("/api/control",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:svc,state})}); }
   catch(e){ alert("제어 실패: "+e); }
   renderControl(window._lastState);
-  if (window._activeTab === "data") renderData();   // 수집기 제어는 데이터탭에서
-}
-
-// ── 탭 전환 ──
-window._activeTab = "trading";
-function switchTab(name){
-  window._activeTab = name;
-  document.getElementById("tab-trading").style.display = name==="trading" ? "" : "none";
-  document.getElementById("tab-data").style.display    = name==="data" ? "" : "none";
-  document.getElementById("tabbtn-trading").classList.toggle("active", name==="trading");
-  document.getElementById("tabbtn-data").classList.toggle("active", name==="data");
-  if (name==="data") renderData();
-}
-
-const fmtBytes = b => !b ? "0" : b>1e9 ? (b/1e9).toFixed(1)+"GB" : b>1e6 ? (b/1e6).toFixed(0)+"MB" : (b/1e3).toFixed(0)+"KB";
-async function renderData(){
-  const box = document.getElementById("tab-data");
-  let info;
-  try { info = await (await fetch("/api/candles",{cache:"no-store"})).json(); }
-  catch(e){ box.innerHTML = `<div class="err">데이터 정보 실패: ${e}</div>`; return; }
-  let h = `<div class="ctrlbar">`
-    + svcBtn("collector","수집기", info.collector||"running")
-    + `<span class="svc"><button onclick="healGaps()">🩹 구멍 복구</button></span>`
-    + `<span class="svc"><button onclick="renderData()">↻ 갱신</button></span>`
-    + `<span class="sub" style="margin-left:auto">DB ${fmtBytes(info.dbBytes)} · 캔들 캐시</span></div>`;
-
-  // 수집 심볼 편집기 (핫리로드 — 수집기가 다음 루프에 반영)
-  const syms = info.collectSymbols || [];
-  window._collectSyms = syms.slice();
-  // 드롭다운에서 "이미 N봉 보유" 를 보여주기 위한 커버리지 맵
-  window._coverage = Object.fromEntries((info.symbols||[]).map(s => [s.symbol, s.count||0]));
-  const chips = syms.map(s => `<span class="chip">${s} <b onclick="removeSym('${s}')">✕</b></span>`).join("");
-  h += `<div class="pos"><h3>수집 심볼 <span class="sub">${syms.length}개 · 재시작 없이 반영</span></h3>`
-    + `<div class="chips">${chips || '<span class="sub">미설정 → 수집기 시작 인자(COLLECT_SYMBOLS) 사용</span>'}</div>`
-    + `<div style="margin-top:10px;display:flex;gap:6px;align-items:flex-start">`
-    + `<div class="combo">`
-    + `<input id="symInput" class="syminput" autocomplete="off" placeholder="심볼 검색 (예: ETH, USDC)"`
-    + ` onfocus="showSymDrop(true)" oninput="showSymDrop(false)" onkeydown="symKey(event)"`
-    + ` onblur="setTimeout(hideSymDrop,150)">`
-    + `<div class="dropdown" id="symDrop" style="display:none"></div></div>`
-    + `<span class="svc"><button onclick="addSym()">+ 추가</button></span></div>`
-    + `<div id="symHint" class="sub" style="margin-top:8px">트레이더가 매매하는 심볼은 프리셋이 정함. 여기는 미리 캔들을 채워둘 워치리스트.</div></div>`;
-
-  h += `<div class="pos"><h3>캔들 커버리지 <span class="sub">${(info.symbols||[]).length}개 심볼</span></h3>`;
-  if (!info.symbols || !info.symbols.length) h += `<div class="empty">수집된 캔들 없음</div>`;
-  else {
-    h += `<table><thead><tr><th>심볼</th><th>봉 수</th><th>범위(UTC)</th><th>신선도</th><th>구멍</th></tr></thead><tbody>`;
-    for (const s of info.symbols){
-      let fresh = "–";
-      if (s.ageMin != null){
-        if (s.ageMin < 10) fresh = `<span class="fresh-g">🟢 ${s.ageMin}분 전</span>`;
-        else if (s.ageMin < 1440) fresh = `<span class="fresh-y">🟡 ${Math.round(s.ageMin)}분 전</span>`;
-        else fresh = `<span class="fresh-r">🔴 ${(s.ageMin/1440).toFixed(1)}일 전</span>`;
-      }
-      const gap = s.gaps===0 ? `<span class="g">0 ✅</span>` : `<span class="r">${s.gaps}</span>`;
-      h += `<tr><td><b>${s.symbol}</b></td><td>${(s.count||0).toLocaleString()}</td>`
-        + `<td class="sub">${fmtT(s.min)} ~ ${fmtT(s.max)}</td><td>${fresh}</td><td>${gap}</td></tr>`;
-    }
-    h += `</tbody></table>`;
-  }
-  h += `<div class="sub" style="margin-top:10px">신선도=마지막 캔들 시각. 수집기가 살아있으면 수분 내. · 구멍=중간 결측 1분봉(자가치유 매시간).</div>`;
-  h += `</div>`;
-  box.innerHTML = h;
-  loadSymbolList().then(updateSymHint);   // 첫 호출만 네트워크, 이후 캐시
-}
-async function saveSyms(){
-  try { await fetch("/api/collect_symbols",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({symbols:window._collectSyms||[]})}); }
-  catch(e){ alert("저장 실패: "+e); }
-  renderData();
-}
-// 바이낸스 상장 심볼 — 자동완성 + 오타 검증용. 실패해도 편집기는 자유입력으로 동작.
-async function loadSymbolList(){
-  if (window._binanceSyms) return window._binanceSyms;
-  try {
-    const r = await (await fetch("/api/symbols")).json();
-    window._binanceSyms = r.symbols || [];      // [{symbol, base, quote}] — quote로 정렬하므로 객체 유지
-    window._binanceStale = !!r.stale;
-  } catch(e){ window._binanceSyms = []; }
-  return window._binanceSyms;
-}
-// 심볼 자동완성 콤보박스 — 백테스트 스튜디오(gui.html)의 심볼 선택과 같은 조작감.
-// 포커스=전체 목록 / 입력=필터 / ↑↓ 이동 / Enter·클릭 선택 / Esc 닫기.
-const SYM_DROP_MAX = 60;               // 573개를 전부 그리면 무거움 → 상위만, 나머지는 안내
-let _symActive = -1;
-
-function hideSymDrop(){
-  const dd = document.getElementById("symDrop");
-  if (dd) dd.style.display = "none";
-  _symActive = -1;
-}
-async function showSymDrop(all){
-  const dd = document.getElementById("symDrop"), inp = document.getElementById("symInput");
-  if (!dd || !inp) return;
-  const list = await loadSymbolList();
-  const q = all ? "" : (inp.value||"").toUpperCase().replace(/[^A-Z0-9]/g,"");
-  const have = new Set(window._collectSyms||[]), cov = window._coverage||{};
-
-  if (!list.length){          // 목록을 못 받은 경우 — 자유입력으로 계속 쓸 수 있게 안내만
-    dd.innerHTML = `<div class="empty2">바이낸스 심볼 목록을 못 받았습니다 — 직접 입력해 추가할 수 있어요</div>`;
-    dd.style.display = ""; return;
-  }
-  const m = list.filter(s => s.symbol.includes(q)).sort((a,b) =>
-        (a.symbol.startsWith(q)?0:1) - (b.symbol.startsWith(q)?0:1)   // 접두 일치 우선
-     || (a.quote==="USDC"?0:1) - (b.quote==="USDC"?0:1)               // USDC 무기한 우선
-     || a.symbol.localeCompare(b.symbol));
-  const shown = m.slice(0, SYM_DROP_MAX);
-
-  if (!shown.length){
-    dd.innerHTML = `<div class="empty2">'${q}' 와 일치하는 무기한 선물 없음</div>`;
-  } else {
-    dd.innerHTML = shown.map(s => {
-      const added = have.has(s.symbol), n = cov[s.symbol];
-      const right = added ? "✓ 수집중" : n ? `${n.toLocaleString()}봉 보유` : s.quote;
-      return `<div class="opt${added?" dim":""}" data-sym="${s.symbol}">`
-           + `<span>${s.symbol}</span><span class="r">${right}</span></div>`;
-    }).join("") + (m.length > SYM_DROP_MAX
-        ? `<div class="empty2">외 ${m.length - SYM_DROP_MAX}개 — 더 입력해 좁혀보세요</div>` : "");
-    // mousedown: blur보다 먼저 발생 → 드롭다운이 닫히기 전에 선택된다
-    dd.querySelectorAll(".opt:not(.dim)").forEach(o =>
-      o.addEventListener("mousedown", e => { e.preventDefault(); pickSym(o.dataset.sym); }));
-  }
-  _symActive = -1;
-  dd.style.display = "";
-}
-function pickSym(sym){
-  const inp = document.getElementById("symInput");
-  if (inp) inp.value = "";
-  hideSymDrop();
-  addSymRaw(sym);                      // 고르는 즉시 추가(칩 편집기라 한 번 더 누를 이유가 없음)
-}
-function symKey(e){
-  const dd = document.getElementById("symDrop");
-  const opts = dd ? [...dd.querySelectorAll(".opt:not(.dim)")] : [];
-  if (e.key === "Escape") { hideSymDrop(); return; }
-  if (!dd || dd.style.display === "none" || !opts.length){
-    if (e.key === "Enter") addSym();    // 드롭다운이 없으면 입력값 그대로 추가
-    return;
-  }
-  if (e.key === "ArrowDown") { _symActive = Math.min(_symActive+1, opts.length-1); e.preventDefault(); }
-  else if (e.key === "ArrowUp") { _symActive = Math.max(_symActive-1, 0); e.preventDefault(); }
-  else if (e.key === "Enter") {
-    e.preventDefault();
-    pickSym(_symActive >= 0 ? opts[_symActive].dataset.sym : opts[0].dataset.sym);
-    return;
-  } else return;
-  opts.forEach((o,i) => o.classList.toggle("active", i === _symActive));
-  opts[_symActive].scrollIntoView({ block:"nearest" });
-}
-function updateSymHint(){
-  const hint = document.getElementById("symHint"), list = window._binanceSyms;
-  if (!hint || !list || !list.length) return;
-  hint.innerHTML = `트레이더가 매매하는 심볼은 프리셋이 정함. 여기는 미리 캔들을 채워둘 워치리스트.`
-    + ` · 바이낸스 무기한 선물 <b>${list.length}개</b>에서 검색`
-    + (window._binanceStale ? ` <span class="fresh-y">(캐시 — 목록 갱신 실패)</span>` : ``);
-}
-async function addSym(){
-  const inp = document.getElementById("symInput"); if (!inp) return;
-  const v = (inp.value||"").toUpperCase().replace(/[^A-Z0-9]/g,"");
-  if (!v) return;
-  inp.value = "";
-  hideSymDrop();
-  addSymRaw(v);
-}
-async function addSymRaw(v){
-  const names = (await loadSymbolList()).map(s => s.symbol);
-  // 목록을 받았을 때만 검증한다(네트워크 실패 시 입력을 막아버리면 안 되므로).
-  if (names.length && !names.includes(v)){
-    const near = names.filter(s => s.startsWith(v.slice(0,3))).slice(0,6).join(", ");
-    alert(`바이낸스 무기한 선물에 없는 심볼입니다: ${v}\n`
-          + (near ? `\n비슷한 심볼: ${near}` : `\n목록에서 골라주세요.`));
-    return;
-  }
-  window._collectSyms = window._collectSyms || [];
-  if (!window._collectSyms.includes(v)) window._collectSyms.push(v);
-  saveSyms();
-}
-function removeSym(s){
-  window._collectSyms = (window._collectSyms||[]).filter(x => x!==s);
-  saveSyms();
-}
-async function healGaps(){
-  if (!confirm("모든 심볼의 캔들 구멍을 바이낸스에서 재수집합니다. 진행할까요?")) return;
-  const box = document.getElementById("tab-data");
-  box.insertAdjacentHTML("afterbegin", `<div class="sub" id="healmsg" style="padding:8px">🩹 구멍 복구 중… (구멍 많으면 잠시 걸릴 수 있어요)</div>`);
-  try {
-    const r = await (await fetch("/api/heal",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"})).json();
-    if (r.error) alert("복구 실패: "+r.error);
-  } catch(e){ alert("복구 실패: "+e); }
-  renderData();
 }
 
 async function tick(){

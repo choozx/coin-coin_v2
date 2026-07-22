@@ -118,6 +118,12 @@
   .cache-row { display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid var(--line);
                font-size:12px; }
   .cache-row .cs { color:var(--fg); font-weight:600; } .cache-row .cr { color:var(--mut); }
+  .fresh-g { color:var(--up); } .fresh-y { color:#e6b800; } .fresh-r { color:var(--down); }
+  .cache-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:12px;
+                color:var(--mut); margin-bottom:8px; }
+  .cache-head .dot { font-weight:600; }
+  .cache-head button { font-size:11px; padding:4px 9px; }
+  .cache-head .spacer { margin-left:auto; }
   .progress { height:10px; background:var(--panel2); border-radius:5px; overflow:hidden; margin:12px 0 6px; }
   .progress .pfill { height:100%; width:0%; background:var(--accent); transition:width .2s; }
   .combo { position:relative; }
@@ -152,12 +158,9 @@
 <body>
 <header>
   <h1>백테스트 스튜디오</h1>
-  <a href="/dashboard" style="color:#4c9be8;text-decoration:none;font-size:13px">📊 매매 대시보드</a>
+  <a href="/collector" style="color:#4c9be8;text-decoration:none;font-size:13px">📥 데이터·수집기</a>
+  <a href="/" style="color:#4c9be8;text-decoration:none;font-size:13px">🤖 매매</a>
   <span class="sub">바이낸스 USDⓈ-M 선물 · API 키 불필요</span>
-  <div class="tabs">
-    <div class="tab active" data-tab="backtest">📊 백테스트</div>
-    <div class="tab" data-tab="collect">📥 데이터 수집</div>
-  </div>
 </header>
 
 <div class="wrap">
@@ -334,28 +337,6 @@
       <button id="optimize" style="background:#7c5cff">🔍 최적화 실행</button>
     </div>
    </div><!-- /pane-backtest -->
-
-   <div id="pane-collect" style="display:none">
-    <div class="group">
-      <h3>📥 캔들 수집</h3>
-      <div class="note">과거 시작일부터 <b>지금까지</b>의 1분봉을 <b>최신→과거 순</b>으로 수집.
-        이미 있는 구간은 스킵, 중간에 <b>중지</b>해도 최신 구간은 빈틈없이 채워져.</div>
-      <div class="row"><label>심볼</label><input type="text" class="sym" id="colSymbol" value="BTCUSDT"></div>
-      <div class="row"><label>시작일 (UTC · 과거)</label><input type="date" id="colStart"></div>
-      <div class="row"><label>종료</label><span class="cr">지금(now) 고정</span></div>
-      <div id="colProgWrap" style="display:none">
-        <div class="progress"><div class="pfill" id="colProg"></div></div>
-        <div class="note" id="colProgText"></div>
-      </div>
-      <button id="collect">📥 수집 시작</button>
-      <button id="colStop" style="display:none; background:var(--down)">■ 중지</button>
-      <div class="note" id="colInfo" style="margin-top:10px"></div>
-    </div>
-    <div class="group">
-      <h3>캐시 현황</h3>
-      <div id="cacheInfo" class="note">불러오는 중...</div>
-    </div>
-   </div><!-- /pane-collect -->
   </div>
 
   <div class="panel results">
@@ -1353,16 +1334,7 @@ function drawHeat(hm) {
   $("heatlbl").textContent = `세로축: ${labelFor(hm.yLabel)}  ·  가로축: ${labelFor(hm.xLabel)}`;
 }
 
-// ---- 탭 전환 ----
-document.querySelectorAll(".tab").forEach(t => t.onclick = () => {
-  document.querySelectorAll(".tab").forEach(x => x.classList.toggle("active", x === t));
-  const isCol = t.dataset.tab === "collect";
-  $("pane-backtest").style.display = isCol ? "none" : "";
-  $("pane-collect").style.display = isCol ? "" : "none";
-  if (isCol) { loadCache(true); if (!$("colStart").value) initDates(); }
-  else { updateAvail(true); }
-});
-
+// 데이터 수집·관리는 대시보드(/dashboard)로 일원화됨. 여기선 캐시된 심볼을 백테스트에만 사용.
 // 캐시 현황 공유 (짧은 TTL로 서버 호출 절약)
 let _cacheData = null, _cacheAt = 0;
 async function getCache(force) {
@@ -1382,7 +1354,7 @@ async function updateAvail(force) {
   catch { el.textContent = "현황 로드 실패"; return; }
   const s = list.find(x => x.symbol === sym);
   if (!s) {
-    el.innerHTML = `<span style="color:var(--down)">⚠️ '${sym}' 캐시 없음 — 📥 데이터 수집 탭에서 먼저 수집해줘</span>`;
+    el.innerHTML = `<span style="color:var(--down)">⚠️ '${sym}' 캐시 없음 — <a href="/collector" style="color:#4c9be8">데이터·수집기</a>에서 먼저 수집해줘</span>`;
     return;
   }
   const f = ms => new Date(ms).toISOString().slice(0,10);
@@ -1402,7 +1374,7 @@ async function showSymDrop(all) {
   const f = ms => new Date(ms).toISOString().slice(0,10);
   if (!matches.length) {
     symDrop.innerHTML = `<div class="empty2">${list.length
-      ? "일치하는 수집 심볼 없음" : "수집된 심볼이 없어 — 📥 데이터 수집 탭에서 먼저 수집"}</div>`;
+      ? "일치하는 수집 심볼 없음" : "수집된 심볼이 없어 — 데이터·수집기 페이지에서 먼저 수집"}</div>`;
   } else {
     symDrop.innerHTML = matches.map(s =>
       `<div class="opt" data-sym="${s.symbol}"><span>${s.symbol}</span>`
@@ -1429,77 +1401,6 @@ symInput.addEventListener("keydown", e => {
   opts.forEach((o,i) => o.classList.toggle("active", i === symActive));
   opts[symActive].scrollIntoView({ block:"nearest" });
 });
-
-function initDates() {
-  const today = new Date();
-  const iso = d => d.toISOString().slice(0,10);
-  $("colStart").value = iso(new Date(today.getTime() - 30*86400000));
-  $("colStart").max = iso(today);   // 미래 선택 방지 (과거만)
-}
-
-async function loadCache(force) {
-  try {
-    const list = await getCache(!!force);
-    if (!list.length) { $("cacheInfo").textContent = "아직 캐시된 캔들이 없어."; return; }
-    const f = ms => new Date(ms).toISOString().slice(0,10);
-    $("cacheInfo").innerHTML = list.map(s =>
-      `<div class="cache-row"><span class="cs">${s.symbol}</span>`
-      + `<span class="cr">${s.count.toLocaleString()}개 · ${f(s.min)}~${f(s.max)}</span></div>`).join("");
-  } catch(e) { $("cacheInfo").textContent = "현황 로드 실패: " + e.message; }
-}
-
-let colStop = false;
-const CHUNK_MS = 1500 * 60000;   // 1500분 = 요청 1회 분량
-
-$("colStop").onclick = () => { colStop = true; $("colStop").textContent = "중지 중..."; };
-
-$("collect").onclick = async () => {
-  const symbol = $("colSymbol").value.trim().toUpperCase();
-  const s = $("colStart").value;
-  if (!symbol || !s) { alert("심볼·시작일을 정해줘"); return; }
-  const startMs = Date.parse(s + "T00:00:00Z");
-  const endMs = Date.now();
-  if (startMs >= endMs) { alert("시작일은 과거여야 해"); return; }
-
-  const totalChunks = Math.ceil((endMs - startMs) / CHUNK_MS);
-  colStop = false;
-  $("collect").style.display = "none";
-  $("colStop").style.display = ""; $("colStop").textContent = "■ 중지";
-  $("colProgWrap").style.display = ""; $("colInfo").textContent = "";
-  $("colProg").style.width = "0%";
-
-  let cursor = endMs, done = 0, totalFetched = 0;
-  try {
-    while (cursor > startMs && !colStop) {
-      const from = Math.max(startMs, cursor - CHUNK_MS);
-      const res = await fetch("/api/collect_chunk", {method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ symbol, fromMs: from, toMs: cursor })});
-      const d = await res.json();
-      if (d.error) throw new Error(d.error);
-      totalFetched += d.fetched;
-      done++;
-      cursor = from - 60000;   // 다음 청크는 더 과거로 (최신→과거)
-      const pct = Math.min(100, Math.round(100*done/totalChunks));
-      $("colProg").style.width = pct + "%";
-      $("colProgText").textContent = `${pct}% · ${done}/${totalChunks} 청크 · `
-        + `신규 ${totalFetched.toLocaleString()}개 · ${new Date(from).toISOString().slice(0,10)}까지 내려감`;
-      if (done % 8 === 0) loadCache(true);
-    }
-    if (colStop) {
-      $("colInfo").innerHTML = `⏹ 중지됨 · 신규 <b>${totalFetched.toLocaleString()}</b>개 저장. `
-        + `최신 구간은 빈틈없이 확보됨 — 나중에 이어받으면 돼.`;
-    } else {
-      $("colProg").style.width = "100%";
-      $("colInfo").innerHTML = `✅ 완료 · 신규 <b>${totalFetched.toLocaleString()}</b>개 저장.`;
-    }
-  } catch (err) {
-    $("colInfo").innerHTML = `<span style="color:var(--down)">에러: ${err.message} (지금까지 신규 ${totalFetched.toLocaleString()}개는 저장됨)</span>`;
-  } finally {
-    $("collect").style.display = ""; $("colStop").style.display = "none";
-    loadCache(true);
-  }
-};
 
 // ---- 백테스트 컨트롤을 접이식(아코디언)으로 ----
 const SEC = {"시장":"market","진입":"entry","손절":"sl","익절":"tp","지표":"cond",

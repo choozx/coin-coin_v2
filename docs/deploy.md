@@ -22,8 +22,9 @@ docker compose pull && docker compose up -d --no-build
 연구·백테스트는 **로컬에서** (프로덕션엔 안 올림). 통합 서버가 둘 다 서빙:
 ```bash
 python3 -m engine.server                  # http://localhost:8765
-#   /           → 백테스트 스튜디오
-#   /dashboard  → 매매 대시보드
+#   /           → 매매 대시보드 (랜딩, /dashboard 별칭도 동작)
+#   /backtest   → 백테스트 스튜디오
+#   /collector  → 데이터·수집기 관리
 ```
 대시보드만 가볍게 보려면: `python3 -m engine.dashboard --port 8080`.
 대시보드 = 잔고·수익률·포지션·최근 트레이드·자산곡선 + 봇/수집기 멈춤·재개. 3초 자동 새로고침.

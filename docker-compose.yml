@@ -55,7 +55,7 @@ services:
       - ./data:/app/data                    # state 읽기 + control 쓰기(멈춤/재개)
     logging: { driver: json-file, options: { max-size: "10m", max-file: "3" } }
     # 로컬에서 백테스트+대시보드 둘 다 보려면(프로덕션 아님):
-    #   python3 -m engine.server            # http://localhost:8765  (/ 백테스트, /dashboard 대시보드)
+    #   python3 -m engine.server            # http://localhost:8765  (/ 대시보드, /backtest 스튜디오, /collector 데이터)
 
   collector:                                # 캔들 수집 — 24/7 (trader도 자체 수집하나, 워치리스트 유지용)
     build: .
