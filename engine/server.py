@@ -540,6 +540,22 @@ def _cache_list() -> dict:
     return {"symbols": candle_store.list_stats()}
 
 
+def _bot_config_info() -> dict:
+    """봇 실행 설정(control.json) + 현재 선택된 전략의 프리셋 기본값(폼 프리필용)."""
+    from .preset import load_preset_file
+    cfg = control.get_bot_config()
+    defaults = {}
+    sp = control.get_strategy()
+    if sp:
+        try:
+            pr = load_preset_file(sp, validate=False)
+            defaults = {"symbol": pr.symbol, "sizing": pr.sizing,
+                        "execution": pr.data.get("execution", {}), "filter": pr.filter}
+        except Exception:
+            pass
+    return {"config": cfg, "presetDefaults": defaults}
+
+
 _SAVED_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "presets", "saved")
 
 
@@ -639,6 +655,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, json.dumps({"error": "상태 없음 — 봇이 아직 안 돌았거나 state.json 미생성"}))
         elif self.path == "/api/control":
             self._send(200, json.dumps(control.read_control()))
+        elif self.path == "/api/bot-config":                 # 봇 실행 설정 + 현재 프리셋 기본값
+            self._send(200, json.dumps(_bot_config_info()))
+        elif self.path == "/api/settings":                   # 글로벌 설정(레버리지 티어 등)
+            from . import settings
+            self._send(200, json.dumps({"leverageTiers": settings.get_leverage_tiers()}))
         elif self.path == "/api/strategies":                 # 봇이 고를 수 있는 전략 목록
             self._send(200, json.dumps({"strategies": list_strategies()}))
         elif self.path.split("?")[0] == "/api/trades":       # 매매 원장 전체 이력
@@ -687,6 +708,24 @@ class Handler(BaseHTTPRequestHandler):
                 length = int(self.headers.get("Content-Length", 0))
                 body = json.loads(self.rfile.read(length))
                 self._send(200, json.dumps({"ok": True, "control": control.set_service(body["service"], body["state"])}))
+            except Exception as e:
+                self._send(400, json.dumps({"error": str(e)}))
+            return
+        if self.path == "/api/bot-config":                   # 봇 실행 설정 저장(무포지션 시 반영)
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length) or b"{}")
+                self._send(200, json.dumps({"ok": True, "control": control.set_bot_config(body.get("config") or {})}))
+            except Exception as e:
+                self._send(400, json.dumps({"error": str(e)}))
+            return
+        if self.path == "/api/settings":                     # 글로벌 설정 저장(레버리지 티어)
+            from . import settings
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length) or b"{}")
+                settings.set_leverage_tiers(body.get("leverageTiers") or [])
+                self._send(200, json.dumps({"ok": True, "leverageTiers": settings.get_leverage_tiers()}))
             except Exception as e:
                 self._send(400, json.dumps({"error": str(e)}))
             return

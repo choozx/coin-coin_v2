@@ -70,6 +70,20 @@ def set_symbols(symbols, path: str = DEFAULT_PATH) -> dict:
     return _write(ctrl, path)
 
 
+def get_bot_config(path: str = DEFAULT_PATH) -> dict:
+    """봇 실행 설정 — 프리셋에서 안 가져오는 나머지(심볼·사이징·레버리지·실행·필터).
+    대시보드 '봇 설정'이 기록. 없으면 {} → 봇은 프리셋 값 그대로 사용."""
+    v = read_control(path).get("bot_config")
+    return v if isinstance(v, dict) else {}
+
+
+def set_bot_config(cfg: dict, path: str = DEFAULT_PATH) -> dict:
+    """control.json에 봇 설정 기록. 봇이 다음 폴링에 무포지션이면 반영(재시작 불필요)."""
+    ctrl = read_control(path)
+    ctrl["bot_config"] = dict(cfg or {})
+    return _write(ctrl, path)
+
+
 def clean_symbols(raw) -> list:
     """입력 심볼 정리 — 대문자·영숫자만·중복제거(예: [' btcusdc '] → ['BTCUSDC'])."""
     out = []

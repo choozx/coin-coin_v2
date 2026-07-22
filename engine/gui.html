@@ -357,8 +357,20 @@ const FIELDS = ["symbol","timeframe","days","equity",
   "leverage","levTierEnabled","sizeType","sizeValue","minLiqBuffer","cooldownBars","avoidFundingMin",
   "entryType"];
 
-// ---- 잔고별 레버리지 티어 ----
+// ---- 잔고별 레버리지 티어 (글로벌 — 대시보드 봇 설정과 공유, /api/settings) ----
 let levTiers = [{maxBalance:1000, leverage:20},{maxBalance:5000, leverage:10},{maxBalance:null, leverage:5}];
+async function loadTiers(){                        // 시작 시 글로벌 티어 로드
+  try {
+    const r = await (await fetch("/api/settings",{cache:"no-store"})).json();
+    if (Array.isArray(r.leverageTiers) && r.leverageTiers.length){
+      levTiers = r.leverageTiers.map(t => ({maxBalance:t.maxBalance, leverage:t.leverage}));
+      renderLevTiers();
+    }
+  } catch(e){}
+}
+async function saveTiers(){                         // 편집 즉시 글로벌 저장(라이브도 동일 반영)
+  try { await fetch("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({leverageTiers:levTiers})}); } catch(e){}
+}
 function renderLevTiers(){
   const box = $("levTierRows"); if (!box) return;
   box.innerHTML = levTiers.map((t,i)=>{
@@ -369,9 +381,9 @@ function renderLevTiers(){
       + `<input type="number" class="lt-lev" data-i="${i}" value="${t.leverage}" min="1" max="125" style="width:60px"><span style="color:var(--mut)">x</span>`
       + `<button type="button" class="lt-del" data-i="${i}" title="삭제" style="width:auto;padding:2px 8px;background:var(--panel2);border:1px solid var(--line);color:var(--fg)">✕</button></div>`;
   }).join("");
-  box.querySelectorAll(".lt-max").forEach(el=>el.onchange=()=>{ const v=el.value.trim(); levTiers[+el.dataset.i].maxBalance = v===''?null:+v; });
-  box.querySelectorAll(".lt-lev").forEach(el=>el.onchange=()=>{ levTiers[+el.dataset.i].leverage = +el.value||1; });
-  box.querySelectorAll(".lt-del").forEach(el=>el.onclick=()=>{ levTiers.splice(+el.dataset.i,1); renderLevTiers(); });
+  box.querySelectorAll(".lt-max").forEach(el=>el.onchange=()=>{ const v=el.value.trim(); levTiers[+el.dataset.i].maxBalance = v===''?null:+v; saveTiers(); });
+  box.querySelectorAll(".lt-lev").forEach(el=>el.onchange=()=>{ levTiers[+el.dataset.i].leverage = +el.value||1; saveTiers(); });
+  box.querySelectorAll(".lt-del").forEach(el=>el.onclick=()=>{ levTiers.splice(+el.dataset.i,1); renderLevTiers(); saveTiers(); });
 }
 
 function collect() {
@@ -685,8 +697,9 @@ function sync() {
   if (typeof updateHints === "function") updateHints();
 }
 ["slType","tpType","sizeType","exitStEnabled","entryType","levTierEnabled"].forEach(id => $(id).addEventListener("change", sync));
-$("levTierAdd").onclick = () => { levTiers.push({maxBalance:null, leverage:5}); renderLevTiers(); };
+$("levTierAdd").onclick = () => { levTiers.push({maxBalance:null, leverage:5}); renderLevTiers(); saveTiers(); };
 renderLevTiers();
+loadTiers();                                        // 글로벌 티어 로드(대시보드 봇 설정과 공유)
 
 const PRESETS = {
   scalp: { symbol:"BTCUSDT", timeframe:"1m", direction:"long",
@@ -745,7 +758,7 @@ function applyPreset(p) {
     const v = migrate(k, v0);
     if (el.type === "checkbox") el.checked = v; else el.value = v;
   }
-  if (Array.isArray(p.levTiers)) { levTiers = JSON.parse(JSON.stringify(p.levTiers)); renderLevTiers(); }
+  // 레버리지 티어는 글로벌(프리셋 값으로 덮어쓰지 않음) — 대시보드 봇 설정과 항상 공유
   setEntryGroups(p.entry);
   sync();
 }

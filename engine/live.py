@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json as _json
 import os
 import time
@@ -43,11 +44,12 @@ def notify(msg: str) -> None:
 from . import binance_math as bm
 from . import candle_store
 from . import control
+from . import settings
 from . import ledger
 from . import indicators as ind
 from .candles import resample, signal_close_index, TIMEFRAME_MINUTES, MINUTE_MS
 from .conditions import SeriesResolver, evaluate
-from .preset import Preset, load_preset_file
+from .preset import Preset, load_preset_file, merge_bot_config
 from .executor import PaperExecutor, LiveExecutor
 from .backtest import (
     BacktestConfig, _leverage_for, _open_position, _supertrend_flip_exit,
@@ -71,7 +73,9 @@ class LiveTrader:
         self.ledger_path = ledger_path or ledger.LEDGER_PATH
         self._pending_strategy = None        # 전환 대기(포지션 청산 후 적용할 전략)
         self._strategy_error = None
-        self._apply_derived(preset)          # tf_min/entry_rules/entry_side/maker_entry
+        self._base_data = copy.deepcopy(preset.data)   # 프리셋 원본(신호 소스) — 봇설정과 병합
+        self._bot_cfg = {}                   # 마지막 적용한 봇 설정
+        self._rebuild_effective()            # 신호(프리셋) + 봇설정(심볼·사이징·실행·필터) 병합
         self._last_ot = None                 # 마지막으로 처리한 1분봉 open_time
         self._last_exit_sb = -10 ** 9        # 쿨다운용
         self._started_at = int(time.time() * 1000)
@@ -104,6 +108,28 @@ class LiveTrader:
         execution = preset.data.get("execution") or {}
         self.maker_entry = execution.get("entryType") == "makerLimit"
 
+    def _rebuild_effective(self):
+        """base 프리셋(신호: tf·진입·청산·방향) + 현재 봇 설정(심볼·사이징·실행·필터)을
+        병합해 유효 프리셋을 만든다. 봇 설정이 무효면 프리셋 값으로 폴백."""
+        self._bot_cfg = control.get_bot_config()
+        merged = merge_bot_config(self._base_data, self._bot_cfg)
+        # 동적 레버리지: 봇 설정이 켜져 있으면 글로벌 티어 주입, 명시적으로 끄면 티어 제거(고정 사용)
+        dyn = self._bot_cfg.get("useDynamicLeverage")
+        if dyn is True:
+            merged.setdefault("sizing", {})["leverageTiers"] = settings.get_leverage_tiers()
+        elif dyn is False:
+            merged.setdefault("sizing", {}).pop("leverageTiers", None)
+        try:
+            self.preset = Preset.from_dict(merged, validate=True)
+        except Exception as e:
+            print(f"  [봇설정 무효 → 프리셋 값 사용] {e}", flush=True)
+            self.preset = Preset(copy.deepcopy(self._base_data))
+        self._apply_derived(self.preset)
+        mk, tk = bm.fees_for_symbol(self.preset.symbol)      # 심볼 바뀌면 수수료 갱신
+        self.cfg.maker_fee, self.cfg.taker_fee = mk, tk
+        if hasattr(self.ex, "maker_fee"):
+            self.ex.maker_fee, self.ex.taker_fee = mk, tk
+
     def _maybe_switch_strategy(self):
         """대시보드가 고른 '원하는 전략'을 확인 → 무포지션이면 전환, 포지션 있으면 대기.
         (1번 방식: 안전 — 열린 포지션은 기존 전략이 청산할 때까지 그대로 두고 flat 되면 교체.)"""
@@ -124,16 +150,29 @@ class LiveTrader:
             return
         self._apply_strategy(new, desired)
 
+    def _maybe_apply_bot_config(self):
+        """대시보드가 '봇 설정'(심볼·사이징·레버리지·실행·필터)을 바꾸면 반영.
+        무포지션일 때만 — 포지션 관리 중엔 파라미터가 안 바뀌게(안전)."""
+        if control.get_bot_config() == self._bot_cfg:
+            return
+        if self.ex.position is not None:
+            return                           # 포지션 있으면 청산 후 다음 폴링에 반영
+        old_sym = self.preset.symbol
+        self._rebuild_effective()
+        if self.preset.symbol != old_sym:    # 심볼 바뀌면 과거 replay 방지
+            self._last_ot = None
+        self._last_exit_sb = -10 ** 9
+        s = self.preset.sizing
+        notify(f"⚙️ 봇 설정 반영 — {self.preset.symbol} lev{s.get('leverage')}")
+        print(f"  [봇설정 반영] {self.preset.symbol} · lev{s.get('leverage')} · "
+              f"{(s.get('size') or {}).get('type')} · maker={self.maker_entry}", flush=True)
+
     def _apply_strategy(self, preset: Preset, path: str):
         """무포지션 상태에서 전략을 실제로 갈아끼운다(심볼 바뀌면 수수료·데이터도 갱신)."""
         old = self.preset.name
-        self.preset = preset
+        self._base_data = copy.deepcopy(preset.data)   # 새 신호 소스
         self.strategy_path = path
-        self._apply_derived(preset)
-        mk, tk = bm.fees_for_symbol(preset.symbol)   # 심볼 바뀌면 수수료 갱신
-        self.cfg.maker_fee, self.cfg.taker_fee = mk, tk
-        if hasattr(self.ex, "maker_fee"):
-            self.ex.maker_fee, self.ex.taker_fee = mk, tk
+        self._rebuild_effective()                      # 신호 교체 + 봇설정 재적용(심볼·수수료 포함)
         self._last_exit_sb = -10 ** 9                # 쿨다운 리셋
         self._pending_strategy = None
         self._strategy_error = None
@@ -145,8 +184,8 @@ class LiveTrader:
                 self._last_ot = int(base.open_time[-1])
         except Exception:
             pass
-        notify(f"🔄 전략 전환 {old} → {preset.name} ({preset.symbol} {preset.timeframe})")
-        print(f"  [전략전환] {old} → {preset.name} ({preset.symbol} {preset.timeframe})", flush=True)
+        notify(f"🔄 전략 전환 {old} → {self.preset.name} ({self.preset.symbol} {self.preset.timeframe})")
+        print(f"  [전략전환] {old} → {self.preset.name} ({self.preset.symbol} {self.preset.timeframe})", flush=True)
 
     def _write_state(self):
         """포지션·트레이드·잔고 스냅샷을 state_path에 원자적으로 기록(대시보드용)."""
@@ -207,6 +246,7 @@ class LiveTrader:
         """한 번 폴링 → 새로 닫힌 1분봉들을 순서대로 처리. 반환: 이번에 발생한 이벤트 리스트."""
         if base is None:
             self._maybe_switch_strategy()    # 폴링 시작 시 전략 전환 확인(무포지션이면 교체)
+            self._maybe_apply_bot_config()   # 봇 설정(심볼·사이징·실행·필터) 변경 반영(무포지션이면)
             if now_ms is None:
                 raise ValueError("now_ms 필요(실시간). 테스트는 base 주입.")
             base = self._fetch(now_ms)

@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import copy
 import json
 import os
 from dataclasses import dataclass
@@ -79,6 +80,32 @@ class Preset:
 STRATEGY_DIRS = ("presets/examples", "presets/saved")
 
 
+# --- 라이브 봇: 프리셋(신호) + 봇 설정(실행/리스크) 병합 -----------------------
+# 봇을 돌릴 때 프리셋에선 timeframe·진입(entry/entryRules)·청산(exit)·방향만 쓰고,
+# 나머지(심볼·사이징·레버리지·실행·필터)는 대시보드 '봇 설정'으로 덮어쓴다.
+# 백테스트는 이 병합을 쓰지 않고 프리셋 전체를 그대로 사용한다.
+BOT_OVERRIDE_SECTIONS = ("sizing", "execution", "filter")
+
+
+def merge_bot_config(preset_data: dict, bot_config: dict) -> dict:
+    """프리셋 data에 봇 설정을 얹은 '유효 프리셋 data'를 반환(원본 불변).
+    bot_config 키: symbol(str), sizing/execution/filter(dict, 얕은 병합).
+    없는 키는 프리셋 값을 그대로 유지(폴백)."""
+    if not bot_config:
+        return preset_data
+    merged = copy.deepcopy(preset_data)
+    sym = bot_config.get("symbol")
+    if sym:
+        merged.setdefault("market", {})["symbol"] = sym
+    for sec in BOT_OVERRIDE_SECTIONS:
+        ov = bot_config.get(sec)
+        if isinstance(ov, dict) and ov:
+            base = dict(merged.get(sec) or {})
+            base.update(ov)                     # 봇이 준 키만 덮어씀(나머지는 프리셋)
+            merged[sec] = base
+    return merged
+
+
 def load_preset_file(path: str, validate: bool = True) -> "Preset":
     """프리셋 파일 로드. presets/saved/ 는 {name, form, params, preset} 래퍼 → preset 키 사용."""
     with open(path, encoding="utf-8") as f:
@@ -94,8 +121,14 @@ def list_strategies(dirs=STRATEGY_DIRS) -> list:
         for fp in sorted(glob.glob(os.path.join(d, "*.json"))):
             try:
                 pr = load_preset_file(fp, validate=False)
-                out.append({"path": fp, "name": pr.name, "symbol": pr.symbol,
-                            "timeframe": pr.timeframe, "source": os.path.basename(d)})
+                src = os.path.basename(d)
+                name = pr.name
+                # saved 프리셋은 GUI 저장 시 name이 "GUI 프리셋"으로 자동 지정돼 구분이 안 됨
+                # → 사용자가 지은 파일명을 표시명으로 사용
+                if not name or name == "GUI 프리셋":
+                    name = os.path.splitext(os.path.basename(fp))[0]
+                out.append({"path": fp, "name": name, "symbol": pr.symbol,
+                            "timeframe": pr.timeframe, "source": src})
             except Exception:
                 continue                     # 깨진/래퍼-only 파일은 건너뜀
     return out
