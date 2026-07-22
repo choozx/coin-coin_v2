@@ -25,6 +25,8 @@ from . import binance_data
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                        "data", "candles.db")
 
+PAGE_MINUTES = binance_data.MAX_LIMIT   # 바이낸스 API 1회 요청으로 받는 최대 1분봉 수(=1500분)
+
 
 def _conn(path=DB_PATH):
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -163,6 +165,32 @@ def fill_range(symbol: str, start_ms: int, end_ms: int, db_path=DB_PATH, verbose
             fetched += len(rows)
     conn.close()
     return fetched
+
+
+def tail_gap_minutes(symbol: str, db_path=DB_PATH):
+    """마지막 캐시 봉이 지금으로부터 몇 분(분봉) 뒤처졌나. 캐시 없으면 None(신규 심볼)."""
+    st = stats(symbol, db_path)
+    if not st["count"] or st["max"] is None:
+        return None
+    return (int(time.time() * 1000) - st["max"]) / MINUTE_MS
+
+
+def backfill_step(symbol: str, seed_days: float, db_path=DB_PATH) -> tuple:
+    """뒤처진/새 심볼을 '한 페이지(≤PAGE_MINUTES)'만 최신 방향으로 전진 수집한다.
+    대량 백필을 한 번에 하지 않고 잘게 나눠 폴링 사이클을 막지 않게 하기 위함.
+    반환: (fetched, caught_up). caught_up=True면 tail이 한 페이지 안 → 폴링 그룹 합류 가능."""
+    now = int(time.time() * 1000)
+    conn = _conn(db_path)
+    mn, mx, cnt = _coverage(conn, symbol)
+    conn.close()
+    start = (mx + MINUTE_MS) if cnt else (now - int(seed_days * 24 * 60) * MINUTE_MS)
+    if start >= now:
+        return 0, True
+    end = min(now, start + (PAGE_MINUTES - 1) * MINUTE_MS)   # 딱 한 요청 분량(PAGE_MINUTES봉)
+    fetched = fill_range(symbol, start, end, db_path=db_path)
+    st = stats(symbol, db_path)
+    caught = st["max"] is not None and (now - st["max"]) <= PAGE_MINUTES * MINUTE_MS
+    return fetched, caught
 
 
 def backfill_taker(symbol: str, db_path=DB_PATH, verbose=False) -> int:

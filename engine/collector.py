@@ -38,6 +38,68 @@ def _now():
     return datetime.now(tz=timezone.utc).strftime("%H:%M:%S")
 
 
+def _next_boundary(period_s, offset_s=2.0):
+    """현재보다 미래인 다음 period 경계(+offset) 시각(epoch초). period=60이면 다음 분 :00+offset."""
+    now = time.time()
+    return (int((now - offset_s) // period_s) + 1) * period_s + offset_s
+
+
+def _sleep_aligned(period_s, offset_s=2.0):
+    """다음 period 경계(+offset)까지 잔다. period=60이면 매분 :00 직후(+2초)에 깬다.
+    epoch초는 :00에 정렬돼 있어 60의 배수가 정확히 분 경계와 일치 → 캔들이 확정되는 순간 바로 수집."""
+    time.sleep(max(0.5, _next_boundary(period_s, offset_s) - time.time()))
+
+
+# 백필 분리: 한 요청(PAGE_MINUTES봉)보다 많이 뒤처진 심볼은 '백필 그룹'으로 빼서
+# 최신 수집(폴링)이 끝난 뒤 남는 시간에만 페이지 단위로 채운다 → 새 심볼 대량 수집이
+# 기존 심볼의 최신 캔들 지연을 일으키지 않게. 다 채워 최신 근접하면 폴링 그룹에 합류.
+PAGE_MINUTES = candle_store.PAGE_MINUTES
+BACKFILL_MARGIN_S = 5          # 다음 경계 이 초 전에는 백필 중단(최신 수집 시간 확보)
+
+
+def classify(symbols):
+    """심볼을 (fast, backlog)로 나눈다. backlog = 신규이거나 최신에서 한 페이지(PAGE_MINUTES) 넘게 뒤처진 심볼."""
+    fast, backlog = [], []
+    for sym in symbols:
+        gap = candle_store.tail_gap_minutes(sym)         # None = 캐시 없음(신규)
+        (backlog if (gap is None or gap > PAGE_MINUTES) else fast).append(sym)
+    return fast, backlog
+
+
+def run_backfill(symbols, seed_days, with_funding, deadline, verbose=True):
+    """백로그 심볼을 deadline까지 페이지 단위로 채운다. 최신에 근접하면 다음 사이클부터 폴링 합류."""
+    for sym in symbols:
+        if time.time() >= deadline:
+            if verbose:
+                print(f"[{_now()}] {sym:12s} 백필 대기 — 시간 부족, 다음 사이클에 계속", flush=True)
+            break
+        pages = 0
+        while time.time() < deadline:
+            try:
+                fetched, caught = candle_store.backfill_step(sym, seed_days)
+            except Exception as e:
+                print(f"[{_now()}] {sym} 백필 실패: {e}", flush=True)
+                break
+            pages += 1
+            if caught:
+                if with_funding:
+                    try:
+                        candle_store.ensure_funding(sym, days=seed_days)
+                    except Exception:
+                        pass
+                st = candle_store.stats(sym)
+                if verbose:
+                    print(f"[{_now()}] {sym:12s} 백필 완료 → 폴링 합류 (총 {st['count']:,}개)", flush=True)
+                break
+            if fetched == 0:                              # 소스에도 없음 → 더 진행 불가
+                break
+        else:                                             # while가 deadline으로 끝남(=아직 안 끝남)
+            st = candle_store.stats(sym)
+            if verbose:
+                print(f"[{_now()}] {sym:12s} 백필 진행중 (+{pages}페이지, 총 {st['count']:,}개, "
+                      f"최신 {_fmt(st['max'])}) — 다음 사이클에 계속", flush=True)
+
+
 def collect_once(symbols, seed_days, with_funding=True, verbose=True):
     """각 심볼을 현재 시각까지 증분 수집. 반환: 총 신규 캔들 수."""
     total_new = 0
@@ -109,16 +171,23 @@ def main():
                 print("  [멈춤] 수집 건너뜀", flush=True)
             else:
                 active = control.get_symbols() or symbols   # 대시보드가 바꾸면 재시작 없이 반영
-                collect_once(active, args.seed_days, with_funding)
-                # 자가치유: N사이클마다 내부 구멍 스캔·복구 (tail 수집은 못 메우는 중간 결측)
+                fast, backlog = classify(active)
+                # 1) 폴링 그룹(최신) — 깨어난 즉시 꼬리 봉만 빠르게 수집 (지연 최소)
+                if fast:
+                    collect_once(fast, args.seed_days, with_funding)
+                # 2) 백필 그룹(신규/대량) — 남는 시간에만 페이지 단위로 따로 채움
+                if backlog:
+                    deadline = _next_boundary(args.loop) - BACKFILL_MARGIN_S
+                    run_backfill(backlog, args.seed_days, with_funding, deadline)
+                # 자가치유: N사이클마다 내부 구멍 스캔·복구 (최신 수집된 폴링 그룹만)
                 if args.heal_every and cycle % args.heal_every == 0:
-                    for sym in active:
+                    for sym in fast:
                         try:
                             candle_store.heal_gaps(sym, verbose=True)
                         except Exception as e:
                             print(f"[{_now()}] {sym} heal 실패: {e}")
             cycle += 1
-            time.sleep(args.loop)
+            _sleep_aligned(args.loop)      # 다음 분 경계(:00+2초)에 깨어 방금 확정된 캔들을 수집
     except KeyboardInterrupt:
         print("\n수집기 종료")
 
