@@ -14,9 +14,14 @@
 | 독립 캔들 수집기 (1회/반복) | ✅ `engine/collector.py` |
 | GUI 백테스트 스튜디오 (파라미터 튜닝) | ✅ `engine/server.py` + `gui.html` |
 | 파라미터 최적화 (그리드+IS/OOS 검증) | ✅ `engine/optimize.py` |
-| 페이퍼 트레이딩 | ⬜ 예정 (엔진 재사용) |
-| 리스크 가드레일 (kill switch 등) | ⬜ 예정 |
-| 실거래 어댑터 (ccxt) | ⬜ 예정 |
+| 페이퍼 트레이딩 (실시간 클럭 + 같은 엔진) | ✅ `engine/live.py` + `PaperExecutor` |
+| 매매 원장 (청산거래 영구기록·잔고복원) | ✅ `engine/ledger.py` (`data/trades.db`) |
+| 매매 대시보드 (모니터 + 멈춤/재개) | ✅ `engine/dashboard.py` + `control.py` |
+| 데이터·수집기 관리 페이지 (`/collector`) | ✅ `collector.html` (심볼 핫리로드) |
+| 리스크 가드레일 (일일손실·연속손실·킬스위치) | ✅ `engine/settings.py` + `live.py` |
+| 배포 (도커 멀티서비스 + EC2 풀 배포) | ✅ `docker-compose.yml` + [`docs/deploy.md`](docs/deploy.md) |
+| 실거래 어댑터 (ccxt) | 🟡 골격만 — `LiveExecutor` 연결·잔고조회까지. **주문 미구현**(`open`/`close`는 `NotImplementedError`) |
+| 지정가 체결 모델 (미체결·슬리피지) | ⬜ 예정 — 현재는 신호봉 종가 체결 가정(낙관적), 아래 [다음 할 일](#다음-할-일) |
 | 블록 빌더 UI | ⬜ 예정 |
 
 ## 문서
@@ -117,16 +122,32 @@ UI 블록은 껍데기, 진실은 `schema/preset.schema.json` 의 JSON 트리.
 
 ```
 candles.py      1분봉 → 상위 TF 리샘플, 결측/중복 방어
-indicators.py   지표 — TA-Lib 위임(RSI/MACD/BB/ATR/Stoch/StochRSI/CCI/MFI/SMA/EMA)
-                + numpy(VWAP/RVOL/SuperTrend/오더플로우 델타·CVD)
+indicators.py   지표 — TA-Lib 위임(RSI/MACD/BB/ATR/ADX·DMI/Stoch/StochRSI/CCI/MFI/SMA/EMA)
+                + numpy(VWAP/RVOL/SuperTrend/QQE/Hawkeye/오더플로우 델타·CVD)
 conditions.py   조건 트리 평가 (AND/OR/NOT, 비교, 교차)
 binance_math.py 청산가·펀딩비·수수료 (바이낸스 공식)
 backtest.py     코어 루프 — 1분봉 클럭, 이벤트순서 펀딩→청산→손절→신호
 metrics.py      성과지표 (수익률/MDD/승률/PF/샤프/청산/펀딩)
+optimize.py     그리드 서치 파라미터 최적화 (IS/OOS 분리 + 병렬)
 synthetic.py    합성 1분봉 (실데이터 없을 때 검증용)
+
+binance_data.py 바이낸스 공개 klines·펀딩 히스토리 수집 (키 불필요)
+candle_store.py 로컬 SQLite 캔들/펀딩 캐시 — 없는 구간만 증분 수집
+collector.py    독립 캔들 수집기 (1회/반복, 분 경계 정렬)
+
+live.py         실시간 매매 루프 (페이퍼/실거래) + 리스크 가드레일 판정
+executor.py     주문 실행 어댑터 — PaperExecutor(시뮬) / LiveExecutor(ccxt, 주문 미구현)
+ledger.py       매매 원장 (data/trades.db, append-only. paper/live 분리)
+settings.py     글로벌 설정 (동적 레버리지 티어·가드레일) — 백테스트/라이브 공유
+control.py      멈춤/재개 신호를 파일(data/control.json)로 전달
+env.py          .env 로더 (API 키는 파일에만, 기존 환경변수 우선)
+
 run.py          CLI
-server.py       GUI 백테스트 스튜디오 (stdlib http.server)
-gui.html        GUI 단일 파일 (프레임워크·빌드 없음)
+server.py       웹 서버 (stdlib http.server) — / 대시보드 · /gui · /collector
+dashboard.py    대시보드 단독 실행 (프로덕션용 read-only 모니터)
+trade_chart.py  원장의 한 거래 → 진입~청산 구간 캔들+지표 차트 데이터
+gui.html        백테스트 스튜디오 (프레임워크·빌드 없음)
+dashboard.html  매매 대시보드 / collector.html  데이터·수집기 관리
 vendor/         외부 JS. lightweight-charts.standalone.production.js
                 = TradingView Lightweight Charts v5 (Apache 2.0) — 캔들 차트 줌/팬/크로스헤어.
                 CDN 대신 벤더링 → 오프라인 동작. /vendor/lightweight-charts.js 로 서빙.
@@ -139,10 +160,13 @@ vendor/         외부 JS. lightweight-charts.standalone.production.js
 
 ## 다음 할 일
 
-- [ ] 실데이터 어댑터: candle-collector MySQL(`coin.candle`) 리더 or Parquet export
-- [ ] 펀딩비 실제 히스토리 주입 (`/fapi/v1/fundingRate`)
-- [ ] 리스크 가드레일 (일일 손실 한도, kill switch)
-- [ ] 페이퍼 트레이딩 (실시간 시세 + 같은 엔진)
+- [ ] **실거래 주문 구현** (`LiveExecutor.open/close`) — ccxt `create_order`·`set_leverage`,
+      아래 BBO→3초→taker 정책, 체결가로 entry/qty/fee 갱신, 재시작 시 포지션·잔고는 거래소에서
+      읽어 동기화. 테스트넷(`BINANCE_TESTNET=1`)부터. 키는 출금권한 OFF + IP 화이트리스트.
+- [ ] **backtest/live 오케스트레이션 통합** — `backtest.run()`의 per-bar 로직을 `step()`으로
+      추출해 `live.py`가 문자 그대로 공유 (지금은 같은 순서로 재구현 — `engine/live.py` 상단 주석)
+- [ ] ADX/DMI 레짐 게이트를 실제 프리셋에 적용해 재백테스트 (지표·조건은 이미 있고 쓰는 프리셋이 없음)
+- [ ] CLI 백테스트(`run.py`)도 실제 펀딩 히스토리 사용 — 지금은 상수 근사 (GUI/`backtest.py`는 실히스토리)
 - [ ] direction "both" 롱·숏 동시 (스키마 v2: entryLong/entryShort 분리)
 - [ ] **지정가 체결 현실화 (미체결·슬리피지 모델)** — 현재 `execution.entryType`은
       `taker`(시장가)와 `makerLimit`(지정가) 둘 다 **신호봉 종가에 체결됐다고 가정하고 수수료만
