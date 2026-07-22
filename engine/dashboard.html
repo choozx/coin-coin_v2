@@ -125,36 +125,20 @@ let STRATS = [];
 async function loadStrategies(){
   try { STRATS = ((await (await fetch("/api/strategies",{cache:"no-store"})).json()).strategies)||[]; } catch(e){}
 }
-function stratSelector(d, selPath){
-  if (!STRATS.length) return "";
-  const active = selPath || (d && d.strategy) || "";     // 사용자가 고른(control.json) 전략을 표시
+// 전략 출처: examples=배포된 것(git) · saved=로컬 GUI · strategies=볼륨에 던져넣은 것(배포 무관)
+const srcIcon = (s) => s === "saved" ? "📁 " : s === "strategies" ? "📤 " : "";
+
+// 컨트롤바에는 '지금 무슨 일이 벌어지는지'만 — 전략 '선택'은 봇 설정 폼에서 저장과 함께 한다.
+function stratStatus(d, selPath){
+  const active = selPath || (d && d.strategy) || "";     // 고른 전략(control.json)
   const running = d && d.strategy;                        // 봇이 실제 실행 중인 전략(state.json)
-  const pending = (running && running !== active) ? active : null;   // 골랐지만 봇이 아직 안 바꿈
-  const cur = STRATS.find(s => s.path === active);
-  window._stratActivePath = active || "";
-  // 전략 출처: examples=배포된 것(git) · saved=로컬 GUI · strategies=볼륨에 던져넣은 것(배포 무관)
-  const srcIcon = (s) => s === "saved" ? "📁 " : s === "strategies" ? "📤 " : "";
-  const curLabel = cur ? (srcIcon(cur.source)+cur.name) : "";
-  window._stratCurLabel = curLabel;                      // 선택값(포커스 해제 시 복원)
-  // 심볼 검색과 같은 콤보박스: 선택값을 입력창에 표시, 포커스=검색, 클릭/Enter로 선택
-  let html = `<span class="svc"><b>전략</b>`
-    + `<span class="combo" style="max-width:320px">`
-    + `<input id="stratInput" class="syminput" autocomplete="off" placeholder="전략 검색" value="${curLabel}"`
-    + ` onfocus="this.select();openStratDrop('')" oninput="openStratDrop(this.value)" onkeydown="stratKey(event)"`
-    + ` onblur="blurStrat()">`
-    + `<span class="dropdown" id="stratDD" style="display:none"></span></span></span>`;
-  if (pending){
-    const pn = (STRATS.find(s=>s.path===pending)||{}).name || pending;
+  let html = "";
+  if (running && running !== active){                     // 골랐지만 봇이 아직 안 바꿈
+    const pn = (STRATS.find(s=>s.path===active)||{}).name || active;
     html += `<span class="svc" style="color:#e0a030">⏳ 전환 대기: <b>${pn}</b> <span class="sub">포지션 청산 후 적용</span></span>`;
   }
   if (d && d.strategyError) html += `<span class="svc" style="color:var(--down)">⚠ ${d.strategyError}</span>`;
   return html;
-}
-async function setStrat(path){
-  try {
-    const r = await (await fetch("/api/strategy",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path})})).json();
-    if (r && r.error) alert("전략 선택 실패: "+r.error);
-  } catch(e){ alert("전략 선택 실패: "+e); }
 }
 function _stratOptsHTML(q){
   const query = (q||"").toLowerCase();
@@ -206,17 +190,25 @@ function stratKey(e){
   els.forEach((o,i) => o.classList.toggle("active", i===window._stratIdx));
   els[window._stratIdx].scrollIntoView({ block:"nearest" });
 }
-async function pickStrat(path){
+function pickStrat(path){
+  // 고르는 즉시 반영하지 않는다 — 폼에 담아두고 '저장'을 눌러야 봇에 적용된다.
+  // (전략과 실행설정을 따로 반영하면 그 사이 봇이 새 전략을 옛 설정으로 돌 수 있다.)
   window._stratOpen = false;
   const dd = document.getElementById("stratDD"); if (dd) dd.style.display = "none";
-  const inp = document.getElementById("stratInput"); if (inp) inp.blur();
-  await setStrat(path);
-  renderControl(window._lastState);                // 즉시 반영(전환/대기 표시)
+  window._stratPick = path;
+  const st = STRATS.find(s => s.path === path);
+  window._stratCurLabel = st ? (srcIcon(st.source)+st.name) : path;
+  window._stratActivePath = path;
+  const inp = document.getElementById("stratInput");
+  if (inp){ inp.value = window._stratCurLabel; inp.blur(); }
+  const hint = document.getElementById("bc_strat_hint");
+  if (hint) hint.innerHTML = (path !== window._stratSaved)
+      ? `<span style="color:#e0a030">저장해야 적용됨</span>` : "";
 }
 async function renderControl(d){
   let c = {};
   try { c = await (await fetch("/api/control",{cache:"no-store"})).json(); } catch(e){}
-  const html = svcBtn("trader","봇", c.trader||"running") + stratSelector(d, c.strategy);   // 표시=선택(control.json)
+  const html = svcBtn("trader","봇", c.trader||"running") + stratStatus(d, c.strategy);      // 상태만(선택은 봇 설정 폼)
   // tick(3초)마다 통째로 다시 그리면 열어둔/타이핑 중인 전략 콤보박스가 리셋된다.
   // → 내용이 그대로거나, 드롭다운이 열려 있거나, 입력창에 포커스면 재렌더 생략.
   const si = document.getElementById("stratInput");
@@ -521,6 +513,15 @@ async function loadBotConfig(){
   try { d = await (await fetch("/api/bot-config",{cache:"no-store"})).json(); }
   catch(e){ $("botcfg").innerHTML = `<div class="err">봇 설정 로드 실패: ${e}</div>`; return; }
   try { cache = ((await (await fetch("/api/cache",{cache:"no-store"})).json()).symbols||[]).map(s=>s.symbol); } catch(e){}
+  // 현재(저장된) 전략을 폼 초기값으로. _stratSaved = 저장된 값, _stratPick = 폼에서 고른 값.
+  try {
+    const ctrl = await (await fetch("/api/control",{cache:"no-store"})).json();
+    window._stratSaved = ctrl.strategy || "";
+  } catch(e){ window._stratSaved = ""; }
+  window._stratPick = window._stratSaved;
+  window._stratActivePath = window._stratSaved;
+  const cs = STRATS.find(x => x.path === window._stratSaved);
+  window._stratCurLabel = cs ? (srcIcon(cs.source)+cs.name) : "";
   const c = d.config || {}, def = d.presetDefaults || {};
   const szc = c.sizing || {}, szd = def.sizing || {}, fc = c.filter || {}, fd = def.filter || {};
   const sizeC = szc.size || {}, sizeD = szd.size || {};
@@ -529,7 +530,16 @@ async function loadBotConfig(){
   const symOpts = cache.slice();                    // 심볼 = 수집된(캐시) 심볼만
   if (c.symbol && !symOpts.includes(c.symbol)) symOpts.unshift(c.symbol);
   $("botcfg").innerHTML =
-      `<h3>⚙️ 봇 설정 <span class="sub">프리셋의 <b>timeframe·진입·청산</b>만 사용 · 아래로 심볼·리스크 재설정 (프리셋 기본 = 빈값)</span></h3>`
+      `<h3>⚙️ 봇 설정 <span class="sub">전략(신호) + 실행 설정을 함께 저장 · 무포지션일 때 반영</span></h3>`
+    + `<div class="field"><label>전략</label>`
+    +   `<span class="combo" style="max-width:320px">`
+    +   `<input id="stratInput" class="syminput" autocomplete="off" placeholder="전략 검색"`
+    +   ` value="${window._stratCurLabel||""}"`
+    +   ` onfocus="this.select();openStratDrop('')" oninput="openStratDrop(this.value)" onkeydown="stratKey(event)"`
+    +   ` onblur="blurStrat()">`
+    +   `<span class="dropdown" id="stratDD" style="display:none"></span></span>`
+    +   `<span class="sub" id="bc_strat_hint"></span></div>`
+    + `<div class="sub" style="margin:-4px 0 8px 88px">프리셋에선 <b>timeframe·진입·청산</b>만 쓴다. 아래 항목이 심볼·리스크를 덮어쓴다(빈값=프리셋 값).</div>`
     + `<div class="field"><label>심볼</label>${pickerHTML("bc_sym", symOpts, c.symbol||"", def.symbol)}`
     +   (cache.length ? "" : `<span class="sub">수집된 심볼 없음 — /collector에서 먼저 수집</span>`) + `</div>`
     + `<div class="field"><label>레버리지</label><label style="display:flex;align-items:center;gap:6px;cursor:pointer">`
@@ -582,10 +592,17 @@ async function saveBotConfig(){
   if (Object.keys(filter).length) cfg.filter = filter;
   $("bc_msg").textContent = "저장 중…";
   try {
+    // 전략을 먼저 — 서버가 경로·스키마를 검증하므로, 실패하면 실행설정도 건드리지 않는다.
+    if (window._stratPick && window._stratPick !== window._stratSaved){
+      const rs = await (await fetch("/api/strategy",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path: window._stratPick})})).json();
+      if (rs.error) throw new Error("전략 선택 실패: " + rs.error);
+      window._stratSaved = window._stratPick;
+    }
     // 티어 자체는 여기서 저장하지 않는다 — /settings 에서 편집한다.
     // (여기서도 쓰면 이 화면이 들고 있던 낡은 값으로 방금 설정에서 바꾼 티어를 되돌려버린다.)
     const r = await (await fetch("/api/bot-config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({config:cfg})})).json();
     if (r.error) throw new Error(r.error);
+    loadBotConfig();                                // 새 전략의 프리셋 기본값으로 폼 갱신
     $("bc_msg").innerHTML = `<span class="fresh-g">✓ 저장됨 (${Object.keys(cfg).length?'오버라이드 '+Object.keys(cfg).join('/'):'비움 → 프리셋 그대로'})</span>`;
   } catch(e){ $("bc_msg").innerHTML = `<span class="fresh-r">저장 실패: ${e.message}</span>`; }
 }
@@ -599,8 +616,10 @@ async function resetBotConfig(){
 // 가드레일·레버리지 티어 '설정'은 /settings 페이지로 옮겼다(계좌 전역 설정이라 성격이 다름).
 // 여기 남는 건 '지금 발동 중인가'라는 모니터링 뿐 — tick()의 grStatus 표시.
 
-loadStrategies().then(tick); setInterval(tick, 3000);   // 전략 목록 로드 후 3초마다 새로고침
-loadBotConfig();                                        // 봇 설정 패널 1회 렌더(tick과 분리)
+// 봇 설정 폼이 전략 '이름'을 STRATS 에서 찾으므로 목록 로드 뒤에 렌더해야 한다
+// (병렬로 띄우면 목록이 늦게 오는 날엔 전략 칸이 빈 채로 그려진다).
+loadStrategies().then(() => { tick(); loadBotConfig(); });
+setInterval(tick, 3000);                                // 상태만 3초마다 갱신(폼은 재렌더 안 함)
 </script>
 <script>
   // dashboard.py(프로덕션)가 주입하는 플래그 — 백테스트 스튜디오가 없는 환경에선 링크를 감춘다.
