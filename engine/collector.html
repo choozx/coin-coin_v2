@@ -188,7 +188,8 @@ function watchHTML(){
     + ` onfocus="showSymDrop(true)" oninput="showSymDrop(false)" onkeydown="symKey(event)"`
     + ` onblur="setTimeout(hideSymDrop,150)">`
     + `<div class="dropdown" id="symDrop" style="display:none"></div></div>`
-    + `<span class="svc"><button onclick="addSym()">+ 추가</button></span></div>`
+    + `<span class="svc"><button onclick="addSym()">+ 추가</button></span>`
+    + `<span class="svc"><button onclick="refreshSymbolList(this)" title="바이낸스에서 상장 심볼 목록을 지금 다시 받기(새 상장 반영)">🔄 목록 새로고침</button></span></div>`
     + `<div id="symHint" class="sub" style="margin-top:8px">수집기가 이 워치리스트의 캔들을 <b>실시간</b> 유지. 트레이더 매매 심볼은 프리셋이 정함.</div>`;
 }
 function collectHTML(){
@@ -360,6 +361,22 @@ function updateSymHint(){
   hint.innerHTML = `트레이더가 매매하는 심볼은 프리셋이 정함. 여기는 미리 캔들을 채워둘 워치리스트.`
     + ` · 바이낸스 무기한 선물 <b>${list.length}개</b>에서 검색`
     + (window._binanceStale ? ` <span class="fresh-y">(캐시 — 목록 갱신 실패)</span>` : ``);
+}
+// 심볼 목록 수동 새로고침 — 서버가 24h 캐시를 무시하고(refresh=1) 바이낸스에서 지금 다시 받음.
+async function refreshSymbolList(btn){
+  const orig = btn ? btn.textContent : "";
+  if (btn){ btn.disabled = true; btn.textContent = "새로고침 중…"; }
+  try {
+    const r = await (await fetch("/api/symbols?refresh=1", {cache:"no-store"})).json();
+    window._binanceSyms = r.symbols || [];
+    window._binanceStale = !!r.stale;
+    updateSymHint();
+    if (btn) btn.textContent = r.stale ? "⚠ 실패(캐시 유지)" : `✓ ${window._binanceSyms.length}개 갱신`;
+  } catch(e){
+    if (btn) btn.textContent = "⚠ 실패";
+  } finally {
+    if (btn) setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2000);
+  }
 }
 async function addSym(){
   const inp = document.getElementById("symInput"); if (!inp) return;
