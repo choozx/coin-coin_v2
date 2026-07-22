@@ -18,7 +18,7 @@ from .backtest import BacktestConfig, run
 from . import binance_math as bm
 from . import control
 from .candles import resample, TIMEFRAME_MINUTES
-from .preset import Preset, list_strategies, select_strategy
+from .preset import Preset, bot_config_info, list_strategies, select_strategy
 from . import ledger
 
 _HTML = os.path.join(os.path.dirname(__file__), "gui.html")
@@ -540,22 +540,6 @@ def _cache_list() -> dict:
     return {"symbols": candle_store.list_stats()}
 
 
-def _bot_config_info() -> dict:
-    """봇 실행 설정(control.json) + 현재 선택된 전략의 프리셋 기본값(폼 프리필용)."""
-    from .preset import load_preset_file
-    cfg = control.get_bot_config()
-    defaults = {}
-    sp = control.get_strategy()
-    if sp:
-        try:
-            pr = load_preset_file(sp, validate=False)
-            defaults = {"symbol": pr.symbol, "sizing": pr.sizing,
-                        "execution": pr.data.get("execution", {}), "filter": pr.filter}
-        except Exception:
-            pass
-    return {"config": cfg, "presetDefaults": defaults}
-
-
 _SAVED_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "presets", "saved")
 
 
@@ -656,7 +640,7 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/control":
             self._send(200, json.dumps(control.read_control()))
         elif self.path == "/api/bot-config":                 # 봇 실행 설정 + 현재 프리셋 기본값
-            self._send(200, json.dumps(_bot_config_info()))
+            self._send(200, json.dumps(bot_config_info()))
         elif self.path == "/api/settings":                   # 글로벌 설정(레버리지 티어 + 리스크 가드레일)
             from . import settings
             self._send(200, json.dumps({"leverageTiers": settings.get_leverage_tiers(),

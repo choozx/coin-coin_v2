@@ -118,6 +118,29 @@ def test_every_frontend_file_is_covered():
     )
 
 
+def test_prod_dashboard_serves_every_api_its_pages_call():
+    """프로덕션 대시보드(engine.dashboard)가 자기 페이지들이 부르는 /api/* 를 전부 제공해야 한다.
+
+    왜: 프론트엔드(dashboard.html·collector.html)는 로컬 스튜디오(engine.server)와 **공용**인데,
+    server.py 는 프로덕션 이미지에서 제외된다(.dockerignore). 그래서 새 기능을 server.py 에만
+    배선하면 로컬에선 멀쩡하고 **프로덕션에서만** 깨진다 — 게다가 조용히 깨지지도 않고
+    "not found" 를 JSON.parse 하다 죽는 식이라 원인 찾기도 나쁘다.
+
+    실제로 이 방식으로 세 번 샜다: /collector 페이지, /api/bot-config, /api/settings.
+    (마지막 둘은 리스크 가드레일 설정 — 프로덕션에서 킬스위치를 켤 수 없었다.)
+    """
+    import re
+    dash_py = (ENGINE / "dashboard.py").read_text(encoding="utf-8")
+    served = set(re.findall(r'"(/api/[a-z_-]+)"', dash_py))
+    for page in ("dashboard.html", "collector.html"):
+        called = set(re.findall(r'["\'`](/api/[a-z_-]+)', (ENGINE / page).read_text(encoding="utf-8")))
+        missing = called - served
+        assert not missing, (
+            f"[{page}] 가 부르는데 engine/dashboard.py 에 없는 API: {sorted(missing)} — "
+            f"프로덕션에서 이 화면이 깨진다(server.py 는 프로덕션 이미지에 없음). "
+            f"dashboard.py 에 라우트를 추가할 것.")
+
+
 if __name__ == "__main__":
     passed = 0
     for name, fn in sorted(globals().items()):

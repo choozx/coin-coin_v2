@@ -16,7 +16,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from . import candle_store
 from . import control
 from . import ledger
-from .preset import list_strategies, select_strategy
+from .preset import bot_config_info, list_strategies, select_strategy
+from . import settings
 
 _HTML = os.path.join(os.path.dirname(__file__), "dashboard.html")
 _COLLECTOR_HTML = os.path.join(os.path.dirname(__file__), "collector.html")   # 데이터·수집기 관리
@@ -63,6 +64,13 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps(control.read_control()))
         elif self.path == "/api/strategies":
             self._send(200, json.dumps({"strategies": list_strategies()}))
+        elif self.path == "/api/bot-config":      # 봇 실행 설정(심볼·사이징·실행·필터) + 프리셋 기본값
+            self._send(200, json.dumps(bot_config_info()))
+        elif self.path == "/api/settings":        # 글로벌 설정: 레버리지 티어 + 리스크 가드레일
+            self._send(200, json.dumps({"leverageTiers": settings.get_leverage_tiers(),
+                                        "guardrails": settings.get_guardrails()}))
+        elif self.path == "/api/cache":           # 수집된 심볼 목록(커버리지 요약)
+            self._send(200, json.dumps({"symbols": candle_store.list_stats()}))
         elif self.path.split("?")[0] == "/api/trades":
             from urllib.parse import parse_qs, urlparse
             mode = parse_qs(urlparse(self.path).query).get("mode", [None])[0]
@@ -110,6 +118,17 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/api/heal":         # 캔들 구멍 수동 복구
                 syms = [body["symbol"]] if body.get("symbol") else [s["symbol"] for s in candle_store.list_stats()]
                 self._send(200, json.dumps({"ok": True, "result": {s: candle_store.heal_gaps(s, verbose=False) for s in syms}}))
+                return
+            elif self.path == "/api/bot-config":         # 봇 실행 설정 저장(무포지션 시 반영)
+                ctrl = control.set_bot_config(body.get("config") or {})
+            elif self.path == "/api/settings":           # 글로벌 설정 저장(레버리지 티어 / 가드레일)
+                if "leverageTiers" in body:
+                    settings.set_leverage_tiers(body.get("leverageTiers") or [])
+                if "guardrails" in body:
+                    settings.set_guardrails(body.get("guardrails") or {})
+                self._send(200, json.dumps({"ok": True,
+                                            "leverageTiers": settings.get_leverage_tiers(),
+                                            "guardrails": settings.get_guardrails()}))
                 return
             elif self.path == "/api/collect_chunk":     # 과거 구간 수동 백필(브라우저가 청크 단위로 반복 호출)
                 fetched = candle_store.fill_range(body["symbol"].strip().upper(),

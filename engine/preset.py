@@ -143,6 +143,26 @@ def list_strategies(dirs=STRATEGY_DIRS) -> list:
     return out
 
 
+def bot_config_info() -> dict:
+    """봇 실행 설정(control.json) + 현재 선택된 전략의 프리셋 기본값(폼 프리필용).
+
+    대시보드(engine.dashboard)와 로컬 스튜디오(engine.server)가 같이 쓴다 —
+    server.py 는 프로덕션 이미지에서 제외되므로, 여기(공용 모듈)에 있어야 양쪽이 함께 쓴다.
+    """
+    from . import control
+    cfg = control.get_bot_config()
+    defaults = {}
+    sp = control.get_strategy()
+    if sp:
+        try:
+            pr = load_preset_file(sp, validate=False)
+            defaults = {"symbol": pr.symbol, "sizing": pr.sizing,
+                        "execution": pr.data.get("execution", {}), "filter": pr.filter}
+        except Exception:
+            pass
+    return {"config": cfg, "presetDefaults": defaults}
+
+
 def select_strategy(path: str):
     """검증 후 control.json에 '원하는 전략'으로 기록. 봇이 다음 폴링에 무포지션이면 전환.
     알 수 없는 경로/검증 실패면 예외 → 잘못된 선택이 control에 안 써진다."""
