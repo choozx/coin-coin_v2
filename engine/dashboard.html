@@ -521,9 +521,6 @@ async function loadBotConfig(){
   try { d = await (await fetch("/api/bot-config",{cache:"no-store"})).json(); }
   catch(e){ $("botcfg").innerHTML = `<div class="err">봇 설정 로드 실패: ${e}</div>`; return; }
   try { cache = ((await (await fetch("/api/cache",{cache:"no-store"})).json()).symbols||[]).map(s=>s.symbol); } catch(e){}
-  let tiers = [];
-  try { tiers = ((await (await fetch("/api/settings",{cache:"no-store"})).json()).leverageTiers)||[]; } catch(e){}
-  window._levTiers = tiers.map(t => ({maxBalance: t.maxBalance, leverage: t.leverage}));
   const c = d.config || {}, def = d.presetDefaults || {};
   const szc = c.sizing || {}, szd = def.sizing || {}, fc = c.filter || {}, fd = def.filter || {};
   const sizeC = szc.size || {}, sizeD = szd.size || {};
@@ -554,15 +551,11 @@ async function loadBotConfig(){
   _wirePickers();
   renderTiers();
 }
-// 티어 '편집'은 /settings 로 옮겼다(글로벌 값이라 백테스트와 공유). 여기선 현재 값 요약만 보여준다.
+// 티어 값은 /settings 에서 관리한다. 여기선 그리로 가는 링크만 — 같은 값을 두 화면에 뿌리면
+// 한쪽이 낡았을 때 어느 게 맞는지 알 수 없다(설정에서 바꿔도 이 화면은 새로고침 전까지 옛 값).
 function renderTiers(){
   const box = document.getElementById("bc_tiers"); if (!box) return;
-  const t = window._levTiers || [];
-  const summary = t.length
-      ? t.map(x => `${x.maxBalance==null ? "그 이상" : "≤$"+Number(x.maxBalance).toLocaleString()} → ${x.leverage}x`).join(" · ")
-      : "티어 없음 — 프리셋의 고정 레버리지를 사용";
-  box.innerHTML = `<div class="sub" style="margin-bottom:2px">잔고별 레버리지 티어 <b>(글로벌)</b></div>`
-    + `<div class="field"><span>${summary}</span><a href="/settings" class="sub">설정에서 편집 →</a></div>`;
+  box.innerHTML = `<div class="field"><a href="/settings" class="sub">잔고별 레버리지 티어 설정 →</a></div>`;
 }
 
 function toggleDynLev(){
