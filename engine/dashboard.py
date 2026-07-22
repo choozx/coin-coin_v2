@@ -48,7 +48,7 @@ class Handler(BaseHTTPRequestHandler):
             # 수집 심볼 관리·구멍 복구는 프로덕션에서 더 필요하다(수집기가 24/7 도는 곳이니까).
             # 필요한 API(/api/candles·symbols·collect_symbols·heal·collect_chunk)는 여기 다 있다.
             with open(_COLLECTOR_HTML, "rb") as f:
-                self._send(200, f.read(), "text/html; charset=utf-8")
+                self._send(200, _NO_STUDIO + f.read(), "text/html; charset=utf-8")
         elif self.path == "/vendor/lightweight-charts.js":
             with open(_CHARTS_JS, "rb") as f:
                 self._send(200, f.read(), "application/javascript; charset=utf-8")

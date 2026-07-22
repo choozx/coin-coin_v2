@@ -141,6 +141,32 @@ def test_prod_dashboard_serves_every_api_its_pages_call():
             f"dashboard.py 에 라우트를 추가할 것.")
 
 
+def test_prod_dashboard_has_no_dead_page_links():
+    """프로덕션이 서빙하는 페이지의 내부 링크가 전부 살아 있어야 한다.
+
+    dashboard.html·collector.html 은 로컬 스튜디오와 공용이라 /backtest 같은 '로컬에만 있는'
+    링크를 달고 있다. 프로덕션에서 그건 404 — 사용자가 클릭해봐야 알게 된다.
+    허용되는 예외는 딱 하나: id="studioLink" 를 달아 __NO_STUDIO__ 플래그로 숨기는 링크.
+    (실제로 dashboard.html 만 숨기고 collector.html 은 빠뜨려서 한 번 샜다.)
+    """
+    import re
+    dash_py = (ENGINE / "dashboard.py").read_text(encoding="utf-8")
+    for page in ("dashboard.html", "collector.html"):
+        html = (ENGINE / page).read_text(encoding="utf-8")
+        for m in re.finditer(r'<a\s+href="(/[^"#]*)"([^>]*)>', html):
+            href, attrs = m.group(1), m.group(2)
+            path = "/" + href.lstrip("/").split("?")[0].rstrip("/")
+            if path == "/":
+                continue                                  # 랜딩은 항상 있다
+            if 'id="studioLink"' in attrs:                # 프로덕션에서 숨기는 링크
+                assert "__NO_STUDIO__" in html, (
+                    f"[{page}] studioLink 는 있는데 숨기는 스크립트가 없다 — 죽은 링크가 노출된다")
+                continue
+            assert f'"{path}"' in dash_py, (
+                f"[{page}] 의 링크 {href} 를 engine/dashboard.py 가 서빙하지 않는다 — "
+                f"프로덕션에서 404. 라우트를 추가하거나 id=\"studioLink\" 로 숨길 것.")
+
+
 if __name__ == "__main__":
     passed = 0
     for name, fn in sorted(globals().items()):

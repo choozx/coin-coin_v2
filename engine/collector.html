@@ -93,7 +93,8 @@
 <div class="wrap">
   <header>
     <h1>📥 데이터·수집기</h1>
-    <a href="/backtest" style="color:var(--blue);text-decoration:none;font-size:13px">🔬 백테스트</a>
+    <!-- 백테스트 스튜디오는 로컬(engine.server)에만 있다. 프로덕션은 __NO_STUDIO__ 로 숨김 -->
+    <a href="/backtest" id="studioLink" style="color:var(--blue);text-decoration:none;font-size:13px">🔬 백테스트</a>
     <a href="/" style="color:var(--blue);text-decoration:none;font-size:13px">🤖 매매</a>
     <span class="sub" style="margin-left:auto">바이낸스 USDⓈ-M 선물 · 캔들 캐시 관리</span>
   </header>
@@ -418,6 +419,10 @@ async function healGaps(){
 // 초기화 — 데이터 섹션 빌드 + 폴링 시작(단일 페이지라 항상 가동)
 renderData();
 startCachePoll();
+</script>
+<script>
+  // dashboard.py(프로덕션)가 주입하는 플래그 — 백테스트 스튜디오가 없는 환경에선 링크를 감춘다.
+  if (window.__NO_STUDIO__) { const a = document.getElementById("studioLink"); if (a) a.style.display = "none"; }
 </script>
 </body>
 </html>
