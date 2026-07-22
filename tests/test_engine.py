@@ -393,6 +393,73 @@ def test_list_symbols_cache_and_offline_fallback():
         bd.EXCHANGE_INFO = orig
 
 
+# ---- .env 파싱 / 테스트넷 플래그 -------------------------------------------
+# 인라인 주석이 값에 섞이면 BINANCE_TESTNET이 "1"이 아니게 되어 테스트넷 의도가
+# 조용히 메인넷(실돈)으로 뒤집힌다 — 돈이 걸린 파싱이라 테스트로 못박는다.
+
+def test_dotenv_strips_inline_comment():
+    from engine.env import _unquote
+    assert _unquote("1              # 1=테스트넷(가짜돈), 0=메인넷(실돈)") == "1"
+    assert _unquote("  # (선택) 웹훅") == ""            # 값 없이 주석만 → 빈값
+    assert _unquote('"a # b"') == "a # b"               # 따옴표 안의 #은 값
+    assert _unquote("https://x.com/p#frag") == "https://x.com/p#frag"   # 공백 없으면 값의 일부
+    assert _unquote("plain") == "plain"
+
+
+def test_dotenv_file_roundtrip():
+    import tempfile
+    from engine.env import load_dotenv
+    path = os.path.join(tempfile.mkdtemp(), ".env")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("# 주석줄\n\nBINANCE_TESTNET=1   # 가짜돈\nZZ_KEY=abc\n")
+    for k in ("BINANCE_TESTNET", "ZZ_KEY"):
+        os.environ.pop(k, None)
+    try:
+        load_dotenv(path)
+        assert os.environ["BINANCE_TESTNET"] == "1"
+        assert os.environ["ZZ_KEY"] == "abc"
+    finally:
+        for k in ("BINANCE_TESTNET", "ZZ_KEY"):
+            os.environ.pop(k, None)
+
+
+def test_margin_asset_from_symbol():
+    """사이징 기준 자산은 심볼에서 나와야 한다 — USDC 심볼을 USDT 잔고로 재면 증거금이 어긋난다."""
+    from engine.executor import margin_asset
+    assert margin_asset("BTCUSDC") == "USDC"
+    assert margin_asset("BTCUSDT") == "USDT"
+    assert margin_asset("ETHUSDC") == "USDC"
+    assert margin_asset("BTC/USDC:USDC") == "USDC"      # ccxt 표기
+    assert margin_asset(None) == "USDT"                 # 심볼 미지정 → 기본
+
+
+def test_testnet_flag_defaults_to_fake_money():
+    from engine.executor import _testnet_flag
+    orig = os.environ.get("BINANCE_TESTNET")
+    try:
+        os.environ.pop("BINANCE_TESTNET", None)
+        assert _testnet_flag() is True                  # 미설정 → 테스트넷
+        os.environ["BINANCE_TESTNET"] = ""
+        assert _testnet_flag() is True
+        os.environ["BINANCE_TESTNET"] = "1"
+        assert _testnet_flag() is True
+        os.environ["BINANCE_TESTNET"] = "0"
+        assert _testnet_flag() is False                 # 실돈은 명시적으로만
+        os.environ["BINANCE_TESTNET"] = "yes"
+        assert _testnet_flag() is True
+        os.environ["BINANCE_TESTNET"] = "1 # 가짜돈"     # 파싱 실패 잔재 → 조용히 넘어가면 안 됨
+        try:
+            _testnet_flag()
+            raise AssertionError("애매한 값은 예외여야 함")
+        except RuntimeError:
+            pass
+    finally:
+        if orig is None:
+            os.environ.pop("BINANCE_TESTNET", None)
+        else:
+            os.environ["BINANCE_TESTNET"] = orig
+
+
 if __name__ == "__main__":
     import traceback
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

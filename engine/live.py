@@ -409,7 +409,9 @@ class LiveTrader:
         """폴링 루프. once=True면 한 번만. interval초마다 poll_once(now)."""
         self.bootstrap()
         self._write_state()
-        notify(f"▶️ 페이퍼 시작 {self.preset.name} {self.preset.symbol} {self.preset.timeframe} 잔고 {self.ex.equity():.0f}")
+        # 모드를 알림에 그대로 — '페이퍼'로 고정돼 있으면 실돈 봇이 페이퍼처럼 보고된다.
+        tag = "🔴 실거래(실돈)" if self.mode == "live" else "페이퍼"
+        notify(f"▶️ {tag} 시작 {self.preset.name} {self.preset.symbol} {self.preset.timeframe} 잔고 {self.ex.equity():.0f}")
         fails = 0
         while True:
             now = int(time.time() * 1000)
@@ -461,7 +463,7 @@ def main():
     mk, tk = bm.fees_for_symbol(preset.symbol)
     cfg = BacktestConfig(initial_equity=args.equity, maker_fee=mk, taker_fee=tk)
     if args.live:
-        ex = LiveExecutor()              # NotImplementedError
+        ex = LiveExecutor(symbol=preset.symbol)   # 마진 자산은 심볼에서(BTCUSDC→USDC)
     else:
         ex = PaperExecutor(equity=args.equity, maker_fee=mk, taker_fee=tk)
     trader = LiveTrader(preset, ex, cfg, strategy_path=args.preset,
