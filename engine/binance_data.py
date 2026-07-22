@@ -59,7 +59,12 @@ def fetch_range_rows(symbol: str, interval: str, start_ms: int, end_ms: int,
 
     반환: [(open_time, o, h, l, c, v, taker_buy), ...] (raw 튜플). 캐시 저장용.
     taker_buy = klines[9] 테이커 매수 체결량(base) — 오더플로우 델타/CVD 지표용.
+
+    ⚠️ '아직 닫히지 않은' 마지막 봉(형성 중)은 제외한다 — closeTime이 현재보다 미래면
+    거래량/종가가 확정 전이라, 저장하면 부분값으로 굳는다(캐시 PK라 이후 갱신 안 됨).
+    과거 구간(end_ms가 과거)에는 영향 없음(모든 봉이 이미 닫혀 있음).
     """
+    now = int(time.time() * 1000)
     rows = []
     cursor = start_ms
     while cursor < end_ms:
@@ -68,6 +73,8 @@ def fetch_range_rows(symbol: str, interval: str, start_ms: int, end_ms: int,
             break
         for k in batch:
             # klines: [openTime,o,h,l,c,v,closeTime,quoteVol,trades,takerBuyBase,takerBuyQuote,...]
+            if int(k[6]) >= now:                 # closeTime 미래 = 형성 중 봉 → 확정될 때까지 저장 보류
+                continue
             rows.append((int(k[0]), float(k[1]), float(k[2]),
                          float(k[3]), float(k[4]), float(k[5]), float(k[9])))
         last_open = int(batch[-1][0])
