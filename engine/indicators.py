@@ -52,6 +52,22 @@ def atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) 
     return talib.ATR(_d(high), _d(low), _d(close), timeperiod=period)
 
 
+def adx(high, low, close, period: int = 14) -> np.ndarray:
+    """Average Directional Index — 추세 '강도' 0~100 (방향 무관). 높을수록(예 25+) 추세장, 낮으면 횡보.
+    레짐 필터용: 추세추종은 ADX 높을 때만, 평균회귀는 낮을 때만 진입하는 게이트."""
+    return talib.ADX(_d(high), _d(low), _d(close), timeperiod=period)
+
+
+def plus_di(high, low, close, period: int = 14) -> np.ndarray:
+    """+DI — 상승 방향성 강도. +DI > -DI 면 상승 우위."""
+    return talib.PLUS_DI(_d(high), _d(low), _d(close), timeperiod=period)
+
+
+def minus_di(high, low, close, period: int = 14) -> np.ndarray:
+    """-DI — 하락 방향성 강도."""
+    return talib.MINUS_DI(_d(high), _d(low), _d(close), timeperiod=period)
+
+
 def stochastic(high, low, close, period: int = 14, smooth_k: int = 3, smooth_d: int = 3):
     """반환: (%K, %D). slowk = SMA(rawK, smooth_k), slowd = SMA(slowk, smooth_d)."""
     k, d = talib.STOCH(_d(high), _d(low), _d(close),

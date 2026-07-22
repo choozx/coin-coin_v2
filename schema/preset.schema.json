@@ -283,7 +283,7 @@
             "indicator": {
               "type": "string",
               "enum": ["SMA", "EMA", "RSI", "MACD", "MACD_signal", "MACD_hist",
-                       "BB_upper", "BB_lower", "BB_mid", "ATR", "STOCH_K", "STOCH_D",
+                       "BB_upper", "BB_lower", "BB_mid", "ATR", "ADX", "PLUS_DI", "MINUS_DI", "STOCH_K", "STOCH_D",
                        "STOCHRSI_K", "STOCHRSI_D", "CCI", "MFI", "RVOL", "VWAP",
                        "TAKER_DELTA", "TAKER_DELTA_RATIO", "CVD", "CVD_EMA", "HAWKEYE",
                        "QQE_MOD", "QQE_RSI", "QQE_LINE",

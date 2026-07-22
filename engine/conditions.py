@@ -62,6 +62,12 @@ class SeriesResolver:
             return {"BB_upper": up, "BB_mid": mid, "BB_lower": lo}[name]
         if name == "ATR":
             return ind.atr(c.high, c.low, c.close, period or 14)
+        if name == "ADX":
+            return ind.adx(c.high, c.low, c.close, period or 14)
+        if name == "PLUS_DI":
+            return ind.plus_di(c.high, c.low, c.close, period or 14)
+        if name == "MINUS_DI":
+            return ind.minus_di(c.high, c.low, c.close, period or 14)
         if name in ("STOCH_K", "STOCH_D"):
             k, d = ind.stochastic(c.high, c.low, c.close, period or 14,
                                   int(params.get("smooth_k", 3)), int(params.get("smooth_d", 3)))

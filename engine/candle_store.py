@@ -257,6 +257,27 @@ def load_funding_cached(symbol: str, start_ms: int, end_ms: int, db_path=DB_PATH
     return [(int(t), float(r)) for t, r in rows]
 
 
+def backfill_funding(symbol: str, start_ms: int, end_ms: int = None, db_path=DB_PATH, verbose=False) -> int:
+    """펀딩 히스토리를 [start, end] 전체 백필(페이지네이션). 반환: 저장된(신규 포함) 레코드 수."""
+    if end_ms is None:
+        end_ms = int(time.time() * 1000)
+    rows = binance_data.fetch_funding_range(symbol, start_ms, end_ms)
+    if rows:
+        conn = _conn(db_path)
+        conn.executemany("INSERT OR IGNORE INTO funding VALUES(?,?,?)",
+                         [(symbol, t, r) for t, r in rows])
+        conn.commit()
+        conn.close()
+    if verbose:
+        print(f"[funding] {symbol}: {len(rows)}건 수집")
+    return len(rows)
+
+
+def funding_schedule(symbol: str, start_ms: int, end_ms: int, db_path=DB_PATH) -> dict:
+    """백테스트용 실제 펀딩 스케줄 {funding_time_ms: rate}. BacktestConfig.funding_schedule에 넣는다."""
+    return {int(t): float(r) for t, r in load_funding_cached(symbol, start_ms, end_ms, db_path)}
+
+
 def count_range(symbol: str, start_ms: int, end_ms: int, db_path=DB_PATH) -> int:
     conn = _conn(db_path)
     n = conn.execute("SELECT COUNT(*) FROM candle WHERE symbol=? AND open_time BETWEEN ? AND ?",

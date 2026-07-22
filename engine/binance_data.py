@@ -176,10 +176,25 @@ def fetch_funding(symbol: str = "BTCUSDT", days: float = 5, end_ms: int = None):
     if end_ms is None:
         end_ms = int(time.time() * 1000)
     start_ms = end_ms - int(days * 24 * 60) * MINUTE_MS
+    return fetch_funding_range(symbol, start_ms, end_ms)
+
+
+def fetch_funding_range(symbol: str, start_ms: int, end_ms: int):
+    """[start, end] 펀딩 히스토리 전체 — 1000개 제한을 넘겨 페이지네이션. 반환 [(time_ms, rate), ...]."""
     url = "https://fapi.binance.com/fapi/v1/fundingRate"
-    q = urllib.parse.urlencode({"symbol": symbol, "startTime": start_ms,
-                                "endTime": end_ms, "limit": 1000})
-    req = urllib.request.Request(url + "?" + q, headers={"User-Agent": "auto-trading/0.1"})
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        data = json.loads(resp.read())
-    return [(int(d["fundingTime"]), float(d["fundingRate"])) for d in data]
+    out = []
+    cursor = start_ms
+    while cursor < end_ms:
+        q = urllib.parse.urlencode({"symbol": symbol, "startTime": cursor,
+                                    "endTime": end_ms, "limit": 1000})
+        req = urllib.request.Request(url + "?" + q, headers={"User-Agent": "auto-trading/0.1"})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read())
+        if not data:
+            break
+        out.extend((int(d["fundingTime"]), float(d["fundingRate"])) for d in data)
+        cursor = int(data[-1]["fundingTime"]) + 1
+        if len(data) < 1000:
+            break
+        time.sleep(PAGE_SLEEP)
+    return out

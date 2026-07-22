@@ -28,7 +28,8 @@ from .preset import Preset
 @dataclass
 class BacktestConfig:
     initial_equity: float = 10_000.0
-    funding_rate: float = 0.0001      # 상수 근사 (0.01%/8h)
+    funding_rate: float = 0.0001      # 상수 근사 (0.01%/8h). funding_schedule 있으면 그게 우선.
+    funding_schedule: dict = None     # {funding_time_ms: rate} 실제 펀딩 히스토리. None이면 상수 근사.
     taker_fee: float = bm.DEFAULT_TAKER_FEE
     maker_fee: float = bm.DEFAULT_MAKER_FEE
     bracket: bm.MarginBracket = None
@@ -227,7 +228,8 @@ def run(base: Candles, preset: Preset, cfg: BacktestConfig = None) -> Metrics:
         if pos is not None:
             # 1) 펀딩 정산
             if bm.is_funding_time(ot):
-                f = bm.funding_fee(cl, pos.qty, pos.side, cfg.funding_rate)
+                rate = cfg.funding_schedule.get(ot, cfg.funding_rate) if cfg.funding_schedule else cfg.funding_rate
+                f = bm.funding_fee(cl, pos.qty, pos.side, rate)
                 pos.funding_accum += f
                 equity += f  # 현금흐름 즉시 반영
 
