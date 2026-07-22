@@ -5,14 +5,13 @@
 
 흐름:
   1) 1분봉을 주기 폴링(candle_store) → 최신 '닫힌' 봉까지 확보
-  2) 상위 TF 리샘플 → 매 1분봉마다 포지션 관리(펀딩·청산·손절·익절),
-     신호봉 닫히면 진입/청산 신호 판정 (backtest.run() 루프와 동일 순서)
-  3) 결정은 Executor로 실행 (PaperExecutor=시뮬 / LiveExecutor=ccxt, TODO)
+  2) 상위 TF 리샘플 → 봉마다 backtest.Stepper.step() 호출
+  3) 결정은 Executor로 실행 (PaperExecutor=시뮬 / LiveExecutor=ccxt, 주문은 미구현)
 
-⚠️ 지금은 뼈대: backtest.run()의 per-bar 로직을 여기서 '같은 순서로' 다시 호출한다
-   (primitives는 공유하므로 사이징·청산가·플립 판정은 안 갈리지만, 오케스트레이션 순서는
-   중복). 다음 단계: backtest.run()에서 per-bar step()을 추출해 backtest/live가 문자 그대로
-   공유하도록 리팩터.
+판정 로직(펀딩→청산→손절/익절→신호→진입)은 **여기 없다**. backtest.Stepper 한 곳에만 있고
+백테스트와 문자 그대로 같은 코드를 탄다. 이 파일이 담당하는 건 라이브 고유의 것들:
+실시간 클럭·폴링, 전략/봇설정 핫스왑, 멈춤·리스크 가드레일(진입 게이트), 원장 기록,
+대시보드 상태 스냅샷. 두 경로가 갈라지지 않는지는 tests/test_backtest_live_parity.py 가 지킨다.
 """
 from __future__ import annotations
 
@@ -48,13 +47,10 @@ from . import settings
 from . import ledger
 from . import indicators as ind
 from .candles import resample, signal_close_index, TIMEFRAME_MINUTES, MINUTE_MS
-from .conditions import SeriesResolver, evaluate
+from .conditions import SeriesResolver
 from .preset import Preset, load_preset_file, merge_bot_config
 from .executor import PaperExecutor, LiveExecutor
-from .backtest import (
-    BacktestConfig, _leverage_for, _open_position, _supertrend_flip_exit,
-    _trailing_hit, _trailing_stop, _entry_allowed,
-)
+from .backtest import BacktestConfig, Stepper
 
 
 class LiveTrader:
@@ -77,9 +73,9 @@ class LiveTrader:
         self._bot_cfg = {}                   # 마지막 적용한 봇 설정
         self._rebuild_effective()            # 신호(프리셋) + 봇설정(심볼·사이징·실행·필터) 병합
         self._last_ot = None                 # 마지막으로 처리한 1분봉 open_time
-        self._last_exit_sb = -10 ** 9        # 쿨다운용
         self._started_at = int(time.time() * 1000)
         self._paused = False                 # control.json에서 읽음(멈춤=새 진입 차단)
+        self._events = []                    # 이번 폴링에서 발생한 이벤트(hook이 채움)
         self._guardrail_reason = None        # 리스크 가드레일 발동 사유(없으면 None)
         self._restore_from_ledger()          # 원장에서 잔고·이력 복원(재시작해도 안 사라짐)
 
@@ -94,7 +90,7 @@ class LiveTrader:
             side=r["side"], entry_time=r["entry_time"], entry_price=r["entry_price"],
             exit_time=r["exit_time"], exit_price=r["exit_price"], qty=r["qty"],
             leverage=r["leverage"], pnl=r["pnl"], fees=r["fees"], funding=r["funding"],
-            reason=r["reason"]) for r in rows]
+            exit_reason=r["reason"]) for r in rows]      # DB 컬럼명은 reason 유지
         if hasattr(self.ex, "trades"):
             self.ex.trades = restored
         if hasattr(self.ex, "_equity"):
@@ -102,12 +98,18 @@ class LiveTrader:
         print(f"원장 복원: {len(rows)}건, 잔고 {self.ex.equity():.2f} ({self.mode})", flush=True)
 
     def _apply_derived(self, preset: Preset):
-        """프리셋에서 파생되는 실행 파라미터 세팅(전환 시 재호출)."""
+        """프리셋에서 파생되는 실행 파라미터 세팅(전환 시 재호출).
+
+        진입규칙·방향·maker 여부는 Stepper 가 들고 있다(판정하는 쪽이 소유) —
+        트레이더는 폴링에 필요한 tf_min 만 유지한다.
+        """
         self.tf_min = TIMEFRAME_MINUTES[preset.timeframe]
-        self.entry_rules = preset.data.get("entryRules")
-        self.entry_side = -1 if preset.direction == "short" else 1
-        execution = preset.data.get("execution") or {}
-        self.maker_entry = execution.get("entryType") == "makerLimit"
+        if getattr(self, "stepper", None) is None:
+            self.stepper = Stepper(preset, self.cfg, self.ex,
+                                   entry_gate=self._entry_gate,
+                                   on_open=self._on_open, on_close=self._on_close)
+        else:
+            self.stepper.apply_preset(preset)      # 쿨다운(last_exit_sb)은 유지
 
     def _rebuild_effective(self):
         """base 프리셋(신호: tf·진입·청산·방향) + 현재 봇 설정(심볼·사이징·실행·필터)을
@@ -203,11 +205,11 @@ class LiveTrader:
         self._rebuild_effective()
         if self.preset.symbol != old_sym:    # 심볼 바뀌면 과거 replay 방지
             self._last_ot = None
-        self._last_exit_sb = -10 ** 9
+        self.stepper.last_exit_sb = -10 ** 9
         s = self.preset.sizing
         notify(f"⚙️ 봇 설정 반영 — {self.preset.symbol} lev{s.get('leverage')}")
         print(f"  [봇설정 반영] {self.preset.symbol} · lev{s.get('leverage')} · "
-              f"{(s.get('size') or {}).get('type')} · maker={self.maker_entry}", flush=True)
+              f"{(s.get('size') or {}).get('type')} · maker={self.stepper.maker_entry}", flush=True)
 
     def _apply_strategy(self, preset: Preset, path: str):
         """무포지션 상태에서 전략을 실제로 갈아끼운다(심볼 바뀌면 수수료·데이터도 갱신)."""
@@ -215,7 +217,7 @@ class LiveTrader:
         self._base_data = copy.deepcopy(preset.data)   # 새 신호 소스
         self.strategy_path = path
         self._rebuild_effective()                      # 신호 교체 + 봇설정 재적용(심볼·수수료 포함)
-        self._last_exit_sb = -10 ** 9                # 쿨다운 리셋
+        self.stepper.last_exit_sb = -10 ** 9         # 쿨다운 리셋
         self._pending_strategy = None
         self._strategy_error = None
         # 과거 replay 방지: 새 전략/심볼 데이터의 최신 닫힌 봉으로 _last_ot 세팅
@@ -259,7 +261,7 @@ class LiveTrader:
             "trades": [{
                 "side": t.side, "entryTime": int(t.entry_time), "entryPrice": _px(t.entry_price),
                 "exitTime": int(t.exit_time), "exitPrice": _px(t.exit_price),
-                "pnl": round(t.pnl, 2), "reason": t.reason} for t in trades[-100:]],
+                "pnl": round(t.pnl, 2), "reason": t.exit_reason} for t in trades[-100:]],
         }
         try:
             import os
@@ -301,117 +303,39 @@ class LiveTrader:
         atr_series = ind.atr(signal.high, signal.low, signal.close, 14)
         resolver = SeriesResolver(signal)
 
-        events = []
+        self._events = []                # hook(_on_open/_on_close)이 여기에 쌓는다
         # 아직 처리 안 한 1분봉만 (갭이 있어도 순서대로 따라잡음)
         start = 0
         if self._last_ot is not None:
             idx = np.searchsorted(base.open_time, self._last_ot, side="right")
             start = int(idx)
         for t in range(start, len(base)):
-            self._step(base, signal, bar_of, is_close, atr_series, resolver, t, events)
+            self.stepper.step(base, signal, bar_of, is_close, atr_series, resolver, t)
             self._last_ot = int(base.open_time[t])
-        return events
+        return self._events
 
-    # ---- per-bar 처리 (backtest.run() 루프와 동일 순서: 펀딩→청산→손절→익절→신호) ----
-    def _step(self, base, signal, bar_of, is_close, atr_series, resolver, t, events):
-        ex, cfg = self.ex, self.cfg
-        ot = int(base.open_time[t]); hi, lo, cl = base.high[t], base.low[t], base.close[t]
-        sb = int(bar_of[t])                  # 이 1분봉이 속한 신호봉 인덱스(쿨다운·청산사유용)
+    # ---- per-bar 처리 ----
+    # 판정 로직은 backtest.Stepper 한 곳에만 있다(백테스트와 문자 그대로 같은 코드).
+    # 여기 남는 건 '결과를 어떻게 기록할지' 뿐 — 이벤트 발행·원장 append·진입 게이트.
 
-        # 보유 포지션의 1분봉 해상도 관리(펀딩→청산→손절/트레일링/익절)를 먼저.
-        # ★ 별도 메서드인 이유: 청산 시 return이 '이 블록'만 끝내야 한다. 예전엔 _step 전체를
-        #   빠져나가서, 청산이 일어난 봉에선 진입 판정을 통째로 건너뛰었다 → backtest.run()은
-        #   같은 봉에서 청산 후 곧바로 진입하므로 라이브만 한 봉 늦게 진입(대조 테스트로 발견).
-        self._manage_position(ot, hi, lo, cl, sb, events)
+    def _entry_gate(self) -> bool:
+        """새 진입 허용 여부. 멈춤·리스크 가드레일은 진입만 막고 기존 포지션 관리는 계속."""
+        return not self._paused and self._check_guardrail() is None
 
-        if not is_close[t]:
-            return
-        self._signal_step(signal, atr_series, resolver, ot, sb, events)
+    def _on_open(self, pos, lev):
+        self._events.append({"type": "open", "side": pos.side, "price": pos.entry_price,
+                             "time": pos.entry_time, "qty": pos.qty, "lev": lev,
+                             "stop": pos.stop_price, "tp": pos.tp_price})
 
-    def _manage_position(self, ot, hi, lo, cl, sb, events):
-        """보유 중 1분봉 관리: 펀딩 정산 → 청산 → 손절/트레일링/익절 (backtest.run()과 같은 순서)."""
-        ex, cfg = self.ex, self.cfg
-        pos = ex.position
-
-        if pos is not None:
-            if bm.is_funding_time(ot):
-                # 실제 펀딩 히스토리가 있으면 그걸 쓴다(없는 구간만 상수 근사) — backtest.run()과 동일 규칙.
-                rate = cfg.funding_schedule.get(ot, cfg.funding_rate) if cfg.funding_schedule else cfg.funding_rate
-                ex.accrue_funding(cl, rate)
-            # 청산(손절보다 먼저)
-            liq = (pos.side == 1 and lo <= pos.liq_price) or (pos.side == -1 and hi >= pos.liq_price)
-            if liq:
-                self._do_close(pos.liq_price, "liquidation", ot, False, sb, events); return
-            # 손절 / 트레일링 / 익절
-            trailing = self.preset.exit.get("trailing")
-            if pos.side == 1:
-                pos.peak = max(pos.peak, hi)
-                if not np.isnan(pos.stop_price) and lo <= pos.stop_price:
-                    self._do_close(pos.stop_price, "stop_loss", ot, False, sb, events); return
-                if trailing and _trailing_hit(pos, trailing, lo, hi):
-                    self._do_close(_trailing_stop(pos, trailing), "trailing", ot, False, sb, events); return
-                if not np.isnan(pos.tp_price) and hi >= pos.tp_price:
-                    self._do_close(pos.tp_price, "take_profit", ot, True, sb, events); return
-            else:
-                pos.peak = min(pos.peak, lo)
-                if not np.isnan(pos.stop_price) and hi >= pos.stop_price:
-                    self._do_close(pos.stop_price, "stop_loss", ot, False, sb, events); return
-                if trailing and _trailing_hit(pos, trailing, lo, hi):
-                    self._do_close(_trailing_stop(pos, trailing), "trailing", ot, False, sb, events); return
-                if not np.isnan(pos.tp_price) and lo <= pos.tp_price:
-                    self._do_close(pos.tp_price, "take_profit", ot, True, sb, events); return
-
-    def _signal_step(self, signal, atr_series, resolver, ot, sb, events):
-        """신호봉 마감 시점: 신호 기반 청산 → 진입 판정 (backtest.run()의 is_close 블록과 동일)."""
-        ex, cfg = self.ex, self.cfg
-        sig_close = signal.close[sb]; fill_time = ot + MINUTE_MS
-        ex_block = self.preset.exit
-
-        # 신호 기반 청산 (SuperTrend 전환 / 지표조건 / 시간)
-        if ex.position is not None:
-            pos = ex.position
-            st_exit = ex_block.get("supertrendExit")
-            cond = ex_block.get("condition"); time_stop = ex_block.get("timeStop")
-            # elif 체인 + return 없음: 하나만 발동하고, 청산 후엔 아래 진입 판정으로 떨어진다.
-            # (backtest.run()도 신호 청산 직후 같은 신호봉에서 재진입을 허용 — 플립 전략의 전제)
-            if st_exit is not None and _supertrend_flip_exit(resolver, st_exit, pos.side, sb):
-                reason = {"stopLoss": "stop_loss", "exit": "supertrend"}.get(st_exit.get("as"), "take_profit")
-                self._do_close(sig_close, reason, fill_time, self.maker_entry, sb, events)
-            elif cond is not None and evaluate(cond, resolver, sb):
-                self._do_close(sig_close, "signal", fill_time, False, sb, events)
-            elif time_stop is not None and (sb - pos.entry_signal_idx) >= time_stop["maxBars"]:
-                self._do_close(sig_close, "time", fill_time, False, sb, events)
-
-        # 진입 (멈춤·가드레일 발동 시 새 진입 안 함 — 기존 포지션은 위에서 계속 관리됨)
-        if ex.position is None and not self._paused and self._check_guardrail() is None \
-                and _entry_allowed(sb, fill_time, self.preset.filter, self._last_exit_sb, cfg):
-            side = None
-            if self.entry_rules:
-                for rule in self.entry_rules:
-                    if evaluate(rule["when"], resolver, sb):
-                        side = 1 if rule["side"] == "long" else -1
-                        break
-            elif evaluate(self.preset.entry, resolver, sb):
-                side = self.entry_side
-            if side is not None:
-                lev = _leverage_for(self.preset.sizing, ex.equity(), cfg.max_leverage)
-                p = _open_position(self.preset, self.preset.sizing, ex_block, sig_close, fill_time, sb,
-                                   side, lev, ex.equity(), cfg, atr_series, signal, entry_maker=self.maker_entry)
-                if p is not None:
-                    ex.open(p)
-                    events.append({"type": "open", "side": side, "price": sig_close, "time": fill_time,
-                                   "qty": p.qty, "lev": lev, "stop": p.stop_price, "tp": p.tp_price})
-
-    def _do_close(self, price, reason, ts, is_maker, sb, events):
-        tr = self.ex.close(price, reason, ts, is_maker=is_maker)
-        self._last_exit_sb = sb          # 쿨다운 기준 신호봉(backtest last_exit_signal_idx와 동일)
+    def _on_close(self, trade):
         try:                             # 원장에 append(영구 기록) — 실패해도 트레이딩은 계속
-            ledger.record(tr, symbol=self.preset.symbol,
+            ledger.record(trade, symbol=self.preset.symbol,
                           strategy=self.strategy_path or self.preset.name,
                           mode=self.mode, equity_after=self.ex.equity(), db_path=self.ledger_path)
         except Exception as e:
             print(f"  [원장기록 실패] {e}", flush=True)
-        events.append({"type": "close", "reason": reason, "price": price, "time": ts, "pnl": round(tr.pnl, 2)})
+        self._events.append({"type": "close", "reason": trade.exit_reason, "price": trade.exit_price,
+                             "time": trade.exit_time, "pnl": round(trade.pnl, 2)})
 
     def bootstrap(self, now_ms: int = None):
         """라이브 시작 시: 지표 워밍업만 하고 최신봉까지 건너뛴다(과거 신호 실행 안 함, 플랫 시작).

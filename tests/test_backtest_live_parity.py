@@ -98,10 +98,11 @@ def _head(base: Candles, n: int) -> Candles:
                    None if base.taker_buy is None else base.taker_buy[:n])
 
 
-def _fmt(t, reason_attr):
+def _fmt(t):
+    """비교 키. 백테스트·라이브가 이제 같은 Trade 타입을 쓴다(둘 다 exit_reason)."""
     return (t.side, int(t.entry_time), round(float(t.entry_price), 6),
             int(t.exit_time), round(float(t.exit_price), 6),
-            round(float(t.qty), 8), getattr(t, reason_attr))
+            round(float(t.qty), 8), t.exit_reason)
 
 
 def test_backtest_and_live_take_the_same_trades():
@@ -128,8 +129,8 @@ def test_backtest_and_live_take_the_same_trades():
         f"두 경로의 per-bar 순서/조건이 갈라졌다")
 
     for i, (b, l) in enumerate(zip(bt_trades, live_trades)):
-        assert _fmt(b, "exit_reason") == _fmt(l, "reason"), (
-            f"{i}번째 거래 불일치:\n  백테스트 {_fmt(b, 'exit_reason')}\n  라이브   {_fmt(l, 'reason')}")
+        assert _fmt(b) == _fmt(l), (
+            f"{i}번째 거래 불일치:\n  백테스트 {_fmt(b)}\n  라이브   {_fmt(l)}")
 
 
 def test_backtest_and_live_agree_on_pnl():
@@ -171,8 +172,8 @@ def test_live_replay_is_chunk_independent():
     assert len(whole) == len(ex.trades), (
         f"조각 주입 시 거래 수가 달라짐: 통째 {len(whole)} vs 조각 {len(ex.trades)}")
     for i, (w, c) in enumerate(zip(whole, ex.trades)):
-        assert _fmt(w, "reason") == _fmt(c, "reason"), (
-            f"{i}번째 거래가 조각 경계에 따라 달라짐:\n  통째 {_fmt(w, 'reason')}\n  조각 {_fmt(c, 'reason')}")
+        assert _fmt(w) == _fmt(c), (
+            f"{i}번째 거래가 조각 경계에 따라 달라짐:\n  통째 {_fmt(w)}\n  조각 {_fmt(c)}")
 
 
 if __name__ == "__main__":

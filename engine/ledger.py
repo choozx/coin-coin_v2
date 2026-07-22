@@ -42,7 +42,7 @@ def record(trade, symbol: str, strategy: str, mode: str, equity_after: float,
            int(trade.entry_time), float(trade.entry_price), int(trade.exit_time),
            float(trade.exit_price), float(trade.qty), int(trade.leverage),
            float(trade.pnl), float(trade.fees), float(trade.funding),
-           trade.reason, strategy, float(equity_after))
+           trade.exit_reason, strategy, float(equity_after))
     cur = conn.execute(
         f"INSERT INTO trade({','.join(_COLS)}) VALUES({','.join('?' * len(_COLS))})", row)
     conn.commit()

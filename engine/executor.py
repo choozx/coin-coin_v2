@@ -14,24 +14,14 @@ Executor 인터페이스:
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
-
 from . import binance_math as bm
+from .metrics import Trade
 
 
-@dataclass
-class ClosedTrade:
-    side: int
-    entry_time: int
-    entry_price: float
-    exit_time: int
-    exit_price: float
-    qty: float
-    leverage: int
-    pnl: float
-    fees: float
-    funding: float
-    reason: str
+# 청산된 거래는 metrics.Trade 한 타입으로 통일한다. 예전엔 백테스트(metrics.Trade)와
+# 페이퍼/실거래(자체 ClosedTrade)가 필드명까지 다른 타입(exit_reason vs reason)을 써서,
+# 같은 거래를 다루는 코드가 두 갈래로 갈렸다. 이름은 호환을 위해 유지.
+ClosedTrade = Trade
 
 
 class Executor:
@@ -86,7 +76,8 @@ class PaperExecutor(Executor):
         trade = ClosedTrade(
             side=pos.side, entry_time=pos.entry_time, entry_price=pos.entry_price,
             exit_time=exit_time, exit_price=exit_price, qty=pos.qty, leverage=pos.leverage,
-            pnl=pnl, fees=fees, funding=pos.funding_accum, reason=reason)
+            pnl=pnl, fees=fees, funding=pos.funding_accum, exit_reason=reason,
+            stop_price=pos.stop_price, tp_price=pos.tp_price)      # 차트·원장용
         self.trades.append(trade)
         self.position = None
         return trade

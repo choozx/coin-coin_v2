@@ -1,13 +1,16 @@
-"""백테스트 엔진 코어.
+"""백테스트 엔진 코어 + **전략 판정 로직의 유일한 구현**(Stepper).
 
 마스터 클럭 = 1분봉. 신호 판정은 상위 TF(리샘플)에서, 청산/손절 터치는
 1분봉 해상도에서. 한 1분봉 안 이벤트 처리 순서(docs/binance-formulas.md §5):
   1) 펀딩 정산  2) 청산  3) 손절/익절/트레일링  4) (신호봉 종료 시) 진입/청산 신호
 
+이 순서는 Stepper 에만 적혀 있고 백테스트·페이퍼·실거래가 그걸 그대로 호출한다
+(live.py 는 폴링·핫스왑·원장 같은 라이브 고유 관심사만 담당). run() 도 PaperExecutor 를
+통해 주문하므로, 세 경로가 손익·수수료 계산까지 같은 코드를 탄다.
+
 v1 제약:
 - 동시 포지션 1개 (sizing.maxConcurrentPositions>1 미지원)
 - direction: long/both→진입신호는 롱, short→진입신호는 숏. 한 트리로 롱·숏 동시는 v2.
-- 펀딩비율은 상수 근사(설정값). 실제 히스토리 주입은 추후.
 - MMR/cum은 단일 tier 근사.
 """
 from __future__ import annotations
@@ -21,7 +24,7 @@ from . import indicators as ind
 from . import binance_math as bm
 from .candles import Candles, resample, signal_close_index, TIMEFRAME_MINUTES, MINUTE_MS
 from .conditions import SeriesResolver, evaluate
-from .metrics import Metrics, Trade
+from .metrics import Metrics
 from .preset import Preset
 
 
@@ -168,6 +171,151 @@ def _in_trading_hours(open_time_ms: int, windows) -> bool:
     return False
 
 
+class Stepper:
+    """1분봉 하나를 처리하는 오케스트레이션 — 백테스트·페이퍼·실거래가 **문자 그대로** 공유한다.
+
+    이벤트 순서(이게 전략 결과를 좌우한다):
+      펀딩 → 청산 → 손절/트레일링/익절 → (신호봉 마감 시) 신호청산 → 진입
+
+    예전엔 이 순서를 backtest.run() 루프와 LiveTrader._step() 이 각각 구현하고 주석으로만
+    맞춰뒀다. 한쪽만 고쳐도 테스트는 통과하고, 차이는 실거래에서야 드러났다(대조 테스트가
+    실제로 세 건을 잡아냄). 이제 판정은 여기 한 곳에만 있고, 호출자는 결과를 어떻게
+    기록할지(백테스트=Metrics 집계 / 라이브=이벤트·원장)만 hook 으로 다르게 한다.
+
+    hook:
+      entry_gate() -> bool   진입 허용 여부. 라이브의 멈춤·리스크 가드레일용(백테스트는 항상 True).
+      on_open(pos, lev)      진입 직후.
+      on_close(trade)        청산 직후(Trade).
+    """
+
+    def __init__(self, preset: Preset, cfg: BacktestConfig, executor,
+                 entry_gate=None, on_open=None, on_close=None):
+        self.cfg = cfg
+        self.ex = executor
+        self.entry_gate = entry_gate
+        self.on_open = on_open
+        self.on_close = on_close
+        self.last_exit_sb = -10 ** 9          # 쿨다운 기준: 마지막 청산이 일어난 신호봉
+        self.apply_preset(preset)
+
+    def apply_preset(self, preset: Preset):
+        """프리셋에서 파생되는 실행 파라미터 갱신(라이브의 전략 전환 시 재호출)."""
+        self.preset = preset
+        self.entry_rules = preset.data.get("entryRules")     # 방향별 진입 규칙(있으면 우선)
+        self.entry_side = -1 if preset.direction == "short" else 1
+        execution = preset.data.get("execution") or {}
+        # 체결 방식: taker(시장가) vs makerLimit. 백테스트에선 지정가도 신호봉 종가에 그냥
+        # 체결됐다고 가정 — 수수료만 maker로 다르게 적용(미체결/슬리피지 모델 없음).
+        self.maker_entry = execution.get("entryType") == "makerLimit"
+
+    def _close(self, price, reason, ts, sb, is_maker=False):
+        trade = self.ex.close(price, reason, ts, is_maker=is_maker)
+        self.last_exit_sb = sb                # 청산한 신호봉 → 쿨다운 기준 갱신
+        if self.on_close:
+            self.on_close(trade)
+        return trade
+
+    def step(self, base, signal, bar_of, is_close, atr_series, resolver, t):
+        """1분봉 t 하나 처리."""
+        ot = int(base.open_time[t]); hi, lo, cl = base.high[t], base.low[t], base.close[t]
+        sb = int(bar_of[t])                   # 이 1분봉이 속한 신호봉
+        self.manage_position(ot, hi, lo, cl, sb)
+        if is_close[t]:
+            self.signal_step(signal, atr_series, resolver, ot, sb)
+
+    def manage_position(self, ot, hi, lo, cl, sb):
+        """보유 중 1분봉 해상도 관리: 펀딩 → 청산 → 손절/트레일링/익절.
+
+        ★ 여기의 return 은 '이 메서드'만 끝낸다 — 청산이 일어난 봉에서도 호출자는 이어서
+          신호 판정으로 넘어간다(청산 직후 같은 봉 재진입이 플립 전략의 전제).
+        """
+        cfg = self.cfg
+        pos = self.ex.position
+        if pos is None:
+            return
+
+        # 1) 펀딩 정산 — 잔고 반영은 청산 시 pnl로 한 번만(이중계상 방지).
+        if bm.is_funding_time(ot):
+            rate = cfg.funding_schedule.get(ot, cfg.funding_rate) if cfg.funding_schedule else cfg.funding_rate
+            self.ex.accrue_funding(cl, rate)
+
+        # 2) 청산 (손절보다 먼저! 레버리지 백테스트 뻥튀기 방지)
+        if (pos.side == 1 and lo <= pos.liq_price) or (pos.side == -1 and hi >= pos.liq_price):
+            self._close(pos.liq_price, "liquidation", ot, sb); return
+
+        # 3) 손절 / 트레일링 / 익절 (보수적으로 나쁜 것부터)
+        trailing = self.preset.exit.get("trailing")
+        if pos.side == 1:
+            pos.peak = max(pos.peak, hi)
+            if not np.isnan(pos.stop_price) and lo <= pos.stop_price:
+                self._close(pos.stop_price, "stop_loss", ot, sb)
+            elif trailing and _trailing_hit(pos, trailing, lo, hi):
+                self._close(_trailing_stop(pos, trailing), "trailing", ot, sb)
+            elif not np.isnan(pos.tp_price) and hi >= pos.tp_price:
+                self._close(pos.tp_price, "take_profit", ot, sb, is_maker=True)
+        else:
+            pos.peak = min(pos.peak, lo)
+            if not np.isnan(pos.stop_price) and hi >= pos.stop_price:
+                self._close(pos.stop_price, "stop_loss", ot, sb)
+            elif trailing and _trailing_hit(pos, trailing, lo, hi):
+                self._close(_trailing_stop(pos, trailing), "trailing", ot, sb)
+            elif not np.isnan(pos.tp_price) and lo <= pos.tp_price:
+                self._close(pos.tp_price, "take_profit", ot, sb, is_maker=True)
+
+    def signal_step(self, signal, atr_series, resolver, ot, sb):
+        """신호봉 마감 시점: 신호 기반 청산 → 진입."""
+        ex, cfg, preset = self.ex, self.cfg, self.preset
+        sig_close = signal.close[sb]
+        # 체결 시각 = 이 1분봉이 '닫히는' 순간 = ot + 1분. (ot 는 봉의 시작)
+        # 예: 5m 11:00 봉의 마지막 1분봉은 ot=11:04 이고 11:05:00 에 닫힘 → 체결은 11:05.
+        # ot 를 그대로 쓰면 체결이 1분 이르게 기록돼 차트 마커가 신호봉 위에 찍힌다.
+        fill_time = ot + MINUTE_MS
+        ex_block = preset.exit
+
+        # 청산 신호 (SuperTrend 전환 / 지표조건 / 시간) — elif 체인: 하나만 발동.
+        pos = ex.position
+        if pos is not None:
+            st_exit = ex_block.get("supertrendExit")
+            cond = ex_block.get("condition")
+            time_stop = ex_block.get("timeStop")
+            if st_exit is not None and _supertrend_flip_exit(resolver, st_exit, pos.side, sb):
+                st_reason = {"stopLoss": "stop_loss", "exit": "supertrend"}.get(
+                    st_exit.get("as"), "take_profit")
+                # maker 모드(지정가 진입)면 SuperTrend 청산도 BBO 지정가로 체결됐다고 가정 → maker.
+                # (실전: post-only 걸고 3초 내 미체결이면 취소 후 taker 청산 — README 참고.)
+                self._close(sig_close, st_reason, fill_time, sb, is_maker=self.maker_entry)
+            elif cond is not None and evaluate(cond, resolver, sb):
+                self._close(sig_close, "signal", fill_time, sb)
+            elif time_stop is not None and (sb - pos.entry_signal_idx) >= time_stop["maxBars"]:
+                self._close(sig_close, "time", fill_time, sb)
+
+        # 진입 신호. 펀딩 임박·거래시간 필터는 '체결 순간' 기준이어야 하므로 fill_time 으로 판정.
+        if ex.position is not None:
+            return
+        if self.entry_gate is not None and not self.entry_gate():
+            return
+        if not _entry_allowed(sb, fill_time, preset.filter, self.last_exit_sb, cfg):
+            return
+        side = None
+        if self.entry_rules:
+            for rule in self.entry_rules:          # 순서대로 평가, 먼저 참인 규칙의 방향
+                if evaluate(rule["when"], resolver, sb):
+                    side = 1 if rule["side"] == "long" else -1
+                    break
+        elif evaluate(preset.entry, resolver, sb):
+            side = self.entry_side
+        if side is None:
+            return
+        equity = ex.equity()
+        lev = _leverage_for(preset.sizing, equity, cfg.max_leverage)   # 현재 자산 기준 레버리지
+        p = _open_position(preset, preset.sizing, ex_block, sig_close, fill_time, sb,
+                           side, lev, equity, cfg, atr_series, signal, entry_maker=self.maker_entry)
+        if p is not None:
+            ex.open(p)
+            if self.on_open:
+                self.on_open(p, lev)
+
+
 def run(base: Candles, preset: Preset, cfg: BacktestConfig = None) -> Metrics:
     cfg = cfg or BacktestConfig()
     tf_min = TIMEFRAME_MINUTES[preset.timeframe]
@@ -177,148 +325,33 @@ def run(base: Candles, preset: Preset, cfg: BacktestConfig = None) -> Metrics:
     atr_series = ind.atr(signal.high, signal.low, signal.close, 14)
     bar_of, is_close = signal_close_index(base, tf_min)
 
-    direction = preset.direction
-    entry_side = -1 if direction == "short" else 1
-    # 방향별 진입 규칙 (있으면 우선). 각 규칙 = (side, when-조건). 먼저 참인 규칙으로 진입.
-    entry_rules = preset.data.get("entryRules")
+    # 주문 실행은 페이퍼 어댑터에 위임 — 라이브와 '같은 손익/수수료 계산'을 타게 된다.
+    # (import를 함수 안에서: executor 가 metrics 를 쓰고 backtest 도 metrics 를 써서
+    #  모듈 최상단에서 서로 물리면 순환이 된다.)
+    from .executor import PaperExecutor
+    ex = PaperExecutor(equity=cfg.initial_equity, taker_fee=cfg.taker_fee, maker_fee=cfg.maker_fee)
 
-    # 체결 방식: taker(시장가) vs makerLimit. 백테스트에선 지정가도 신호봉 종가(진입하려는
-    # 가격)에 그냥 체결됐다고 가정 — 수수료만 maker로 다르게 적용(미체결/슬리피지 모델 없음).
-    execution = preset.data.get("execution") or {}
-    maker_entry = execution.get("entryType") == "makerLimit"
+    trades = ex.trades                                    # Stepper가 청산할 때마다 append
+    equity_curve = [(int(base.open_time[0]), cfg.initial_equity)]
 
-    sizing = preset.sizing
-    ex = preset.exit
-    filt = preset.filter
-    # 레버리지: 진입 시점 자산 기준(leverageTiers면 잔고 구간 조회) — 진입부에서 계산.
+    def on_close(trade):
+        equity_curve.append((int(trade.exit_time), ex.equity()))
 
-    equity = cfg.initial_equity
-    pos: _Position = None
-    trades = []
-    equity_curve = [(int(base.open_time[0]), equity)]
-    last_exit_signal_idx = -10 ** 9
-    _cur_sb = 0                     # 현재 처리 중인 신호봉 인덱스(쿨다운 갱신용)
+    stepper = Stepper(preset, cfg, ex, on_close=on_close)
 
-    def close_position(exit_price, exit_time, reason, is_maker=False):
-        # 지정가 익절(가격 도달 체결)만 maker, 나머지(손절·트레일링·신호·강제청산 등 시장가)는 taker.
-        nonlocal equity, pos, last_exit_signal_idx
-        exit_fee = bm.trade_fee(exit_price, pos.qty, taker=not is_maker,
-                                taker_fee=cfg.taker_fee, maker_fee=cfg.maker_fee)
-        gross = pos.side * (exit_price - pos.entry_price) * pos.qty
-        fees = pos.entry_fee + exit_fee
-        pnl = gross - fees + pos.funding_accum
-        equity += pnl
-        trades.append(Trade(
-            side=pos.side, entry_time=pos.entry_time, entry_price=pos.entry_price,
-            exit_time=exit_time, exit_price=exit_price, qty=pos.qty, leverage=pos.leverage,
-            pnl=pnl, fees=fees, funding=pos.funding_accum, exit_reason=reason,
-            stop_price=pos.stop_price, tp_price=pos.tp_price,
-        ))
-        equity_curve.append((int(exit_time), equity))
-        last_exit_signal_idx = _cur_sb          # 청산한 신호봉 → 쿨다운 기준 갱신
-        pos = None
-
-    n = len(base)
-    for t in range(n):
-        ot = int(base.open_time[t])
-        _cur_sb = int(bar_of[t])                # 이 1분봉이 속한 신호봉
-        hi, lo, cl = base.high[t], base.low[t], base.close[t]
-
-        # ---- 포지션 보유 중: 1분봉 해상도 관리 ----
-        if pos is not None:
-            # 1) 펀딩 정산
-            if bm.is_funding_time(ot):
-                rate = cfg.funding_schedule.get(ot, cfg.funding_rate) if cfg.funding_schedule else cfg.funding_rate
-                f = bm.funding_fee(cl, pos.qty, pos.side, rate)
-                pos.funding_accum += f
-                # equity 반영은 청산 시 pnl(= gross - fees + funding_accum)로 한 번만.
-                # 여기서 즉시 더하면 청산 때 또 더해져 펀딩이 이중 계상된다(자산곡선·MDD·수익률이 틀어짐).
-                # PaperExecutor.accrue_funding 과 같은 규칙 — 백테스트/페이퍼/실거래가 같아야 한다.
-
-            # 2) 청산 (손절보다 먼저!)
-            liquidated = (pos.side == 1 and lo <= pos.liq_price) or \
-                         (pos.side == -1 and hi >= pos.liq_price)
-            if liquidated:
-                close_position(pos.liq_price, ot, "liquidation")
-
-        if pos is not None:
-            # 3) 손절 / 트레일링 / 익절 (보수적으로 나쁜 것부터)
-            # 트레일링 피크 갱신
-            trailing = ex.get("trailing")
-            if pos.side == 1:
-                pos.peak = max(pos.peak, hi)
-                # 손절
-                if not np.isnan(pos.stop_price) and lo <= pos.stop_price:
-                    close_position(pos.stop_price, ot, "stop_loss")
-                elif trailing and _trailing_hit(pos, trailing, lo, hi):
-                    close_position(_trailing_stop(pos, trailing), ot, "trailing")
-                elif not np.isnan(pos.tp_price) and hi >= pos.tp_price:
-                    close_position(pos.tp_price, ot, "take_profit", is_maker=True)
-            else:
-                pos.peak = min(pos.peak, lo)
-                if not np.isnan(pos.stop_price) and hi >= pos.stop_price:
-                    close_position(pos.stop_price, ot, "stop_loss")
-                elif trailing and _trailing_hit(pos, trailing, lo, hi):
-                    close_position(_trailing_stop(pos, trailing), ot, "trailing")
-                elif not np.isnan(pos.tp_price) and lo <= pos.tp_price:
-                    close_position(pos.tp_price, ot, "take_profit", is_maker=True)
-
-        # ---- 신호봉 종료 시점: 진입/청산 신호 판정 ----
-        if is_close[t]:
-            sb = int(bar_of[t])
-            sig_close = signal.close[sb]
-            # 체결 시각 = 이 1분봉이 '닫히는' 순간 = ot + 1분. (ot 는 봉의 시작)
-            # 예: 5m 11:00 봉의 마지막 1분봉은 ot=11:04 이고 11:05:00 에 닫힘 → 체결은 11:05.
-            # ot 를 그대로 쓰면 체결이 1분 이르게 기록돼 차트 마커가 신호봉 위에 찍힌다.
-            fill_time = ot + MINUTE_MS
-
-            # 청산 신호 (SuperTrend 전환 / 지표조건 / 시간)
-            if pos is not None:
-                cond = ex.get("condition")
-                time_stop = ex.get("timeStop")
-                st_exit = ex.get("supertrendExit")
-                if st_exit is not None and _supertrend_flip_exit(resolver, st_exit, pos.side, sb):
-                    st_reason = {"stopLoss": "stop_loss", "exit": "supertrend"}.get(
-                        st_exit.get("as"), "take_profit")
-                    # maker 모드(지정가 진입)면 SuperTrend 청산도 BBO 지정가로 체결됐다고 가정 → maker.
-                    # (실전: post-only 걸고 3초 내 미체결이면 취소 후 taker 청산 — README 참고.)
-                    close_position(sig_close, fill_time, st_reason, is_maker=maker_entry)
-                elif cond is not None and evaluate(cond, resolver, sb):
-                    close_position(sig_close, fill_time, "signal")
-                elif time_stop is not None:
-                    bars_held = sb - pos.entry_signal_idx
-                    if bars_held >= time_stop["maxBars"]:
-                        close_position(sig_close, fill_time, "time")
-
-            # 진입 신호
-            # 펀딩 임박·거래시간 필터는 '체결 순간' 기준이어야 하므로 fill_time 으로 판정
-            if pos is None and _entry_allowed(sb, fill_time, filt, last_exit_signal_idx, cfg):
-                side = None
-                if entry_rules:
-                    for rule in entry_rules:               # 순서대로 평가, 먼저 참인 규칙의 방향
-                        if evaluate(rule["when"], resolver, sb):
-                            side = 1 if rule["side"] == "long" else -1
-                            break
-                elif evaluate(preset.entry, resolver, sb):
-                    side = entry_side
-                if side is not None:
-                    # taker든 maker(지정가)든 신호봉 종가에 체결. 차이는 수수료(maker=지정가)뿐.
-                    lev = _leverage_for(sizing, equity, cfg.max_leverage)   # 현재 자산 기준 레버리지
-                    p = _open_position(preset, sizing, ex, sig_close, fill_time, sb,
-                                       side, lev, equity, cfg, atr_series, signal, entry_maker=maker_entry)
-                    if p is not None:
-                        pos = p
-
+    for t in range(len(base)):
+        stepper.step(base, signal, bar_of, is_close, atr_series, resolver, t)
         # 마킹: 무포지션 구간도 자산곡선에 점 남김(선택)
-        if pos is None and is_close[t]:
-            equity_curve.append((ot, equity))
+        if ex.position is None and is_close[t]:
+            equity_curve.append((int(base.open_time[t]), ex.equity()))
 
-    # 종료 시 잔여 포지션 청산(마지막 종가 → 그 봉이 닫히는 순간)
-    if pos is not None:
-        close_position(base.close[-1], int(base.open_time[-1]) + MINUTE_MS, "signal")
+    # 종료 시 잔여 포지션 청산(마지막 종가 → 그 봉이 닫히는 순간). 백테스트에만 있는 꼬리 처리 —
+    # 라이브는 데이터가 끝나지 않으므로 포지션을 그대로 들고 간다.
+    if ex.position is not None:
+        stepper._close(base.close[-1], "signal", int(base.open_time[-1]) + MINUTE_MS,
+                       int(bar_of[-1]))
 
-    m = Metrics(cfg.initial_equity, equity, trades, equity_curve)
-    return m
+    return Metrics(cfg.initial_equity, ex.equity(), trades, equity_curve)
 
 
 def _trailing_stop(pos: _Position, trailing: dict) -> float:
