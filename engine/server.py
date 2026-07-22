@@ -657,9 +657,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps(control.read_control()))
         elif self.path == "/api/bot-config":                 # 봇 실행 설정 + 현재 프리셋 기본값
             self._send(200, json.dumps(_bot_config_info()))
-        elif self.path == "/api/settings":                   # 글로벌 설정(레버리지 티어 등)
+        elif self.path == "/api/settings":                   # 글로벌 설정(레버리지 티어 + 리스크 가드레일)
             from . import settings
-            self._send(200, json.dumps({"leverageTiers": settings.get_leverage_tiers()}))
+            self._send(200, json.dumps({"leverageTiers": settings.get_leverage_tiers(),
+                                        "guardrails": settings.get_guardrails()}))
         elif self.path == "/api/strategies":                 # 봇이 고를 수 있는 전략 목록
             self._send(200, json.dumps({"strategies": list_strategies()}))
         elif self.path.split("?")[0] == "/api/trades":       # 매매 원장 전체 이력
@@ -719,13 +720,17 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._send(400, json.dumps({"error": str(e)}))
             return
-        if self.path == "/api/settings":                     # 글로벌 설정 저장(레버리지 티어)
+        if self.path == "/api/settings":                     # 글로벌 설정 저장(레버리지 티어 / 가드레일)
             from . import settings
             try:
                 length = int(self.headers.get("Content-Length", 0))
                 body = json.loads(self.rfile.read(length) or b"{}")
-                settings.set_leverage_tiers(body.get("leverageTiers") or [])
-                self._send(200, json.dumps({"ok": True, "leverageTiers": settings.get_leverage_tiers()}))
+                if "leverageTiers" in body:
+                    settings.set_leverage_tiers(body.get("leverageTiers") or [])
+                if "guardrails" in body:
+                    settings.set_guardrails(body.get("guardrails") or {})
+                self._send(200, json.dumps({"ok": True, "leverageTiers": settings.get_leverage_tiers(),
+                                            "guardrails": settings.get_guardrails()}))
             except Exception as e:
                 self._send(400, json.dumps({"error": str(e)}))
             return

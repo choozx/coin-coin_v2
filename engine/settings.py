@@ -56,3 +56,31 @@ def set_leverage_tiers(tiers, path: str = SETTINGS_PATH) -> dict:
     d = _read(path)
     d["leverageTiers"] = clean
     return _write(d, path)
+
+
+# 리스크 가드레일 — 계좌 안전장치(전략 무관). 라이브 봇이 강제(새 진입만 차단, 청산은 계속).
+DEFAULT_GUARDRAILS = {
+    "dailyLossLimit": {"enabled": False, "pct": 10.0},      # 오늘 실현손실이 잔고의 pct% 넘으면 정지
+    "maxConsecutiveLosses": {"enabled": False, "count": 5},  # N연속 손절 시 정지
+    "killSwitch": False,                                     # 즉시 정지(마스터)
+}
+
+
+def get_guardrails(path: str = SETTINGS_PATH) -> dict:
+    """글로벌 리스크 가드레일 (기본값에 저장값 병합 → 누락 키 안전)."""
+    v = _read(path).get("guardrails") or {}
+    g = {k: (dict(x) if isinstance(x, dict) else x) for k, x in DEFAULT_GUARDRAILS.items()}
+    if isinstance(v.get("dailyLossLimit"), dict):
+        g["dailyLossLimit"].update({k: v["dailyLossLimit"][k] for k in ("enabled", "pct") if k in v["dailyLossLimit"]})
+    if isinstance(v.get("maxConsecutiveLosses"), dict):
+        g["maxConsecutiveLosses"].update({k: v["maxConsecutiveLosses"][k] for k in ("enabled", "count") if k in v["maxConsecutiveLosses"]})
+    if "killSwitch" in v:
+        g["killSwitch"] = bool(v["killSwitch"])
+    return g
+
+
+def set_guardrails(guardrails: dict, path: str = SETTINGS_PATH) -> dict:
+    """글로벌 리스크 가드레일 저장."""
+    d = _read(path)
+    d["guardrails"] = dict(guardrails or {})
+    return _write(d, path)

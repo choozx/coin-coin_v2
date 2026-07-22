@@ -80,6 +80,7 @@ class LiveTrader:
         self._last_exit_sb = -10 ** 9        # 쿨다운용
         self._started_at = int(time.time() * 1000)
         self._paused = False                 # control.json에서 읽음(멈춤=새 진입 차단)
+        self._guardrail_reason = None        # 리스크 가드레일 발동 사유(없으면 None)
         self._restore_from_ledger()          # 원장에서 잔고·이력 복원(재시작해도 안 사라짐)
 
     def _restore_from_ledger(self):
@@ -150,6 +151,47 @@ class LiveTrader:
             return
         self._apply_strategy(new, desired)
 
+    def _guardrail_block(self):
+        """글로벌 리스크 가드레일 — 걸리면 사유(str), 아니면 None. 새 진입만 막음(청산·관리는 계속)."""
+        g = settings.get_guardrails()
+        if g.get("killSwitch"):
+            return "킬스위치"
+        trades = getattr(self.ex, "trades", []) or []
+        mcl = g.get("maxConsecutiveLosses") or {}
+        if mcl.get("enabled") and mcl.get("count"):
+            streak = 0
+            for tr in reversed(trades):
+                if tr.pnl < 0:
+                    streak += 1
+                else:
+                    break
+            if streak >= int(mcl["count"]):
+                return f"연속 손실 {streak}회"
+        dll = g.get("dailyLossLimit") or {}
+        if dll.get("enabled") and dll.get("pct"):
+            from datetime import datetime, timezone
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            today_pnl = sum(tr.pnl for tr in trades if tr.exit_time and
+                            datetime.fromtimestamp(tr.exit_time / 1000, timezone.utc).strftime("%Y-%m-%d") == today)
+            if today_pnl < 0:
+                base = self.ex.equity() - today_pnl      # 오늘 시작 잔고(= 현재잔고 - 오늘실현손익)
+                loss_pct = (-today_pnl / base * 100) if base > 0 else 0
+                if loss_pct >= float(dll["pct"]):
+                    return f"일일 손실 {loss_pct:.1f}% (한도 {dll['pct']}%)"
+        return None
+
+    def _check_guardrail(self):
+        """가드레일 상태 갱신 + 상태 변화 시 1회 알림. 반환: 발동 사유 or None."""
+        gr = self._guardrail_block()
+        if gr != self._guardrail_reason:
+            self._guardrail_reason = gr
+            if gr:
+                notify(f"🛡 리스크 가드레일 발동 — 새 진입 차단: {gr}")
+                print(f"  [가드레일] {gr} → 새 진입 차단", flush=True)
+            else:
+                print("  [가드레일] 해제 → 진입 재개", flush=True)
+        return gr
+
     def _maybe_apply_bot_config(self):
         """대시보드가 '봇 설정'(심볼·사이징·레버리지·실행·필터)을 바꾸면 반영.
         무포지션일 때만 — 포지션 관리 중엔 파라미터가 안 바뀌게(안전)."""
@@ -202,6 +244,7 @@ class LiveTrader:
             "preset": self.preset.name, "symbol": self.preset.symbol, "timeframe": self.preset.timeframe,
             "startedAt": self._started_at, "updatedAt": int(time.time() * 1000),
             "paused": self._paused,
+            "guardrail": self._guardrail_reason,         # 가드레일 발동 사유(대시보드 표시), 없으면 null
             "mode": self.mode,                           # paper | live (원장 조회용)
             "strategy": self.strategy_path,              # 현재 활성 전략 파일 경로
             "pendingStrategy": self._pending_strategy,   # 전환 대기(포지션 청산 후) 경로 or None
@@ -320,8 +363,8 @@ class LiveTrader:
             if time_stop is not None and (sb - pos.entry_signal_idx) >= time_stop["maxBars"]:
                 self._do_close(sig_close, "time", fill_time, False, sb, events); return
 
-        # 진입 (멈춤 상태면 새 진입 안 함 — 기존 포지션은 위에서 계속 관리됨)
-        if ex.position is None and not self._paused \
+        # 진입 (멈춤·가드레일 발동 시 새 진입 안 함 — 기존 포지션은 위에서 계속 관리됨)
+        if ex.position is None and not self._paused and self._check_guardrail() is None \
                 and _entry_allowed(sb, fill_time, self.preset.filter, self._last_exit_sb, cfg):
             side = None
             if self.entry_rules:
