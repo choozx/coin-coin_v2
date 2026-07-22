@@ -19,8 +19,12 @@ from . import ledger
 from .preset import list_strategies, select_strategy
 
 _HTML = os.path.join(os.path.dirname(__file__), "dashboard.html")
+_COLLECTOR_HTML = os.path.join(os.path.dirname(__file__), "collector.html")   # 데이터·수집기 관리
 _CHARTS_JS = os.path.join(os.path.dirname(__file__), "vendor",
                           "lightweight-charts.standalone.production.js")
+# 대시보드에는 백테스트 스튜디오가 없다(server.py 전용, 프로덕션 이미지에서 제외).
+# 페이지가 그 링크를 감추도록 알려준다 — 안 그러면 헤더에 죽은 링크가 남는다.
+_NO_STUDIO = b"<script>window.__NO_STUDIO__=true</script>"
 STATE_PATH = os.environ.get("STATE_PATH", "data/state.json")
 
 
@@ -37,6 +41,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/" or self.path.startswith("/?"):
             with open(_HTML, "rb") as f:
+                # 플래그를 **앞에** — 페이지 하단 스크립트가 이 값을 읽으므로 순서가 뒤집히면 안 된다.
+                self._send(200, _NO_STUDIO + f.read(), "text/html; charset=utf-8")
+        elif self.path in ("/collector", "/collector/"):
+            # 수집 심볼 관리·구멍 복구는 프로덕션에서 더 필요하다(수집기가 24/7 도는 곳이니까).
+            # 필요한 API(/api/candles·symbols·collect_symbols·heal·collect_chunk)는 여기 다 있다.
+            with open(_COLLECTOR_HTML, "rb") as f:
                 self._send(200, f.read(), "text/html; charset=utf-8")
         elif self.path == "/vendor/lightweight-charts.js":
             with open(_CHARTS_JS, "rb") as f:
@@ -100,6 +110,14 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/api/heal":         # 캔들 구멍 수동 복구
                 syms = [body["symbol"]] if body.get("symbol") else [s["symbol"] for s in candle_store.list_stats()]
                 self._send(200, json.dumps({"ok": True, "result": {s: candle_store.heal_gaps(s, verbose=False) for s in syms}}))
+                return
+            elif self.path == "/api/collect_chunk":     # 과거 구간 수동 백필(브라우저가 청크 단위로 반복 호출)
+                fetched = candle_store.fill_range(body["symbol"].strip().upper(),
+                                                  int(body["fromMs"]), int(body["toMs"]), verbose=False)
+                self._send(200, json.dumps({
+                    "fetched": fetched,
+                    "inRange": candle_store.count_range(body["symbol"].strip().upper(),
+                                                        int(body["fromMs"]), int(body["toMs"]))}))
                 return
             elif self.path == "/api/collect_symbols":   # 수집 심볼 설정(핫리로드)
                 ctrl = control.set_symbols(control.clean_symbols(body.get("symbols") or []))

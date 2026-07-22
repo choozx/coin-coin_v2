@@ -95,7 +95,8 @@
 <div class="wrap">
   <header>
     <h1 id="title">🤖 트레이딩 봇</h1>
-    <a href="/backtest" style="color:var(--blue);text-decoration:none;font-size:13px">🔬 백테스트</a>
+    <!-- 백테스트 스튜디오는 로컬(engine.server)에만 있다. 프로덕션 대시보드는 __NO_STUDIO__ 로 숨김 -->
+    <a href="/backtest" id="studioLink" style="color:var(--blue);text-decoration:none;font-size:13px">🔬 백테스트</a>
     <a href="/collector" style="color:var(--blue);text-decoration:none;font-size:13px">📥 데이터·수집기</a>
     <span class="badge" id="status">…</span>
     <span class="sub" id="meta"></span>
@@ -626,6 +627,10 @@ async function saveGuardrails(){
 loadStrategies().then(tick); setInterval(tick, 3000);   // 전략 목록 로드 후 3초마다 새로고침
 loadBotConfig();                                        // 봇 설정 패널 1회 렌더(tick과 분리)
 loadGuardrails();                                       // 가드레일 패널 1회 렌더
+</script>
+<script>
+  // dashboard.py(프로덕션)가 주입하는 플래그 — 백테스트 스튜디오가 없는 환경에선 링크를 감춘다.
+  if (window.__NO_STUDIO__) { const a = document.getElementById("studioLink"); if (a) a.style.display = "none"; }
 </script>
 </body>
 </html>
