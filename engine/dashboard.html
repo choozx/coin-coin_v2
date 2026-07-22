@@ -514,9 +514,14 @@ async function loadBotConfig(){
   catch(e){ $("botcfg").innerHTML = `<div class="err">봇 설정 로드 실패: ${e}</div>`; return; }
   try { cache = ((await (await fetch("/api/cache",{cache:"no-store"})).json()).symbols||[]).map(s=>s.symbol); } catch(e){}
   // 현재(저장된) 전략을 폼 초기값으로. _stratSaved = 저장된 값, _stratPick = 폼에서 고른 값.
+  // ★ control.json 에 strategy 가 없을 수 있다 — 대시보드에서 한 번도 안 골랐고 .env 의 PRESET 으로
+  //   뜬 경우다(기본 상태). 그때는 봇이 '실제로 돌리고 있는' 전략(state.json)을 폼에 채운다.
+  //   안 그러면 봇은 멀쩡히 돌고 있는데 전략 칸만 비어 보인다.
   try {
     const ctrl = await (await fetch("/api/control",{cache:"no-store"})).json();
-    window._stratSaved = ctrl.strategy || "";
+    let running = "";
+    try { running = ((await (await fetch("/api/state",{cache:"no-store"})).json()).strategy)||""; } catch(e){}
+    window._stratSaved = ctrl.strategy || running || "";
   } catch(e){ window._stratSaved = ""; }
   window._stratPick = window._stratSaved;
   window._stratActivePath = window._stratSaved;
