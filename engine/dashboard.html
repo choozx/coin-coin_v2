@@ -200,7 +200,9 @@ async function tick(){
   renderControl(d);
   if (d.error){ window._lastTradeN=-1; $("body").innerHTML = `<div class="err">${d.error}</div>`; $("status").className="badge stale"; $("status").textContent="대기"; return; }
 
-  $("meta").textContent = `${d.preset} · ${d.symbol} ${d.timeframe} · ${d.mode==='live'?'실거래':'페이퍼'} · 초기 ${fmt(d.initialEquity)}`;
+  // 실거래는 테스트넷(가짜돈)과 실돈을 반드시 구분해 보여준다 — 한 덩어리로 보면 제일 위험한 착각이 생긴다.
+  const modeLabel = d.mode==='live' ? (d.testnet ? '실거래(테스트넷)' : '🔴 실거래(실돈)') : '페이퍼';
+  $("meta").textContent = `${d.preset} · ${d.symbol} ${d.timeframe} · ${modeLabel} · 초기 ${fmt(d.initialEquity)}`;
   const age = Date.now() - d.updatedAt;
   const alive = age < 3*60*1000;    // 3분 내 갱신이면 정상
   if (!alive){ $("status").className="badge stale"; $("status").textContent="🔴 멈춤/지연"; }

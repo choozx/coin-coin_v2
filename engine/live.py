@@ -89,21 +89,30 @@ class LiveTrader:
 
     def _restore_from_ledger(self):
         """원장(같은 mode)에서 과거 거래를 읽어 잔고·트레이드 이력 복원.
-        페이퍼: 잔고 = 초기 + 누적손익. (포지션은 복원 안 함 — 플랫 시작; 실거래는 거래소서 동기화)"""
+
+        페이퍼: 잔고 = 초기 + 누적손익.
+        실거래: 잔고의 진실은 거래소다 → 반대로 **기준잔고**(수익률 표시의 분모)를
+                '현재 실잔고 − 누적 실현손익' 으로 역산한다(재시작해도 수익률이 안 리셋).
+        포지션은 여기서 복원하지 않는다 — 실거래는 bootstrap 에서 거래소와 동기화.
+        """
         from .executor import ClosedTrade
         rows = ledger.load(self.ledger_path, mode=self.mode)
-        if not rows:
-            return
         restored = [ClosedTrade(
             side=r["side"], entry_time=r["entry_time"], entry_price=r["entry_price"],
             exit_time=r["exit_time"], exit_price=r["exit_price"], qty=r["qty"],
             leverage=r["leverage"], pnl=r["pnl"], fees=r["fees"], funding=r["funding"],
             exit_reason=r["reason"]) for r in rows]      # DB 컬럼명은 reason 유지
-        if hasattr(self.ex, "trades"):
+        paper = hasattr(self.ex, "_equity")
+        if paper and not rows:
+            return
+        if hasattr(self.ex, "trades") and rows:
             self.ex.trades = restored
-        if hasattr(self.ex, "_equity"):
+        if paper:
             self.ex._equity = self.cfg.initial_equity + sum(r["pnl"] for r in rows)
-        print(f"원장 복원: {len(rows)}건, 잔고 {self.ex.equity():.2f} ({self.mode})", flush=True)
+        else:
+            self.cfg.initial_equity = max(1e-9, self.ex.equity() - sum(r["pnl"] for r in rows))
+        print(f"원장 복원: {len(rows)}건, 잔고 {self.ex.equity():.2f} "
+              f"(기준 {self.cfg.initial_equity:.2f}, {self.mode})", flush=True)
 
     def _apply_derived(self, preset: Preset):
         """프리셋에서 파생되는 실행 파라미터 세팅(전환 시 재호출).
@@ -140,6 +149,8 @@ class LiveTrader:
         self.cfg.maker_fee, self.cfg.taker_fee = mk, tk
         if hasattr(self.ex, "maker_fee"):
             self.ex.maker_fee, self.ex.taker_fee = mk, tk
+        if hasattr(self.ex, "set_symbol"):
+            self.ex.set_symbol(self.preset.symbol)           # 실거래: 주문 대상 심볼도 함께(안 하면 옛 심볼로 주문)
 
     def _maybe_switch_strategy(self):
         """대시보드가 고른 '원하는 전략'을 확인 → 무포지션이면 전환, 포지션 있으면 대기.
@@ -256,6 +267,7 @@ class LiveTrader:
             "paused": self._paused,
             "guardrail": self._guardrail_reason,         # 가드레일 발동 사유(대시보드 표시), 없으면 null
             "mode": self.mode,                           # paper | live (원장 조회용)
+            "testnet": bool(getattr(ex, "testnet", False)),   # live 중에도 가짜돈인지 — 대시보드가 구분 표시
             "strategy": self.strategy_path,              # 현재 활성 전략 파일 경로
             "pendingStrategy": self._pending_strategy,   # 전환 대기(포지션 청산 후) 경로 or None
             "strategyError": self._strategy_error,
@@ -346,22 +358,76 @@ class LiveTrader:
                              "time": trade.exit_time, "pnl": round(trade.pnl, 2)})
 
     def bootstrap(self, now_ms: int = None):
-        """라이브 시작 시: 지표 워밍업만 하고 최신봉까지 건너뛴다(과거 신호 실행 안 함, 플랫 시작).
+        """라이브 시작 시: 지표 워밍업만 하고 최신봉까지 건너뛴다(과거 신호 실행 안 함).
 
         (poll_once는 _last_ot 이후만 처리하므로, _last_ot을 최신봉으로 세팅해 과거 replay 방지.)
+        실거래는 '플랫으로 시작'이 아니라 **거래소에 남아 있는 포지션을 이어받는다.**
         """
         now_ms = now_ms or int(time.time() * 1000)
         base = self._fetch(now_ms)
         if len(base):
             self._last_ot = int(base.open_time[-1])
-        print(f"부트스트랩: {len(base)}봉 워밍업, 플랫으로 시작 → 이후 새로 닫히는 봉만 실행.", flush=True)
+        if self.mode == "live" and hasattr(self.ex, "sync_position"):
+            self._sync_live_position(base)
+        start = "플랫으로" if self.ex.position is None else "포지션 인계받아"
+        print(f"부트스트랩: {len(base)}봉 워밍업, {start} 시작 → 이후 새로 닫히는 봉만 실행.", flush=True)
+
+    def _sync_live_position(self, base):
+        """재시작 시 거래소의 실제 포지션을 진실로 삼아 엔진 상태를 맞춘다.
+
+        거래소는 손절/익절가·최고가(트레일링) 를 모른다 — 그건 우리가 진입 때 남긴 사이드카에서
+        되살린다. 사이드카가 없거나 수량이 어긋나면 그 값들은 포기하고(nan) 크게 경고한다:
+        손절 없는 포지션을 조용히 물려받는 게 제일 위험하다.
+        """
+        from .backtest import _Position
+        pos = self.ex.sync_position()            # 실패하면 예외 → 기동 중단(모르는 채 매매 금지)
+        saved = self.ex.load_saved_position()
+        if pos is None:
+            if saved:
+                notify("⚠️ 재시작: 거래소는 무포지션인데 로컬엔 포지션 기록이 있음 — "
+                       "봇이 멈춘 사이 강제청산/수동청산된 것으로 보고 기록을 정리합니다.")
+                print("  [동기화] 거래소 무포지션 → 로컬 포지션 기록 폐기", flush=True)
+            self.ex.position = None
+            self.ex._save_position()
+            return
+        same = (saved.get("side") == pos["side"] and saved.get("qty")
+                and abs(saved["qty"] - pos["qty"]) <= pos["qty"] * 0.02)
+        signal = resample(base, self.tf_min)
+        entry_time = int(saved.get("entryTime") or 0) if same else 0
+        entry_time = entry_time or int(base.open_time[-1])
+        sb = max(0, int(np.searchsorted(signal.open_time, entry_time, side="right")) - 1)
+        nan = float("nan")
+        p = _Position(
+            side=pos["side"], entry_time=entry_time, entry_price=pos["entry_price"],
+            qty=pos["qty"], leverage=pos["leverage"],
+            margin=pos.get("margin") or pos["entry_price"] * pos["qty"] / max(1, pos["leverage"]),
+            liq_price=pos["liq_price"], entry_signal_idx=sb,
+            stop_price=(saved.get("stop") if same else None) or nan,
+            tp_price=(saved.get("tp") if same else None) or nan,
+            entry_fee=(saved.get("entryFee") if same else None) or bm.trade_fee(
+                pos["entry_price"], pos["qty"], taker=True,
+                taker_fee=self.cfg.taker_fee, maker_fee=self.cfg.maker_fee),
+            peak=(saved.get("peak") if same else None) or pos["entry_price"])
+        self.ex.position = p
+        self.ex._save_position()
+        side_k = "롱" if p.side > 0 else "숏"
+        msg = (f"🔁 재시작: 거래소 포지션 인계 {side_k} {p.qty} @{p.entry_price:.2f} "
+               f"x{p.leverage} (손절 {'없음' if np.isnan(p.stop_price) else f'{p.stop_price:.2f}'})")
+        if not same:
+            msg += " ⚠️ 로컬 기록 불일치 — 손절/익절가를 못 살렸습니다. 대시보드에서 확인하세요."
+        notify(msg)
+        print(f"  [동기화] {msg}", flush=True)
 
     def run(self, interval: int = 60, once: bool = False):
         """폴링 루프. once=True면 한 번만. interval초마다 poll_once(now)."""
         self.bootstrap()
         self._write_state()
         # 모드를 알림에 그대로 — '페이퍼'로 고정돼 있으면 실돈 봇이 페이퍼처럼 보고된다.
-        tag = "🔴 실거래(실돈)" if self.mode == "live" else "페이퍼"
+        # 테스트넷/실돈까지 구분한다(둘 다 mode='live' 라 한 덩어리로 보면 제일 위험한 착각이 생긴다).
+        if self.mode != "live":
+            tag = "페이퍼"
+        else:
+            tag = "🧪 실거래(테스트넷)" if getattr(self.ex, "testnet", False) else "🔴 실거래(실돈)"
         notify(f"▶️ {tag} 시작 {self.preset.name} {self.preset.symbol} {self.preset.timeframe} 잔고 {self.ex.equity():.0f}")
         fails = 0
         while True:
@@ -393,10 +459,13 @@ class LiveTrader:
 def main():
     from .env import load_dotenv
     load_dotenv()                            # .env → 환경변수(BINANCE_API_KEY 등)
-    ap = argparse.ArgumentParser(description="페이퍼/실거래 트레이딩 루프 (뼈대)")
+    ap = argparse.ArgumentParser(description="페이퍼/실거래 트레이딩 루프")
     ap.add_argument("preset", help="프리셋 JSON 경로 (presets/saved/... 또는 examples/...)")
-    ap.add_argument("--paper", action="store_true", help="페이퍼 트레이딩(기본). 실거래는 --live(미구현)")
-    ap.add_argument("--live", action="store_true", help="실거래 — 아직 미구현(NotImplementedError)")
+    ap.add_argument("--paper", action="store_true", help="페이퍼 트레이딩(기본).")
+    ap.add_argument("--live", action="store_true",
+                    help="실거래(진짜 주문). BINANCE_TESTNET=1(기본)이면 테스트넷 가짜돈.")
+    ap.add_argument("--real-money", action="store_true",
+                    help="메인넷(실돈) 확인. BINANCE_TESTNET=0 으로 돌릴 땐 이 플래그가 필수.")
     ap.add_argument("--equity", type=float, default=10_000.0)
     ap.add_argument("--interval", type=int, default=60, help="폴링 간격(초)")
     ap.add_argument("--once", action="store_true", help="한 번만 폴링하고 종료(테스트용)")
@@ -406,7 +475,9 @@ def main():
 
     # 안전 기본값: 봇은 '멈춤' 상태로 시작 → 대시보드에서 명시적으로 켜야 새 진입 시작.
     # (멈춤은 새 진입만 막음 — 기존 포지션 관리·청산은 계속. --start-running 으로 즉시 활성.)
-    if not args.start_running and not args.once:
+    # --once 는 테스트용이라 페이퍼에선 바로 돌게 두지만, 실거래는 예외 없이 '멈춤'으로 시작한다
+    # (진짜 주문이 나가는 경로에서 '한 번만 돌려보려고' 가 제일 흔한 사고 시나리오).
+    if not args.start_running and (not args.once or args.live):
         control.set_service("trader", "paused")
         print("🔒 안전 시작: 매매 '멈춤' 상태 — 대시보드에서 봇을 '재개'해야 새 진입이 시작됩니다.", flush=True)
 
@@ -414,13 +485,22 @@ def main():
     mk, tk = bm.fees_for_symbol(preset.symbol)
     cfg = BacktestConfig(initial_equity=args.equity, maker_fee=mk, taker_fee=tk)
     if args.live:
-        ex = LiveExecutor(symbol=preset.symbol)   # 마진 자산은 심볼에서(BTCUSDC→USDC)
+        ex = LiveExecutor(symbol=preset.symbol, maker_fee=mk, taker_fee=tk)  # 마진자산은 심볼에서
+        # 실돈은 '두 번' 명시해야 돈다: BINANCE_TESTNET=0 + --real-money.
+        # 환경변수 하나만 잘못 건드려도 가짜돈 봇이 실돈 봇이 되는 걸 막는 이중 잠금.
+        if not ex.testnet and not args.real_money:
+            raise SystemExit(
+                "BINANCE_TESTNET=0 (메인넷=실돈) 입니다. 정말 실돈으로 돌리려면 --real-money 를 "
+                "함께 주세요. 테스트넷으로 돌리려면 BINANCE_TESTNET=1.")
+        ex.preflight()                            # 헤지모드·마진모드·잔고 점검(문제면 여기서 중단)
     else:
         ex = PaperExecutor(equity=args.equity, maker_fee=mk, taker_fee=tk)
     trader = LiveTrader(preset, ex, cfg, strategy_path=args.preset,
                         mode="live" if args.live else "paper")
-    print(f"[{'페이퍼' if not args.live else '실거래'}] {preset.name} · {preset.symbol} {preset.timeframe} "
-          f"· 수수료 maker {mk*100:.3f}%/taker {tk*100:.3f}% · 초기잔고 {args.equity:.0f}")
+    tag = "페이퍼" if not args.live else ("실거래(테스트넷)" if ex.testnet else "실거래★실돈★")
+    print(f"[{tag}] {preset.name} · {preset.symbol} {preset.timeframe} "
+          f"· 수수료 maker {mk*100:.3f}%/taker {tk*100:.3f}% "
+          f"· 잔고 {ex.equity():.2f} (기준 {trader.cfg.initial_equity:.2f})")
     trader.run(interval=args.interval, once=args.once)
 
 
