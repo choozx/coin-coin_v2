@@ -96,6 +96,13 @@
                   background-repeat:no-repeat; background-position:right 10px center; }
   .field select:hover { border-color:var(--blue); }
   .field select:focus { outline:none; border-color:var(--blue); }
+  /* 프리셋 만들기 별도 화면 */
+  .btn-ghost { padding:6px 12px; border-radius:7px; border:1px solid var(--line); background:var(--panel2);
+               color:var(--fg); cursor:pointer; font-size:13px; }
+  .btn-ghost:hover { border-color:var(--blue); }
+  .maker-head { margin-bottom:12px; }
+  .maker-footer { display:flex; justify-content:flex-end; align-items:center; gap:12px; margin-top:14px; }
+  .maker-footer .btn-go { padding:9px 20px; font-size:14px; }
 </style>
 </head>
 <body>
@@ -110,12 +117,24 @@
     <span class="badge" id="status">…</span>
     <span class="sub" id="meta"></span>
     <span class="sub" style="margin-left:auto" id="updated"></span>
+    <button id="openMaker" class="btn-go" style="margin-left:10px" onclick="openMaker()">🧩 프리셋 만들기</button>
   </header>
-  <div id="tab-trading">
-    <div id="presetmaker" class="pos"><div class="sub">프리셋 만들기 불러오는 중…</div></div>
+
+  <!-- 매매 대시보드(기본) -->
+  <div id="view-trading">
     <div id="botrun" class="pos"><div class="sub">매매 봇 불러오는 중…</div></div>
     <div id="grStatusBar"></div><!-- 가드레일 '발동 상태'만 여기(모니터). 설정은 /settings -->
     <div id="body"><div class="empty">상태 불러오는 중…</div></div>
+  </div>
+
+  <!-- 프리셋 만들기(별도 화면) — 상단 '프리셋 만들기' 버튼으로 열고, 저장하면 대시보드로 복귀 -->
+  <div id="view-maker" style="display:none">
+    <div class="maker-head"><button class="btn-ghost" onclick="closeMaker()">← 대시보드</button></div>
+    <div id="presetmaker" class="pos"></div>
+    <div class="maker-footer">
+      <span class="sub" id="pm_msg"></span>
+      <button class="btn-go" onclick="makePreset()">💾 저장하기</button>
+    </div>
   </div>
 </div>
 <script>
@@ -457,11 +476,24 @@ async function renderPresetMaker(){
     +   `<input id="pm_timeout" type="number" min="0" step="1" style="max-width:90px" placeholder="예: 3">`
     +   `<span class="sub">초 미체결 시 시장가 추격(passive-then-aggressive) · 비우면 즉시 maker</span></span></div>`
     + `<div class="field"><label>쿨다운(봉)</label><input id="pm_cd" type="number" min="0" style="max-width:110px"></div>`
-    + `<div class="field"><label>펀딩회피(분)</label><input id="pm_fund" type="number" min="0" style="max-width:110px"></div>`
-    + `<div style="margin-top:10px;display:flex;gap:8px;align-items:center">`
-    +   `<button class="btn-go" onclick="makePreset()">💾 프리셋 저장</button>`
-    +   `<span class="sub" id="pm_msg"></span></div>`;
+    + `<div class="field"><label>펀딩회피(분)</label><input id="pm_fund" type="number" min="0" style="max-width:110px"></div>`;
+  // 저장 버튼·메시지는 화면 우하단 푸터(.maker-footer)에 고정 — 폼 재렌더에 안 지워짐.
   prefillFromBase();
+}
+
+// 프리셋 만들기 = 별도 화면. 상단 버튼으로 열고, 저장/뒤로 하면 대시보드로 복귀.
+function openMaker(){
+  $("view-trading").style.display = "none";
+  $("view-maker").style.display = "";
+  $("openMaker").style.display = "none";            // 만들기 화면에선 진입 버튼 숨김
+  $("pm_msg").textContent = "";
+  renderPresetMaker();
+}
+function closeMaker(){
+  $("view-maker").style.display = "none";
+  $("view-trading").style.display = "";
+  $("openMaker").style.display = "";
+  renderBotRun();                                   // 새로 만든 프리셋이 매매 봇 목록에 뜨게
 }
 
 function prefillFromBase(){
@@ -491,6 +523,7 @@ function togglePmTimeout(){                          // 폴백(초)은 makerLimi
 }
 
 async function makePreset(){
+  if (!$("pm_name")){ $("pm_msg").innerHTML = `<span class="fresh-r">먼저 🔬 스튜디오에서 전략을 만드세요</span>`; return; }
   const name = ($("pm_name").value||"").trim();
   if (!name){ $("pm_msg").innerHTML = `<span class="fresh-r">이름을 입력하세요</span>`; return; }
   const symEl = $("pm_sym");
@@ -511,8 +544,8 @@ async function makePreset(){
       body: JSON.stringify({name, base: $("pm_base").value, symbol, sizing, execution, filter})})).json();
     if (r.error) throw new Error(r.error);
     await loadStrategies();                          // 새 프리셋이 목록에 뜨게
-    renderBotRun();                                  // '매매 봇' 드롭다운 갱신
-    $("pm_msg").innerHTML = `<span class="fresh-g">✓ 저장됨 — 아래 '매매 봇'에서 골라 돌리세요</span>`;
+    window._justMade = r.name || name;               // 대시보드 복귀 시 안내
+    closeMaker();                                    // 저장 → 매매 대시보드로 복귀(+ 봇 목록 갱신)
   } catch(e){ $("pm_msg").innerHTML = `<span class="fresh-r">저장 실패: ${e.message}</span>`; }
 }
 
@@ -532,6 +565,10 @@ async function renderBotRun(){
     + `<div id="control" class="ctrlbar" style="margin-top:6px"></div>`;
   window._lastControlHTML = null;                    // 컨트롤바 다시 그리도록
   if (window._lastState) renderControl(window._lastState);
+  if (window._justMade){                             // 방금 만든 프리셋 안내(목록에 떠 있음)
+    $("run_msg").innerHTML = `<span class="fresh-g">✓ '${window._justMade}' 저장됨 — 목록에서 골라 돌리세요</span>`;
+    window._justMade = null;
+  }
 }
 
 async function selectRun(){
@@ -550,9 +587,12 @@ async function selectRun(){
 // 가드레일·레버리지 티어 '설정'은 /settings 페이지로 옮겼다(계좌 전역 설정이라 성격이 다름).
 // 여기 남는 건 '지금 발동 중인가'라는 모니터링 뿐 — tick()의 grStatus 표시.
 
-// 두 섹션 모두 전략 목록(STRATS)에서 이름을 찾으므로 목록 로드 뒤에 렌더한다.
 // 매매 봇(#control 포함)을 먼저 그린 뒤 tick — 안 그러면 tick의 renderControl이 #control을 못 찾는다.
-loadStrategies().then(async () => { renderPresetMaker(); await renderBotRun(); tick(); });
+// 프리셋 만들기는 별도 화면 → openMaker() 에서 지연 렌더(로드 시엔 안 그림).
+loadStrategies().then(async () => {
+  await renderBotRun(); tick();
+  if (location.hash === "#make") openMaker();        // /#make 로 바로 만들기 화면 열기(딥링크)
+});
 setInterval(tick, 3000);                                // 상태만 3초마다 갱신(폼은 재렌더 안 함)
 </script>
 <script>
