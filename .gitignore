@@ -12,7 +12,11 @@ venv/
 presets/saved/
 
 # 배포 설정·시크릿 (API키 등) — 커밋 금지
+# .env 만 막으면 .env.bak / .env.local / .env.prod 같은 사본이 그대로 커밋된다
+# (백업 한 번 떠놨다가 키가 통째로 올라가는 게 흔한 사고) → 전부 막고 템플릿만 예외.
 .env
+.env.*
+!.env.example
 
 # 배포 폴러가 기록하는 '완전히 반영된 커밋' (서버 로컬 상태)
 .deploy-applied
