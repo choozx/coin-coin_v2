@@ -448,13 +448,16 @@ function _num(id){ const el=$(id); const v=(el&&el.value||"").trim(); return v==
 async function renderPresetMaker(){
   let cache = [];
   try { cache = ((await (await fetch("/api/cache",{cache:"no-store"})).json()).symbols||[]).map(s=>s.symbol); } catch(e){}
-  if (!STRATS.length){
+  // '전략 신호' 소스 = 스튜디오에서 만든 진입/청산 프리셋(examples·saved). 이미 조립된
+  // 매매 프리셋(strategies)은 신호 소스로 안 쓴다.
+  const signals = STRATS.filter(s => s.source !== "strategies");
+  if (!signals.length){
     $("presetmaker").innerHTML = `<h3>🧩 프리셋 만들기</h3>`
       + `<div class="sub">먼저 🔬 백테스트 스튜디오에서 전략(진입/청산)을 만들어 저장하세요 — `
-      + `여기선 그 신호에 심볼·리스크·실행을 얹어 '돌릴 수 있는 프리셋'으로 굳힙니다.</div>`;
+      + `여기선 그 신호에 심볼·리스크·실행을 얹어 '돌릴 수 있는 매매 프리셋'으로 굳힙니다.</div>`;
     return;
   }
-  const baseOpts = STRATS.map(s => `<option value="${s.path}">${srcIcon(s.source)}${s.name} · ${s.symbol} ${s.timeframe}</option>`).join("");
+  const baseOpts = signals.map(s => `<option value="${s.path}">${srcIcon(s.source)}${s.name} · ${s.symbol} ${s.timeframe}</option>`).join("");
   const symField = cache.length
     ? `<select id="pm_sym">${cache.map(s=>`<option value="${s}">${s}</option>`).join("")}</select>`
     : `<input id="pm_sym" placeholder="BTCUSDT" style="max-width:150px">`;
@@ -554,13 +557,16 @@ async function renderBotRun(){
   let ctrl = {};
   try { ctrl = await (await fetch("/api/control",{cache:"no-store"})).json(); } catch(e){}
   window._runSaved = ctrl.strategy || "";
-  const opts = STRATS.length
-    ? STRATS.map(s => `<option value="${s.path}"${s.path===window._runSaved?" selected":""}>${srcIcon(s.source)}${s.name} · ${s.symbol} ${s.timeframe}</option>`).join("")
-    : `<option value="">— 저장된 프리셋 없음 —</option>`;
+  // 봇이 돌릴 수 있는 건 '매매 프리셋'(프리셋 만들기로 조립 → data/strategies)뿐.
+  // 스튜디오의 진입/청산 신호 프리셋(examples·saved)은 여기 안 나온다 — 그건 '전략 신호' 소스.
+  const runnable = STRATS.filter(s => s.source === "strategies");
+  const opts = runnable.length
+    ? runnable.map(s => `<option value="${s.path}"${s.path===window._runSaved?" selected":""}>${srcIcon(s.source)}${s.name} · ${s.symbol} ${s.timeframe}</option>`).join("")
+    : `<option value="">— 매매 프리셋 없음 — 우측 상단 '프리셋 만들기'로 먼저 만드세요 —</option>`;
   $("botrun").innerHTML =
-      `<h3>🤖 매매 봇 <span class="sub">위에서 만든 프리셋을 골라 돌린다</span></h3>`
+      `<h3>🤖 매매 봇 <span class="sub">저장된 매매 프리셋을 골라 돌린다</span></h3>`
     + `<div class="field"><label>돌릴 프리셋</label>`
-    +   `<select id="runSel" onchange="selectRun()" style="max-width:340px"${STRATS.length?"":" disabled"}>${opts}</select>`
+    +   `<select id="runSel" onchange="selectRun()" style="max-width:340px"${runnable.length?"":" disabled"}>${opts}</select>`
     +   `<span class="sub" id="run_msg"></span></div>`
     + `<div id="control" class="ctrlbar" style="margin-top:6px"></div>`;
   window._lastControlHTML = null;                    // 컨트롤바 다시 그리도록
