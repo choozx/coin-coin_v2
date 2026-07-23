@@ -170,6 +170,12 @@ git push origin prod        # 이후 이 push가 배포 트리거
 | `presets/saved/` | gitignore, **컨테이너엔 없음** | 로컬 GUI 저장용(프로덕션에서 이 경로를 쓰지 말 것) |
 | `data/strategies/` | 공유 볼륨 | **평상시 투입 통로.** 파일만 던지면 목록에 뜬다 |
 
+**A. UI 업로드(커맨드 없이) — 권장.** 배포 대시보드(SSH 터널 `http://localhost:8080`)를 브라우저로
+열고 매매 봇의 **`⬆ 가져오기`** → 로컬 프리셋 JSON 선택. 파일 선택창은 항상 로컬 PC 기준이라,
+브라우저가 그 파일을 EC2 서버로 올려 `data/strategies/` 에 저장한다(`/api/import_preset`). scp 불필요.
+프리셋은 로컬 대시보드의 `프리셋 만들기`로 만들어 로컬 `data/strategies/` 에 둔 것을 그대로 올리면 된다.
+
+**B. scp(수동).**
 ```bash
 # 로컬 → EC2 (재배포·재시작 없음)
 scp -i ~/.ssh/key.pem my-strategy.json ec2-user@<EIP>:~/auto_trading/data/strategies/
