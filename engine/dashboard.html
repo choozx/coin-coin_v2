@@ -174,10 +174,48 @@ function stratStatus(d, selPath){
   if (d && d.strategyError) html += `<span class="svc" style="color:var(--down)">⚠ ${d.strategyError}</span>`;
   return html;
 }
+// 거래소 네트워크 스위치 — 실거래 봇일 때만 뜬다(페이퍼는 거래소에 붙지 않는다).
+// 테스트넷↔실돈은 플래그 뒤집기가 아니라 **다른 계정으로 이사**다: 키·잔고·포지션·원장이 다 바뀐다.
+// 그래서 무포지션일 때만 갈아타고, 실돈 쪽은 기동 권한(--real-money) + 문구 확인 두 겹을 거친다.
+function netBtn(d, c){
+  if (!d || !d.network) return "";                    // 페이퍼 봇이면 스위치 없음
+  const main = d.network === "mainnet";
+  const cur = main ? `<b style="color:var(--down)">🔴 실돈</b>` : `<b>🧪 테스트넷</b>`;
+  const desired = c.network;                          // 대시보드가 고른 값(control.json)
+  let html = `<span class="svc">거래소 ${cur} `;
+  if (desired && desired !== d.network){              // 눌렀지만 봇이 아직 안 바꿈
+    const t = desired === "mainnet" ? "실돈" : "테스트넷";
+    html += `<span class="sub" style="color:#e0a030">⏳ ${t} 적용 대기`
+          + `${d.pendingNetwork ? " (포지션 청산 후)" : ""}</span>`;
+  } else if (!main && !d.canMainnet){
+    html += `<span class="sub">실돈 전환 잠김 — 봇을 <code>--real-money</code> 로 재기동</span>`;
+  } else {
+    const target = main ? "testnet" : "mainnet";
+    html += `<button onclick="setNetwork('${target}')">${main ? "🧪 테스트넷으로" : "🔴 실돈으로"}</button>`;
+  }
+  html += `</span>`;
+  if (d.networkError) html += `<span class="svc" style="color:var(--down)">⚠ ${d.networkError}</span>`;
+  return html;
+}
+async function setNetwork(net){
+  if (net === "mainnet"){
+    // 오클릭으로 실돈이 되면 안 된다 — 기동 때의 --real-money 와 같은 취지의 두 번째 잠금.
+    const t = prompt("실돈(메인넷)으로 전환합니다. 진짜 돈으로 주문이 나갑니다.\n계속하려면 '실돈' 이라고 입력하세요.");
+    if ((t||"").trim() !== "실돈") return;
+  }
+  try {
+    const r = await (await fetch("/api/network",{method:"POST",headers:{"Content-Type":"application/json"},
+                                                 body:JSON.stringify({network:net})})).json();
+    if (r.error){ alert("전환 실패: "+r.error); return; }
+  } catch(e){ alert("전환 실패: "+e); return; }
+  window._lastControlHTML = null;                     // 즉시 '적용 대기'가 보이도록 강제 재렌더
+  renderControl(window._lastState);
+}
 async function renderControl(d){
   let c = {};
   try { c = await (await fetch("/api/control",{cache:"no-store"})).json(); } catch(e){}
-  const html = svcBtn("trader","봇", c.trader||"running") + stratStatus(d, c.strategy);      // 상태만(선택은 봇 설정 폼)
+  const html = svcBtn("trader","봇", c.trader||"running") + netBtn(d, c)
+             + stratStatus(d, c.strategy);      // 상태만(선택은 봇 설정 폼)
   // tick(3초)마다 통째로 다시 그리면 열어둔/타이핑 중인 전략 콤보박스가 리셋된다.
   // → 내용이 그대로거나, 드롭다운이 열려 있거나, 입력창에 포커스면 재렌더 생략.
   const ctrlEl = $("control");
@@ -201,7 +239,8 @@ async function tick(){
   if (d.error){ window._lastTradeN=-1; $("body").innerHTML = `<div class="err">${d.error}</div>`; $("status").className="badge stale"; $("status").textContent="대기"; return; }
 
   // 실거래는 테스트넷(가짜돈)과 실돈을 반드시 구분해 보여준다 — 한 덩어리로 보면 제일 위험한 착각이 생긴다.
-  const modeLabel = d.mode==='live' ? (d.testnet ? '실거래(테스트넷)' : '🔴 실거래(실돈)') : '페이퍼';
+  // mode 는 원장 버킷이기도 하다(paper/testnet/live 분리 저장) → 아래 거래이력 조회 키로 그대로 쓰인다.
+  const modeLabel = {paper:'페이퍼', testnet:'🧪 실거래(테스트넷)', live:'🔴 실거래(실돈)'}[d.mode] || d.mode;
   $("meta").textContent = `${d.preset} · ${d.symbol} ${d.timeframe} · ${modeLabel} · 초기 ${fmt(d.initialEquity)}`;
   const age = Date.now() - d.updatedAt;
   const alive = age < 3*60*1000;    // 3분 내 갱신이면 정상

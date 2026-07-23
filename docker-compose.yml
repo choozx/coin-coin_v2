@@ -30,7 +30,12 @@ services:
       # 출금권한 OFF·IP 화이트리스트 필수. 미설정이면 페이퍼(--paper)로만 동작.
       BINANCE_API_KEY: ${BINANCE_API_KEY:-}
       BINANCE_API_SECRET: ${BINANCE_API_SECRET:-}
-      BINANCE_TESTNET: ${BINANCE_TESTNET:-1}
+      # 네트워크 전용 키 — 대시보드에서 테스트넷↔실돈을 오가려면 둘 다 필요(계정이 다르다).
+      BINANCE_TESTNET_API_KEY: ${BINANCE_TESTNET_API_KEY:-}
+      BINANCE_TESTNET_API_SECRET: ${BINANCE_TESTNET_API_SECRET:-}
+      BINANCE_MAINNET_API_KEY: ${BINANCE_MAINNET_API_KEY:-}
+      BINANCE_MAINNET_API_SECRET: ${BINANCE_MAINNET_API_SECRET:-}
+      BINANCE_TESTNET: ${BINANCE_TESTNET:-1}   # 시작 네트워크(이후엔 대시보드 스위치가 이긴다)
       MAKER_FILL_TIMEOUT_SEC: ${MAKER_FILL_TIMEOUT_SEC:-3}   # post-only 지정가 대기 초 → 넘으면 시장가
       LIVE_POSITION_PATH: /app/data/live_position.json       # 재시작 때 손절/익절가 복원용 사이드카
       PYTHONUNBUFFERED: 1                   # 도커 stdout은 파이프 → 블록버퍼링. 없으면 로그가 안 보임

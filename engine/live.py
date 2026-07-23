@@ -64,19 +64,25 @@ from .backtest import BacktestConfig, Stepper
 class LiveTrader:
     """실시간 봉 스트림(폴링)을 백테스트와 같은 로직으로 처리해 Executor에 주문."""
 
+    # 상태 스냅샷 경로는 대시보드와 같은 env 를 본다 — 여기만 하드코딩이라 STATE_PATH 를 옮기면
+    # 대시보드는 새 경로를, 트레이더는 옛 경로를 써서 화면이 조용히 안 갱신됐다.
     def __init__(self, preset: Preset, executor, cfg: BacktestConfig = None, warmup_days: float = 10,
-                 state_path: str = "data/state.json", strategy_path: str = None,
+                 state_path: str = None, strategy_path: str = None,
                  mode: str = "paper", ledger_path: str = None):
+        state_path = state_path or os.environ.get("STATE_PATH") or "data/state.json"
         self.preset = preset
         self.ex = executor
         self.cfg = cfg or BacktestConfig()
         self.warmup_days = warmup_days
         self.state_path = state_path         # 대시보드가 읽을 상태 스냅샷(포지션·트레이드·잔고)
         self.strategy_path = strategy_path   # 현재 활성 전략 파일 경로(대시보드 선택과 비교)
-        self.mode = mode                     # 'paper' | 'live' — 원장 분리 저장
+        self.is_live = (mode == "live")      # 진짜 주문을 내는가(페이퍼 아님)
+        self.mode = self._ledger_mode()      # 원장 버킷: paper | testnet | live
         self.ledger_path = ledger_path or ledger.LEDGER_PATH
         self._pending_strategy = None        # 전환 대기(포지션 청산 후 적용할 전략)
         self._strategy_error = None
+        self._pending_network = None         # 전환 대기(포지션 청산 후 갈아탈 네트워크)
+        self._network_error = None
         self._base_data = copy.deepcopy(preset.data)   # 프리셋 원본(신호 소스) — 봇설정과 병합
         self._bot_cfg = {}                   # 마지막 적용한 봇 설정
         self._rebuild_effective()            # 신호(프리셋) + 봇설정(심볼·사이징·실행·필터) 병합
@@ -86,6 +92,16 @@ class LiveTrader:
         self._events = []                    # 이번 폴링에서 발생한 이벤트(hook이 채움)
         self._guardrail_reason = None        # 리스크 가드레일 발동 사유(없으면 None)
         self._restore_from_ledger()          # 원장에서 잔고·이력 복원(재시작해도 안 사라짐)
+
+    def _ledger_mode(self) -> str:
+        """원장 버킷 — 페이퍼·테스트넷·실돈은 절대 섞이면 안 된다.
+
+        셋이 한 버킷에 쌓이면 가짜돈 손익이 실돈 수익률에 들어가고, 실거래의 기준잔고 역산
+        ('현재 실잔고 − 누적 실현손익')이 통째로 틀어진다.
+        """
+        if not self.is_live:
+            return "paper"
+        return "testnet" if getattr(self.ex, "testnet", False) else "live"
 
     def _restore_from_ledger(self):
         """원장(같은 mode)에서 과거 거래를 읽어 잔고·트레이드 이력 복원.
@@ -171,6 +187,42 @@ class LiveTrader:
             print(f"  [전략전환 실패] {e}", flush=True)
             return
         self._apply_strategy(new, desired)
+
+    def _maybe_switch_network(self, base):
+        """대시보드가 고른 거래소 네트워크로 갈아탄다 — 무포지션일 때만(전략 전환과 같은 규칙).
+
+        전환은 '다른 계정으로 이사'다: 잔고·포지션·원장이 전부 바뀐다. 그래서 성공하면
+        원장 버킷을 갈아끼워 이력·기준잔고를 다시 읽고, 새 계정에 포지션이 남아 있으면 인계받는다.
+        실패하면 executor 가 원래 네트워크로 되돌려 놓고, 사유는 대시보드에 띄운다.
+        """
+        if not self.is_live or not hasattr(self.ex, "set_network"):
+            return
+        desired = control.get_network()
+        if not desired or desired == self.ex.network:
+            self._pending_network = None
+            return
+        if self.ex.position is not None:
+            self._pending_network = desired      # 포지션 열림 → 청산 후로 미룸
+            return
+        old = self.ex.network
+        try:
+            self.ex.set_network(desired)
+        except Exception as e:
+            self._network_error = f"{desired}: {e}"
+            self._pending_network = desired
+            notify(f"⚠️ 네트워크 전환 실패 {old} → {desired}: {e}")
+            print(f"  [네트워크 전환 실패] {e}", flush=True)
+            return
+        self._pending_network = None
+        self._network_error = None
+        self.mode = self._ledger_mode()          # 원장 버킷 교체(가짜돈/실돈 분리)
+        self.ex.trades = []
+        self._restore_from_ledger()              # 새 네트워크의 이력·기준잔고로
+        self.stepper.last_exit_sb = -10 ** 9     # 쿨다운 리셋(다른 계정이니 이어갈 게 없다)
+        self._sync_live_position(base)           # 새 계정에 포지션이 남아 있으면 인계
+        tag = "🧪 테스트넷(가짜돈)" if self.ex.testnet else "🔴 메인넷(실돈)"
+        notify(f"🔀 네트워크 전환 {old} → {desired} · {tag} · 잔고 {self.ex.equity():.2f}")
+        print(f"  [네트워크 전환] {old} → {desired} · 잔고 {self.ex.equity():.2f}", flush=True)
 
     def _guardrail_block(self):
         """글로벌 리스크 가드레일 — 걸리면 사유(str), 아니면 None. 새 진입만 막음(청산·관리는 계속)."""
@@ -266,8 +318,12 @@ class LiveTrader:
             "startedAt": self._started_at, "updatedAt": int(time.time() * 1000),
             "paused": self._paused,
             "guardrail": self._guardrail_reason,         # 가드레일 발동 사유(대시보드 표시), 없으면 null
-            "mode": self.mode,                           # paper | live (원장 조회용)
-            "testnet": bool(getattr(ex, "testnet", False)),   # live 중에도 가짜돈인지 — 대시보드가 구분 표시
+            "mode": self.mode,                           # paper | testnet | live (원장 조회용 = 버킷)
+            # 네트워크 스위치용. canMainnet=이 프로세스가 실돈 권한(--real-money)을 받았는가.
+            "network": getattr(ex, "network", None) if self.is_live else None,
+            "canMainnet": bool(getattr(ex, "allow_mainnet", False)) if self.is_live else False,
+            "pendingNetwork": self._pending_network,     # 전환 대기(포지션 청산 후) or None
+            "networkError": self._network_error,
             "strategy": self.strategy_path,              # 현재 활성 전략 파일 경로
             "pendingStrategy": self._pending_strategy,   # 전환 대기(포지션 청산 후) 경로 or None
             "strategyError": self._strategy_error,
@@ -315,6 +371,8 @@ class LiveTrader:
             if now_ms is None:
                 raise ValueError("now_ms 필요(실시간). 테스트는 base 주입.")
             base = self._fetch(now_ms)
+            # 네트워크 전환은 캔들을 받은 뒤에 — 새 계정의 포지션을 인계받으려면 신호봉이 필요하다.
+            self._maybe_switch_network(base)
         if len(base) < 2:
             return []
         self._paused = control.service_state("trader") == "paused"   # 멈춤이면 새 진입 차단
@@ -367,7 +425,7 @@ class LiveTrader:
         base = self._fetch(now_ms)
         if len(base):
             self._last_ot = int(base.open_time[-1])
-        if self.mode == "live" and hasattr(self.ex, "sync_position"):
+        if self.is_live and hasattr(self.ex, "sync_position"):
             self._sync_live_position(base)
         start = "플랫으로" if self.ex.position is None else "포지션 인계받아"
         print(f"부트스트랩: {len(base)}봉 워밍업, {start} 시작 → 이후 새로 닫히는 봉만 실행.", flush=True)
@@ -424,10 +482,7 @@ class LiveTrader:
         self._write_state()
         # 모드를 알림에 그대로 — '페이퍼'로 고정돼 있으면 실돈 봇이 페이퍼처럼 보고된다.
         # 테스트넷/실돈까지 구분한다(둘 다 mode='live' 라 한 덩어리로 보면 제일 위험한 착각이 생긴다).
-        if self.mode != "live":
-            tag = "페이퍼"
-        else:
-            tag = "🧪 실거래(테스트넷)" if getattr(self.ex, "testnet", False) else "🔴 실거래(실돈)"
+        tag = {"paper": "페이퍼", "testnet": "🧪 실거래(테스트넷)"}.get(self.mode, "🔴 실거래(실돈)")
         notify(f"▶️ {tag} 시작 {self.preset.name} {self.preset.symbol} {self.preset.timeframe} 잔고 {self.ex.equity():.0f}")
         fails = 0
         while True:
@@ -465,7 +520,8 @@ def main():
     ap.add_argument("--live", action="store_true",
                     help="실거래(진짜 주문). BINANCE_TESTNET=1(기본)이면 테스트넷 가짜돈.")
     ap.add_argument("--real-money", action="store_true",
-                    help="메인넷(실돈) 확인. BINANCE_TESTNET=0 으로 돌릴 땐 이 플래그가 필수.")
+                    help="이 프로세스에 실돈(메인넷) 권한을 준다. BINANCE_TESTNET=0 으로 돌릴 땐 필수이고, "
+                         "대시보드의 테스트넷↔실돈 스위치도 이 권한이 있어야 실돈 쪽으로 움직인다.")
     ap.add_argument("--equity", type=float, default=10_000.0)
     ap.add_argument("--interval", type=int, default=60, help="폴링 간격(초)")
     ap.add_argument("--once", action="store_true", help="한 번만 폴링하고 종료(테스트용)")
@@ -485,7 +541,10 @@ def main():
     mk, tk = bm.fees_for_symbol(preset.symbol)
     cfg = BacktestConfig(initial_equity=args.equity, maker_fee=mk, taker_fee=tk)
     if args.live:
-        ex = LiveExecutor(symbol=preset.symbol, maker_fee=mk, taker_fee=tk)  # 마진자산은 심볼에서
+        # allow_mainnet: 이 프로세스가 실돈을 만질 수 있는가. 대시보드의 네트워크 스위치도
+        # 이 권한 안에서만 움직인다 — 버튼 하나로 가짜돈 봇이 실돈 봇이 되면 안 된다.
+        ex = LiveExecutor(symbol=preset.symbol, maker_fee=mk, taker_fee=tk,
+                          allow_mainnet=args.real_money)       # 마진자산은 심볼에서
         # 실돈은 '두 번' 명시해야 돈다: BINANCE_TESTNET=0 + --real-money.
         # 환경변수 하나만 잘못 건드려도 가짜돈 봇이 실돈 봇이 되는 걸 막는 이중 잠금.
         if not ex.testnet and not args.real_money:

@@ -16,7 +16,25 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine.backtest import _Position                       # noqa: E402
 from engine.binance_broker import Fill, OrderError, _merge   # noqa: E402
-from engine.executor import LiveExecutor                    # noqa: E402
+from engine.executor import LiveExecutor, api_keys           # noqa: E402
+from engine.live import LiveTrader                          # noqa: E402
+
+
+def _with_env(**kv):
+    """환경변수를 잠깐 바꿨다 되돌리는 컨텍스트(테스트끼리 안 새게)."""
+    import contextlib
+
+    @contextlib.contextmanager
+    def cm():
+        old = {k: os.environ.get(k) for k in kv}
+        try:
+            for k, v in kv.items():
+                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+            yield
+        finally:
+            for k, v in old.items():
+                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+    return cm()
 
 
 class FakeBroker:
@@ -30,6 +48,7 @@ class FakeBroker:
         self.min_qty, self.min_cost, self.step = min_qty, min_cost, step
         self.orders = []                     # (kind, side, qty, reduce_only)
         self.leverage = None
+        self.hedge = False
 
     # -- 메타/조회 --
     def market(self):
@@ -61,6 +80,12 @@ class FakeBroker:
 
     def funding_paid(self, a, b):
         return 0.0
+
+    def ensure_isolated(self):
+        return "isolated"
+
+    def position_mode(self):
+        return self.hedge          # True=헤지 모드 → preflight 가 거부해야 한다
 
     # -- 체결 --
     def _next(self, kind, side, qty, reduce_only):
@@ -221,6 +246,65 @@ def test_symbol_change_rebinds_and_is_blocked_while_holding():
     holding.open(_pos())
     _raises(RuntimeError, lambda: holding.set_symbol("ETHUSDT"))
     assert holding.symbol == "BTCUSDT"
+
+
+# ---- 거래소 네트워크 전환 (테스트넷 ↔ 실돈) --------------------------------
+# 전환은 플래그 뒤집기가 아니라 '다른 계정으로 이사'다. 잘못 새면 가짜돈 전략이 실돈에 나가거나,
+# 반쯤 바뀐 상태로 매매가 이어진다. 아래가 그 두 가지를 막는다.
+
+def test_api_keys_prefer_network_specific_then_fall_back_to_shared():
+    with _with_env(BINANCE_API_KEY="shared", BINANCE_API_SECRET="ss",
+                   BINANCE_TESTNET_API_KEY="tk", BINANCE_TESTNET_API_SECRET="ts",
+                   BINANCE_MAINNET_API_KEY=None, BINANCE_MAINNET_API_SECRET=None):
+        assert api_keys(testnet=True) == ("tk", "ts")        # 전용 키 우선
+        assert api_keys(testnet=False) == ("shared", "ss")   # 없으면 공용으로 폴백
+
+
+def test_switch_to_mainnet_needs_real_money_grant():
+    """--real-money 없이 뜬 봇은 대시보드 버튼으로도 실돈에 못 간다."""
+    ex = _ex(FakeBroker())                                   # allow_mainnet 기본 False
+    _raises(RuntimeError, lambda: ex.set_network("mainnet"))
+    assert ex.network == "testnet"
+
+
+def test_switch_network_blocked_while_holding_position():
+    ex = _ex(FakeBroker(), allow_mainnet=True)
+    ex.open(_pos())
+    _raises(RuntimeError, lambda: ex.set_network("mainnet"))
+    assert ex.network == "testnet"
+
+
+def test_failed_switch_rolls_back_to_previous_network():
+    """새 계정 점검(preflight)이 실패하면 반쯤 바뀐 채로 두지 말고 원래대로 되돌려야 한다."""
+    broker = FakeBroker()
+    broker.hedge = True                                      # 헤지 모드 계정 → preflight 거부
+    ex = _ex(broker, allow_mainnet=True)
+    with _with_env(BINANCE_API_KEY="k", BINANCE_API_SECRET="s"):
+        _raises(RuntimeError, lambda: ex.set_network("mainnet"))
+    assert ex.network == "testnet" and ex.testnet is True
+
+
+def test_successful_switch_flips_network_and_keys():
+    broker = FakeBroker()
+    ex = _ex(broker, allow_mainnet=True)
+    with _with_env(BINANCE_API_KEY=None, BINANCE_API_SECRET=None,
+                   BINANCE_MAINNET_API_KEY="mk", BINANCE_MAINNET_API_SECRET="ms"):
+        ex.set_network("mainnet")
+    assert ex.network == "mainnet" and ex.testnet is False
+    assert (ex.api_key, ex.api_secret) == ("mk", "ms")
+
+
+def test_ledger_buckets_never_merge():
+    """페이퍼·테스트넷·실돈이 한 원장 버킷에 섞이면 실돈 수익률에 가짜돈 손익이 들어간다."""
+    class Stub:
+        pass
+    s = Stub()
+    s.is_live, s.ex = False, None
+    assert LiveTrader._ledger_mode(s) == "paper"
+    s.is_live, s.ex = True, _ex(FakeBroker())                # 테스트넷 실거래
+    assert LiveTrader._ledger_mode(s) == "testnet"
+    s.ex.testnet = False
+    assert LiveTrader._ledger_mode(s) == "live"
 
 
 if __name__ == "__main__":

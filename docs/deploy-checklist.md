@@ -249,14 +249,19 @@ http://localhost:8080           # 대시보드. 안 열리면 터널·`docker co
 
 - [x] 리스크 가드레일 — 일일 손실 한도 · kill switch · 연속손실 차단
 - [x] `LiveExecutor`(ccxt) 실구현 — 주문/체결/잔고·포지션 동기화 (`engine/binance_broker.py`)
-- [ ] **8-1. 테스트넷(가짜돈)으로 며칠** — EC2 `.env` 에 `BINANCE_TESTNET=1` + 테스트넷 키,
-      `TRADE_MODE=--live` → `docker compose up -d trader`. 확인할 것:
+- [ ] **8-1. 테스트넷(가짜돈)으로 며칠** — EC2 `.env` 에 `BINANCE_TESTNET=1` + 테스트넷 키.
+      `TRADE_MODE="--live --real-money"` 로 띄우면 **실돈 권한은 받되 테스트넷에서 시작**하고,
+      나중에 대시보드 버튼만으로 실돈 전환이 된다(재배포 불필요). → `docker compose up -d trader`.
+      확인할 것:
   - 진입/청산 알림이 오는가, 대시보드에 **'실거래(테스트넷)'** 로 뜨는가
   - `docker compose logs trader | grep 실거래` 로 preflight 통과(격리마진·원웨이) 확인
   - 백테스트 가정 vs 실제: **슬리피지 · maker 체결 비율 · 펀딩** 을 원장에서 비교
   - 컨테이너를 일부러 재시작해 **포지션 인계**가 되는지 (`data/live_position.json`)
-- [ ] **8-2. 실돈 전환** — `.env` 에 `BINANCE_TESTNET=0` **그리고** `TRADE_MODE="--live --real-money"`.
-      둘 중 하나만 바꾸면 봇이 기동을 거부한다(이중 잠금 — 의도적).
+- [ ] **8-2. 실돈 전환** — 8-1 처럼 `--real-money` 로 띄웠다면 **대시보드 컨트롤바의 거래소
+      스위치**에서 `실돈` 입력만 하면 된다(무포지션일 때 적용). 재배포로 하려면 `.env` 에
+      `BINANCE_TESTNET=0` **그리고** `TRADE_MODE="--live --real-money"` — 둘 중 하나만 바꾸면
+      기동을 거부한다(이중 잠금 — 의도적).
+  - 메인넷 키를 `BINANCE_MAINNET_API_KEY/_SECRET` 에 따로 넣을 것(테스트넷과 계정이 다르다)
   - 바이낸스 API 키: **출금 비활성 + IP 화이트리스트**(단계 2-2의 **탄력적 IP**) 필수
     → EIP를 안 붙였으면 인스턴스 재시작마다 IP가 바뀌어 **화이트리스트가 깨지고 주문이 막힘**
   - 키는 **레포·compose에 절대 X** → EC2 `.env`(gitignore)/시크릿 매니저

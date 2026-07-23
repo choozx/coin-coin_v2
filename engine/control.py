@@ -70,6 +70,28 @@ def set_symbols(symbols, path: str = DEFAULT_PATH) -> dict:
     return _write(ctrl, path)
 
 
+NETWORKS = ("testnet", "mainnet")
+
+
+def get_network(path: str = DEFAULT_PATH):
+    """대시보드가 고른 거래소 네트워크 'testnet'|'mainnet'. 없으면 None(봇 시작값 유지).
+
+    테스트넷과 메인넷은 **계정도 API 키도 다르다** — 플래그가 아니라 접속 대상의 교체다.
+    그래서 무포지션일 때만 갈아탄다(전략 전환과 같은 규칙).
+    """
+    v = read_control(path).get("network")
+    return v if v in NETWORKS else None
+
+
+def set_network(network: str, path: str = DEFAULT_PATH) -> dict:
+    """control.json에 '원하는 네트워크' 기록. 봇이 다음 폴링에 무포지션이면 갈아탄다."""
+    if network not in NETWORKS:
+        raise ValueError(f"network는 {' 또는 '.join(NETWORKS)}")
+    ctrl = read_control(path)
+    ctrl["network"] = network
+    return _write(ctrl, path)
+
+
 def get_bot_config(path: str = DEFAULT_PATH) -> dict:
     """봇 실행 설정 — 프리셋에서 안 가져오는 나머지(심볼·사이징·레버리지·실행·필터).
     대시보드 '봇 설정'이 기록. 없으면 {} → 봇은 프리셋 값 그대로 사용."""

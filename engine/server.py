@@ -727,6 +727,14 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._send(400, json.dumps({"error": str(e)}))
             return
+        if self.path == "/api/network":                      # 거래소 전환 testnet↔mainnet(무포지션 시)
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length))
+                self._send(200, json.dumps({"ok": True, "control": control.set_network(body["network"])}))
+            except Exception as e:
+                self._send(400, json.dumps({"error": str(e)}))
+            return
         if self.path == "/api/strategy":                     # 봇 전략 선택(무포지션 시 전환)
             try:
                 length = int(self.headers.get("Content-Length", 0))
