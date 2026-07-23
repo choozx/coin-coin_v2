@@ -26,15 +26,23 @@ import numpy as np
 
 
 def notify(msg: str) -> None:
-    """선택적 알림 — 환경변수 NOTIFY_WEBHOOK(Discord/Slack 호환 {content})로 POST. 없으면 무시.
+    """선택적 알림 — 환경변수 NOTIFY_WEBHOOK로 POST. 없으면 무시.
 
-    배포 시 봇이 죽거나 진입/청산할 때 텔레그램/디스코드로 받기 위함. stdlib만 사용.
+    배포 시 봇이 죽거나 진입/청산할 때 Discord/Slack으로 받기 위함. stdlib만 사용.
+    웹훅 종류마다 payload 키가 다르다(Slack=text, Discord=content) — URL로 판별해 맞춰 보낸다.
+    (content 로만 보내면 Slack incoming 웹훅은 invalid_payload 로 거부한다.)
     """
     url = os.environ.get("NOTIFY_WEBHOOK")
     if not url:
         return
+    if "hooks.slack.com" in url:
+        payload = {"text": msg}
+    elif "discord" in url:                       # discord.com / discordapp.com
+        payload = {"content": msg}
+    else:
+        payload = {"content": msg, "text": msg}  # 알 수 없는 웹훅이면 둘 다(각자 모르는 키는 무시)
     try:
-        data = _json.dumps({"content": msg}).encode()
+        data = _json.dumps(payload).encode()
         req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
         urllib.request.urlopen(req, timeout=5)
     except Exception:
