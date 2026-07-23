@@ -6,7 +6,8 @@
 <title>트레이딩 봇</title>
 <style>
   :root { --bg:#0e1117; --panel:#161b22; --panel2:#1c2230; --line:#2a3140; --fg:#e6e9ef; --mut:#8a90a0;
-          --up:#26d07c; --down:#ff5c6c; --blue:#4c9be8; }
+          --up:#26d07c; --down:#ff5c6c; --blue:#4c9be8;
+          color-scheme: dark; }   /* 네이티브 <select> 팝업·스크롤바를 다크로 렌더 */
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--fg); font-family:system-ui,-apple-system,sans-serif; }
   .wrap { max-width:1000px; margin:0 auto; padding:20px; }
@@ -88,6 +89,13 @@
   .field { display:flex; align-items:center; gap:8px; margin:8px 0; font-size:13px; }
   .field label { color:var(--mut); min-width:80px; }
   .field input { background:var(--panel2); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:6px 9px; font-size:13px; }
+  /* 프리셋 만들기·매매 봇의 <select> 를 입력창과 같은 다크로. 화살표는 직접 그린다(appearance:none). */
+  .field select { background:var(--panel2); color:var(--fg); border:1px solid var(--line); border-radius:6px;
+                  padding:6px 28px 6px 9px; font-size:13px; cursor:pointer; appearance:none; -webkit-appearance:none;
+                  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%238a90a0' d='M0 0l5 6 5-6z'/%3E%3C/svg%3E");
+                  background-repeat:no-repeat; background-position:right 10px center; }
+  .field select:hover { border-color:var(--blue); }
+  .field select:focus { outline:none; border-color:var(--blue); }
 </style>
 </head>
 <body>
