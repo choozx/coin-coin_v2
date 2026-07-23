@@ -18,7 +18,8 @@ from .backtest import BacktestConfig, run
 from . import binance_math as bm
 from . import control
 from .candles import resample, TIMEFRAME_MINUTES
-from .preset import Preset, bot_config_info, import_preset, list_strategies, save_composed_preset, select_strategy
+from .preset import (Preset, bot_config_info, import_preset, list_strategies, save_composed_preset,
+                     select_strategy, send_preset_to_deploy)
 from . import ledger
 
 _HTML = os.path.join(os.path.dirname(__file__), "gui.html")
@@ -750,6 +751,14 @@ class Handler(BaseHTTPRequestHandler):
                 length = int(self.headers.get("Content-Length", 0))
                 body = json.loads(self.rfile.read(length) or b"{}")
                 self._send(200, json.dumps(import_preset(body.get("preset"), body.get("name"))))
+            except Exception as e:
+                self._send(400, json.dumps({"error": str(e)}))
+            return
+        if self.path == "/api/send_to_deploy":               # 로컬 프리셋 → 배포 대시보드로 중계 전송(SSH 터널)
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length) or b"{}")
+                self._send(200, json.dumps(send_preset_to_deploy(body.get("path"), body.get("deployUrl"))))
             except Exception as e:
                 self._send(400, json.dumps({"error": str(e)}))
             return

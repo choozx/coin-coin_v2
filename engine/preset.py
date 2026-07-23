@@ -225,6 +225,33 @@ def import_preset(payload: dict, name: str = None, dest_dir: str = STRATEGY_DIR_
     return {"ok": True, "path": path, "name": nm}
 
 
+def send_preset_to_deploy(path: str, deploy_url: str = None) -> dict:
+    """로컬 프리셋 파일을 배포 대시보드의 /api/import_preset 로 중계 전송(SSH 터널 경유).
+
+    deploy_url 기본 = env DEPLOY_URL 또는 http://localhost:8080(터널). 로컬 서버가 파일을
+    읽어 배포로 POST → 배포가 자기 data/strategies 에 저장 → 봇이 선택 가능. scp·커맨드 불필요.
+    """
+    import urllib.error
+    import urllib.request as _u
+    deploy_url = (deploy_url or os.environ.get("DEPLOY_URL") or "http://localhost:8080").rstrip("/")
+    if path not in {s["path"] for s in list_strategies()}:
+        raise ValueError(f"알 수 없는 프리셋: {path}")
+    with open(path, encoding="utf-8") as f:
+        preset_json = json.load(f)
+    data = json.dumps({"preset": preset_json}).encode()
+    req = _u.Request(deploy_url + "/api/import_preset", data=data,
+                     headers={"Content-Type": "application/json"})
+    try:
+        with _u.urlopen(req, timeout=10) as resp:
+            result = json.load(resp)
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"배포에 연결 실패 ({deploy_url}) — SSH 터널(:8080)이 떠 있는지 "
+                           f"확인하세요. ({getattr(e, 'reason', e)})")
+    if isinstance(result, dict) and result.get("error"):
+        raise RuntimeError(f"배포가 거부함: {result['error']}")
+    return {"ok": True, "deployUrl": deploy_url, "name": (result or {}).get("name")}
+
+
 def bot_config_info() -> dict:
     """봇 실행 설정(control.json) + 현재 선택된 전략의 프리셋 기본값(폼 프리필용).
 

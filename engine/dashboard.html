@@ -583,6 +583,8 @@ async function renderBotRun(){
     +   `<button class="btn-ghost" onclick="editSelected()"${runnable.length?"":" disabled"} title="지금 고른 매매 프리셋 수정">✏️ 수정</button>`
     +   `<button class="btn-ghost" onclick="$('importFile').click()" title="프리셋 JSON 업로드 → 이 대시보드의 data/strategies 에 저장(배포 대시보드서 하면 배포로 전달)">⬆ 가져오기</button>`
     +   `<input type="file" id="importFile" accept="application/json,.json" style="display:none" onchange="doImport(event)">`
+    // '배포로 보내기'는 로컬 대시보드 전용 — 배포(NO_STUDIO)에선 자기한테 보내는 게 무의미해 숨김.
+    +   (window.__NO_STUDIO__ ? "" : `<button class="btn-ghost" onclick="sendToDeploy()"${runnable.length?"":" disabled"} title="지금 고른 매매 프리셋을 배포 대시보드로 전송(SSH 터널 :8080)">📤 배포로 보내기</button>`)
     +   `<span class="sub" id="run_msg"></span></div>`
     + `<div id="control" class="ctrlbar" style="margin-top:6px"></div>`;
   window._lastControlHTML = null;                    // 컨트롤바 다시 그리도록
@@ -606,6 +608,19 @@ async function doImport(e){                          // 프리셋 JSON 업로드
     await renderBotRun();
     $("run_msg").innerHTML = `<span class="fresh-g">✓ '${r.name}' 가져옴 — 목록에서 골라 돌리세요</span>`;
   } catch(err){ if ($("run_msg")) $("run_msg").innerHTML = `<span class="fresh-r">가져오기 실패: ${err.message}</span>`; }
+}
+
+async function sendToDeploy(){                       // 로컬 매매 프리셋 → 배포 대시보드로 전송(서버가 중계)
+  const sel = $("runSel"); const path = sel && sel.value; if (!path) return;
+  const name = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : path;
+  if (!confirm(`이 매매 프리셋을 배포로 보낼까요?\n(배포 대시보드 :8080 — SSH 터널이 떠 있어야 함)\n\n${name}`)) return;
+  $("run_msg").textContent = "배포로 전송 중…";
+  try {
+    const r = await (await fetch("/api/send_to_deploy",{method:"POST",headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({path})})).json();
+    if (r.error) throw new Error(r.error);
+    $("run_msg").innerHTML = `<span class="fresh-g">✓ 배포로 보냄 (${r.deployUrl}) — 배포 대시보드에서 골라 돌리세요</span>`;
+  } catch(e){ $("run_msg").innerHTML = `<span class="fresh-r">전송 실패: ${e.message}</span>`; }
 }
 
 async function selectRun(){
