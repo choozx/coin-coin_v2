@@ -64,7 +64,7 @@ services:
     mem_limit: 400m
     mem_reservation: 150m
     command: >
-      sh -c "python -m engine.collector $COLLECT_SYMBOLS --loop \"$INTERVAL\""
+      sh -c "python -m engine.collector $COLLECT_SYMBOLS --loop \"$INTERVAL\" --start-running"
     environment:
       COLLECT_SYMBOLS: ${COLLECT_SYMBOLS:-BTCUSDC}
       INTERVAL: ${INTERVAL:-60}
