@@ -245,16 +245,24 @@ http://localhost:8080           # 대시보드. 안 열리면 터널·`docker co
 
 ---
 
-## 단계 8 — (나중) 실거래(실돈) 전환   `향후`
+## 단계 8 — 실거래 전환   `테스트넷부터`
 
-- [ ] 페이퍼로 며칠 실전 검증 (백테스트 가정 vs 실제 체결)
-- [ ] 리스크 가드레일 — 일일 손실 한도 · kill switch · 연속손실 차단
-- [ ] `LiveExecutor`(ccxt) 실구현 — 주문/체결/잔고 동기화
+- [x] 리스크 가드레일 — 일일 손실 한도 · kill switch · 연속손실 차단
+- [x] `LiveExecutor`(ccxt) 실구현 — 주문/체결/잔고·포지션 동기화 (`engine/binance_broker.py`)
+- [ ] **8-1. 테스트넷(가짜돈)으로 며칠** — EC2 `.env` 에 `BINANCE_TESTNET=1` + 테스트넷 키,
+      `TRADE_MODE=--live` → `docker compose up -d trader`. 확인할 것:
+  - 진입/청산 알림이 오는가, 대시보드에 **'실거래(테스트넷)'** 로 뜨는가
+  - `docker compose logs trader | grep 실거래` 로 preflight 통과(격리마진·원웨이) 확인
+  - 백테스트 가정 vs 실제: **슬리피지 · maker 체결 비율 · 펀딩** 을 원장에서 비교
+  - 컨테이너를 일부러 재시작해 **포지션 인계**가 되는지 (`data/live_position.json`)
+- [ ] **8-2. 실돈 전환** — `.env` 에 `BINANCE_TESTNET=0` **그리고** `TRADE_MODE="--live --real-money"`.
+      둘 중 하나만 바꾸면 봇이 기동을 거부한다(이중 잠금 — 의도적).
   - 바이낸스 API 키: **출금 비활성 + IP 화이트리스트**(단계 2-2의 **탄력적 IP**) 필수
     → EIP를 안 붙였으면 인스턴스 재시작마다 IP가 바뀌어 **화이트리스트가 깨지고 주문이 막힘**
   - 키는 **레포·compose에 절대 X** → EC2 `.env`(gitignore)/시크릿 매니저
-  - 재시작 시 포지션/잔고는 **거래소에서 읽어 동기화**(로컬 상태 맹신 금지)
-  - 자동배포 안전장치: 나쁜 push가 실매매 봇 갈아치우지 않게 GitHub Environment 승인 규칙/테스트 게이트
+  - 처음엔 **소액 + 낮은 레버리지**로. 최소 주문(BTC 0.001 ≈ 65 USDC)보다 사이징이 작으면
+    진입이 계속 건너뛰어진다 — 로그에 `최소 명목가 미달` 이 반복되면 그 뜻
+- [ ] 자동배포 안전장치: 나쁜 push가 실매매 봇 갈아치우지 않게 GitHub Environment 승인 규칙/테스트 게이트
 
 ---
 
