@@ -107,9 +107,15 @@ const fmt = n => n==null ? "–" : Number(n).toLocaleString(undefined,{maximumFr
 const fmtT = ms => { const d=new Date(ms); return d.toLocaleString('ko-KR',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}); };
 window._activeTab = "data";                        // 단일 페이지 — 항상 데이터
 
-function svcBtn(svc, label, state){
+const STALE_MIN = 10;                              // 실행중인데 최신 캔들이 이보다 오래됐으면 '지연'
+const fmtMin = m => m<60 ? `${Math.round(m)}분` : m<1440 ? `${Math.round(m/60)}시간` : `${(m/1440).toFixed(1)}일`;
+function svcBtn(svc, label, state, staleMin){
   const paused = state === "paused";
-  return `<span class="svc"><b>${label}</b> <span class="dot ${paused?'p':'r'}"></span>${paused?'멈춤':'실행중'} `
+  // 상태 플래그가 '실행중'이라도 가장 신선한 심볼조차 오래됐으면(폴링 정지/막힘) 초록으로 속이지 않는다.
+  const lagging = !paused && staleMin != null && staleMin >= STALE_MIN;
+  const txt = paused ? '멈춤' : lagging ? `실행중 · 지연 ${fmtMin(staleMin)}` : '실행중';
+  const title = lagging ? `상태는 '실행중'이나 최신 캔들이 ${fmtMin(staleMin)} 전 — 수집 루프가 멈췄거나 밀렸을 수 있음` : '';
+  return `<span class="svc" title="${title}"><b>${label}</b> <span class="dot ${paused||lagging?'p':'r'}"></span>${txt} `
     + `<button onclick="setSvc('${svc}','${paused?'running':'paused'}')">${paused?'▶ 재개':'⏸ 멈춤'}</button></span>`;
 }
 async function setSvc(svc, state){                 // 수집기 멈춤/재개
@@ -156,7 +162,9 @@ const fmtBytes = b => !b ? "0" : b>1e9 ? (b/1e9).toFixed(1)+"GB" : b>1e6 ? (b/1e
 // 폴링(60초)이 입력폼·수집진행을 지우지 않도록: 정적 셸(폼) + 동적갱신(상태·커버리지) 분리.
 // 폴링은 refreshDataDynamic()만 부르고, renderData()(전체 재빌드)는 탭 진입/사용자 액션에만.
 function ctrlbarHTML(info){
-  return svcBtn("collector","수집기", info.collector||"running")
+  const ages = (info.symbols||[]).map(s=>s.ageMin).filter(a=>a!=null);
+  const freshest = ages.length ? Math.min(...ages) : null;         // 가장 신선한 심볼 기준(실행중이면 수분 내여야)
+  return svcBtn("collector","수집기", info.collector||"running", freshest)
     + `<span class="svc"><button onclick="healGaps()">🩹 구멍 복구</button></span>`
     + `<span class="svc"><button onclick="refreshDataDynamic()">↻ 갱신</button></span>`
     + `<span class="sub" style="margin-left:auto">DB ${fmtBytes(info.dbBytes)} · 다음 갱신 <b id="cachePollCd">${pollRemain()}</b>초</span>`;
