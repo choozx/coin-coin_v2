@@ -448,6 +448,7 @@ function _num(id){ const el=$(id); const v=(el&&el.value||"").trim(); return v==
 async function renderPresetMaker(editPath){
   let cache = [];
   try { cache = ((await (await fetch("/api/cache",{cache:"no-store"})).json()).symbols||[]).map(s=>s.symbol); } catch(e){}
+  try { window._globalTiers = ((await (await fetch("/api/settings",{cache:"no-store"})).json()).leverageTiers)||[]; } catch(e){ window._globalTiers = []; }
   // '전략 신호' 소스 = 스튜디오에서 만든 진입/청산 프리셋(examples·saved). 이미 조립된
   // 매매 프리셋(strategies)은 신호 소스로 안 쓴다.
   const signals = STRATS.filter(s => s.source !== "strategies");
@@ -475,8 +476,9 @@ async function renderPresetMaker(editPath){
     +   `<span class="sub">${editing ? "신호를 바꾸려면 다른 프리셋 선택(바꾸면 실행설정이 그 기본값으로 초기화됨)" : "진입/청산 로직은 🔬 스튜디오에서 만든 프리셋을 고릅니다"}</span></div>`
     + `<div class="field"><label>심볼</label>${symField}`
     +   (cache.length ? "" : `<span class="sub">수집된 심볼 없음 — /collector에서 먼저 수집</span>`) + `</div>`
-    + `<div class="field"><label>레버리지</label><input id="pm_lev" type="number" min="1" style="max-width:110px">`
-    +   `<span class="sub">배 · 잔고별 동적 티어는 <a href="/settings" class="sub">설정</a>에서</span></div>`
+    + `<div class="field"><label>레버리지</label><input id="pm_lev" type="number" min="1" style="max-width:90px"><span class="sub">배</span>`
+    +   `<label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-left:12px"><input type="checkbox" id="pm_dyn" onchange="togglePmDyn()"> 동적(잔고별 티어)</label>`
+    +   `<span class="sub" id="pm_dyn_note"></span></div>`
     + `<div class="field"><label>증거금 방식</label>${selOpts("pm_margin",["isolated","cross"])}</div>`
     + `<div class="field"><label>주문 크기</label>${selOpts("pm_sizetype",["equityPercent","riskPercent","fixedQuote","fixedBase"])}`
     +   `<input id="pm_sizeval" type="number" step="any" style="max-width:110px"></div>`
@@ -522,6 +524,8 @@ function prefillFromBase(){
   }
   const set = (id,v) => { const el=$(id); if (el) el.value = v==null ? "" : v; };
   set("pm_lev", sz.leverage);
+  if ($("pm_dyn")) $("pm_dyn").checked = Array.isArray(sz.leverageTiers) && sz.leverageTiers.length > 0;
+  togglePmDyn();
   if ($("pm_margin")) $("pm_margin").value = sz.marginMode || "isolated";
   if ($("pm_sizetype")) $("pm_sizetype").value = size.type || "equityPercent";
   set("pm_sizeval", size.value);
@@ -537,6 +541,26 @@ function togglePmTimeout(){                          // 폴백(초)은 makerLimi
   wrap.style.display = ($("pm_exec") && $("pm_exec").value === "makerLimit") ? "inline-flex" : "none";
 }
 
+// 정렬된 잔고 티어(오름차순, maxBalance 없는 catch-all 마지막) — 프리셋에 구울 형태.
+function _sortedTiers(){
+  return (window._globalTiers || [])
+    .map(t => t.maxBalance != null
+      ? {leverage: Number(t.leverage), maxBalance: Number(t.maxBalance)}
+      : {leverage: Number(t.leverage)})
+    .sort((a,b) => (a.maxBalance ?? Infinity) - (b.maxBalance ?? Infinity));
+}
+function togglePmDyn(){                               // 동적 레버리지 켜면 고정칸 흐리고 티어 요약 표시
+  const on = $("pm_dyn") && $("pm_dyn").checked;
+  if ($("pm_lev")){ $("pm_lev").disabled = on; $("pm_lev").style.opacity = on ? .5 : 1; }
+  const note = $("pm_dyn_note"); if (!note) return;
+  if (!on){ note.innerHTML = "· 잔고별 자동 조절하려면 체크"; return; }
+  const t = _sortedTiers();
+  const summ = t.length
+    ? t.map(x => x.maxBalance != null ? `≤$${x.maxBalance}→${x.leverage}x` : `그 이상→${x.leverage}x`).join(" · ")
+    : "설정에 티어 없음";
+  note.innerHTML = `저장 시 이 티어가 프리셋에 구워짐: ${summ} <a href="/settings" class="sub">편집</a>`;
+}
+
 async function makePreset(){
   if (!$("pm_name")){ $("pm_msg").innerHTML = `<span class="fresh-r">먼저 🔬 스튜디오에서 전략을 만드세요</span>`; return; }
   const name = ($("pm_name").value||"").trim();
@@ -544,7 +568,15 @@ async function makePreset(){
   const symEl = $("pm_sym");
   const symbol = ((symEl&&symEl.value)||"").toUpperCase().replace(/[^A-Z0-9]/g,"");
   const sizing = { marginMode: $("pm_margin").value };
-  const lev = _num("pm_lev"); if (lev!=null) sizing.leverage = lev;
+  let lev = _num("pm_lev");
+  if ($("pm_dyn") && $("pm_dyn").checked){           // 동적: 잔고 티어를 프리셋에 구워넣음(스냅샷)
+    const tiers = _sortedTiers();
+    if (!tiers.length){ $("pm_msg").innerHTML = `<span class="fresh-r">동적 레버리지 티어가 설정에 없습니다 — 설정에서 먼저 추가</span>`; return; }
+    sizing.leverageTiers = tiers;
+    if (lev==null) lev = tiers[tiers.length-1].leverage;   // 폴백 leverage = catch-all 티어(스키마 필수)
+  }
+  if (lev==null){ $("pm_msg").innerHTML = `<span class="fresh-r">레버리지를 입력하세요</span>`; return; }
+  sizing.leverage = lev;
   const sv = _num("pm_sizeval"); if (sv!=null) sizing.size = { type: $("pm_sizetype").value, value: sv };
   const execution = { entryType: $("pm_exec").value };
   if (execution.entryType === "makerLimit"){
