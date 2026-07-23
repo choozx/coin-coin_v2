@@ -170,10 +170,14 @@ git push origin prod        # 이후 이 push가 배포 트리거
 | `presets/saved/` | gitignore, **컨테이너엔 없음** | 로컬 GUI 저장용(프로덕션에서 이 경로를 쓰지 말 것) |
 | `data/strategies/` | 공유 볼륨 | **평상시 투입 통로.** 파일만 던지면 목록에 뜬다 |
 
-**A. UI 업로드(커맨드 없이) — 권장.** 배포 대시보드(SSH 터널 `http://localhost:8080`)를 브라우저로
-열고 매매 봇의 **`⬆ 가져오기`** → 로컬 프리셋 JSON 선택. 파일 선택창은 항상 로컬 PC 기준이라,
-브라우저가 그 파일을 EC2 서버로 올려 `data/strategies/` 에 저장한다(`/api/import_preset`). scp 불필요.
-프리셋은 로컬 대시보드의 `프리셋 만들기`로 만들어 로컬 `data/strategies/` 에 둔 것을 그대로 올리면 된다.
+**A. 로컬에서 '배포로 보내기'(커맨드 없이) — 권장.** SSH 터널(`ssh -L 8080:localhost:8080 …`)을
+띄운 상태에서, **로컬 대시보드**(`http://localhost:8765`) 매매 봇의 **`📤 배포로 보내기`** 클릭.
+로컬 서버가 그 프리셋을 `DEPLOY_URL`(기본 `http://localhost:8080` = 터널)의 `/api/import_preset`
+으로 중계해 배포 `data/strategies/` 에 저장한다. 브라우저가 아니라 서버가 중계하므로 CORS·공개
+노출 없음 — 터널만 떠 있으면 된다. 터널 포트가 다르면 `.env` 의 `DEPLOY_URL` 로 바꾼다.
+
+**A'. 배포 대시보드에서 업로드.** 배포 대시보드(`http://localhost:8080`)를 열고 **`⬆ 가져오기`**
+→ 로컬 프리셋 JSON 선택. 파일 선택창은 항상 로컬 PC 기준이라 브라우저가 그 파일을 EC2로 올린다.
 
 **B. scp(수동).**
 ```bash
