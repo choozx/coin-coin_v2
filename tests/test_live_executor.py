@@ -329,6 +329,57 @@ def test_testnet_client_turns_off_ccxt_sandbox_guard():
     assert "testnet" not in m.urls["api"]["fapiPrivate"]
 
 
+def test_notify_sets_user_agent_and_right_payload_key():
+    """Discord 앞단 Cloudflare 는 파이썬 기본 UA 를 403(1010)으로 막는다.
+
+    헤더 하나가 빠져서 알림이 통째로 안 왔는데, notify 가 예외를 삼켜 실패한 줄도 몰랐다.
+    UA 를 붙이는 것과, 웹훅 종류별 payload 키(Slack=text / Discord=content)를 함께 못박는다.
+    """
+    import engine.live as live
+    sent = []
+
+    class FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    orig = live.urllib.request.urlopen
+    live.urllib.request.urlopen = lambda req, timeout=None: sent.append(req) or FakeResp()
+    try:
+        with _with_env(NOTIFY_WEBHOOK="https://discord.com/api/webhooks/1/abc"):
+            live.notify("hi")
+        with _with_env(NOTIFY_WEBHOOK="https://hooks.slack.com/services/x"):
+            live.notify("hi")
+    finally:
+        live.urllib.request.urlopen = orig
+
+    assert len(sent) == 2
+    for req in sent:
+        ua = req.get_header("User-agent") or ""
+        assert ua and "urllib" not in ua.lower(), f"UA 없음/기본값: {ua!r}"
+    import json as _j
+    assert "content" in _j.loads(sent[0].data)      # Discord
+    assert "text" in _j.loads(sent[1].data)         # Slack
+
+
+def test_notify_failure_is_logged_not_swallowed(capsys=None):
+    """웹훅이 죽어도 매매는 계속돼야 하지만, 로그에는 남아야 한다(조용한 실패 방지)."""
+    import engine.live as live, io, contextlib
+    orig = live.urllib.request.urlopen
+
+    def boom(req, timeout=None):
+        raise OSError("network down")
+
+    live.urllib.request.urlopen = boom
+    buf = io.StringIO()
+    try:
+        with _with_env(NOTIFY_WEBHOOK="https://discord.com/api/webhooks/1/abc"):
+            with contextlib.redirect_stdout(buf):
+                live.notify("hi")            # 예외가 밖으로 나가면 안 됨
+    finally:
+        live.urllib.request.urlopen = orig
+    assert "알림 실패" in buf.getvalue()
+
+
 if __name__ == "__main__":
     import traceback
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

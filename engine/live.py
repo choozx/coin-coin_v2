@@ -43,10 +43,16 @@ def notify(msg: str) -> None:
         payload = {"content": msg, "text": msg}  # 알 수 없는 웹훅이면 둘 다(각자 모르는 키는 무시)
     try:
         data = _json.dumps(payload).encode()
-        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+        # User-Agent 필수: Discord 앞단 Cloudflare 가 파이썬 기본 UA(Python-urllib/x.y)를
+        # 봇으로 보고 403(error code 1010)으로 막는다. 헤더 하나 빠졌다고 알림이 통째로
+        # 안 왔고, 아래 except 가 조용히 삼켜서 안 오는 줄도 몰랐다.
+        req = urllib.request.Request(url, data=data, headers={
+            "Content-Type": "application/json", "User-Agent": "coin-coin-bot/1.0"})
         urllib.request.urlopen(req, timeout=5)
-    except Exception:
-        pass    # 알림 실패가 트레이딩을 막으면 안 됨
+    except Exception as e:
+        # 알림 실패가 트레이딩을 막으면 안 되지만, 조용히 삼키면 이번처럼 몇 주를 모르고 지나간다.
+        # 로그에는 남긴다(웹훅이 죽어도 매매는 계속).
+        print(f"  [알림 실패] {type(e).__name__}: {str(e)[:120]}", flush=True)
 
 from . import binance_math as bm
 from . import candle_store
