@@ -18,7 +18,7 @@ from .backtest import BacktestConfig, run
 from . import binance_math as bm
 from . import control
 from .candles import resample, TIMEFRAME_MINUTES
-from .preset import Preset, bot_config_info, list_strategies, save_composed_preset, select_strategy
+from .preset import Preset, bot_config_info, import_preset, list_strategies, save_composed_preset, select_strategy
 from . import ledger
 
 _HTML = os.path.join(os.path.dirname(__file__), "gui.html")
@@ -742,6 +742,14 @@ class Handler(BaseHTTPRequestHandler):
                     body.get("name"), body.get("base"), body.get("symbol"),
                     body.get("sizing") or {}, body.get("execution") or {}, body.get("filter") or {},
                     replace_path=body.get("replace"))))
+            except Exception as e:
+                self._send(400, json.dumps({"error": str(e)}))
+            return
+        if self.path == "/api/import_preset":                # 프리셋 업로드 — JSON 파일을 data/strategies 에 저장
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length) or b"{}")
+                self._send(200, json.dumps(import_preset(body.get("preset"), body.get("name"))))
             except Exception as e:
                 self._send(400, json.dumps({"error": str(e)}))
             return

@@ -202,6 +202,29 @@ def save_composed_preset(name: str, base_path: str, symbol: str,
     return {"ok": True, "path": path, "name": name}
 
 
+def import_preset(payload: dict, name: str = None, dest_dir: str = STRATEGY_DIR_DATA) -> dict:
+    """업로드된 프리셋 JSON을 이 서버의 data/strategies 에 저장(매매 프리셋으로 편입).
+
+    로컬 대시보드면 로컬 디렉토리, 배포 대시보드(:8080)면 공유 볼륨에 저장된다 →
+    브라우저로 파일만 올리면 scp 없이 배포에 프리셋 투입. payload 는 생 프리셋 또는
+    스튜디오 저장 래퍼({name, form, params, preset}) 둘 다 받는다.
+    """
+    if not isinstance(payload, dict):
+        raise ValueError("프리셋 JSON(객체)이 아닙니다")
+    data = payload.get("preset") if isinstance(payload.get("preset"), dict) else payload
+    data = dict(data)
+    nm = (name or data.get("name") or "imported").strip()
+    if not nm:
+        raise ValueError("프리셋 이름이 없습니다")
+    data["name"] = nm
+    Preset.from_dict(data, validate=True)    # 스키마 검증(실패 시 예외 → 파일 안 씀)
+    os.makedirs(dest_dir, exist_ok=True)
+    path = os.path.join(dest_dir, _slugify(nm) + ".json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    return {"ok": True, "path": path, "name": nm}
+
+
 def bot_config_info() -> dict:
     """봇 실행 설정(control.json) + 현재 선택된 전략의 프리셋 기본값(폼 프리필용).
 

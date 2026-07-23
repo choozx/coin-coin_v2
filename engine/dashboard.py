@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from . import candle_store
 from . import control
 from . import ledger
-from .preset import bot_config_info, list_strategies, save_composed_preset, select_strategy
+from .preset import bot_config_info, import_preset, list_strategies, save_composed_preset, select_strategy
 from . import settings
 
 _HTML = os.path.join(os.path.dirname(__file__), "dashboard.html")
@@ -124,6 +124,9 @@ class Handler(BaseHTTPRequestHandler):
                     body.get("name"), body.get("base"), body.get("symbol"),
                     body.get("sizing") or {}, body.get("execution") or {}, body.get("filter") or {},
                     replace_path=body.get("replace"))))
+                return
+            elif self.path == "/api/import_preset":  # 프리셋 업로드 — JSON 파일을 data/strategies 에 저장
+                self._send(200, json.dumps(import_preset(body.get("preset"), body.get("name"))))
                 return
             elif self.path == "/api/heal":         # 캔들 구멍 수동 복구
                 syms = [body["symbol"]] if body.get("symbol") else [s["symbol"] for s in candle_store.list_stats()]

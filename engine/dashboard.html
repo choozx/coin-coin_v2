@@ -581,6 +581,8 @@ async function renderBotRun(){
     + `<div class="field"><label>돌릴 프리셋</label>`
     +   `<select id="runSel" onchange="selectRun()" style="max-width:340px"${runnable.length?"":" disabled"}>${opts}</select>`
     +   `<button class="btn-ghost" onclick="editSelected()"${runnable.length?"":" disabled"} title="지금 고른 매매 프리셋 수정">✏️ 수정</button>`
+    +   `<button class="btn-ghost" onclick="$('importFile').click()" title="프리셋 JSON 업로드 → 이 대시보드의 data/strategies 에 저장(배포 대시보드서 하면 배포로 전달)">⬆ 가져오기</button>`
+    +   `<input type="file" id="importFile" accept="application/json,.json" style="display:none" onchange="doImport(event)">`
     +   `<span class="sub" id="run_msg"></span></div>`
     + `<div id="control" class="ctrlbar" style="margin-top:6px"></div>`;
   window._lastControlHTML = null;                    // 컨트롤바 다시 그리도록
@@ -590,6 +592,20 @@ async function renderBotRun(){
     $("run_msg").innerHTML = `<span class="fresh-g">✓ '${jm.name}' ${jm.edited?'수정됨':'저장됨'} — 목록에서 골라 돌리세요</span>`;
     window._justMade = null;
   }
+}
+
+async function doImport(e){                          // 프리셋 JSON 업로드 → 이 서버의 data/strategies 에 저장
+  const file = e.target.files && e.target.files[0]; if (!file) return;
+  e.target.value = "";                               // 같은 파일 다시 고를 수 있게 초기화
+  try {
+    const payload = JSON.parse(await file.text());
+    const r = await (await fetch("/api/import_preset",{method:"POST",headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({preset: payload})})).json();
+    if (r.error) throw new Error(r.error);
+    await loadStrategies();
+    await renderBotRun();
+    $("run_msg").innerHTML = `<span class="fresh-g">✓ '${r.name}' 가져옴 — 목록에서 골라 돌리세요</span>`;
+  } catch(err){ if ($("run_msg")) $("run_msg").innerHTML = `<span class="fresh-r">가져오기 실패: ${err.message}</span>`; }
 }
 
 async function selectRun(){
