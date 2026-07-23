@@ -18,7 +18,7 @@ from .backtest import BacktestConfig, run
 from . import binance_math as bm
 from . import control
 from .candles import resample, TIMEFRAME_MINUTES
-from .preset import Preset, bot_config_info, list_strategies, select_strategy
+from .preset import Preset, bot_config_info, list_strategies, save_composed_preset, select_strategy
 from . import ledger
 
 _HTML = os.path.join(os.path.dirname(__file__), "gui.html")
@@ -727,6 +727,16 @@ class Handler(BaseHTTPRequestHandler):
                 length = int(self.headers.get("Content-Length", 0))
                 body = json.loads(self.rfile.read(length))
                 self._send(200, json.dumps({"ok": True, "control": select_strategy(body["path"])}))
+            except Exception as e:
+                self._send(400, json.dumps({"error": str(e)}))
+            return
+        if self.path == "/api/make_preset":                  # 프리셋 만들기 — 신호원+실행설정 → 자기완결 프리셋 저장
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length) or b"{}")
+                self._send(200, json.dumps(save_composed_preset(
+                    body.get("name"), body.get("base"), body.get("symbol"),
+                    body.get("sizing") or {}, body.get("execution") or {}, body.get("filter") or {})))
             except Exception as e:
                 self._send(400, json.dumps({"error": str(e)}))
             return

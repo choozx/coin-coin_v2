@@ -137,10 +137,63 @@ def list_strategies(dirs=STRATEGY_DIRS) -> list:
                 if not name or name == "GUI 프리셋":
                     name = os.path.splitext(os.path.basename(fp))[0]
                 out.append({"path": fp, "name": name, "symbol": pr.symbol,
-                            "timeframe": pr.timeframe, "source": src})
+                            "timeframe": pr.timeframe, "source": src,
+                            # '프리셋 만들기'가 신호원을 고르면 이 값들로 폼을 채운다(자기완결 프리셋)
+                            "direction": pr.direction, "sizing": pr.sizing,
+                            "execution": pr.data.get("execution", {}), "filter": pr.filter})
             except Exception:
                 continue                     # 깨진/래퍼-only 파일은 건너뜀
     return out
+
+
+def _slugify(name: str) -> str:
+    """프리셋 이름 → 안전한 파일명(한글 허용, 공백·특수문자는 _)."""
+    import re
+    s = re.sub(r"[^\w가-힣.-]+", "_", (name or "").strip()).strip("._")
+    return (s or "preset")[:80]
+
+
+def save_composed_preset(name: str, base_path: str, symbol: str,
+                         sizing: dict, execution: dict, filt: dict,
+                         dest_dir: str = STRATEGY_DIR_DATA) -> dict:
+    """'프리셋 만들기' — 신호원(base)의 진입/청산/타임프레임/방향 + 주어진 심볼·사이징·실행·필터를
+    합쳐 '자기완결 프리셋'으로 data/strategies/ 에 저장. 봇은 오버라이드 없이 이걸 그대로 돌린다.
+
+    base_path : 진입/청산 신호를 가져올 기존 프리셋(스튜디오에서 만든 것). market·entry·exit만 씀.
+    반환: {ok, path, name}.
+    """
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("프리셋 이름을 입력하세요")
+    if base_path not in {s["path"] for s in list_strategies()}:
+        raise ValueError(f"알 수 없는 전략 신호 원본: {base_path}")
+    base = load_preset_file(base_path, validate=False).data
+    market = dict(base.get("market") or {})
+    preset = {
+        "schemaVersion": base.get("schemaVersion", "1.0"),
+        "name": name,
+        "market": {
+            "exchange": market.get("exchange", "binance-futures"),
+            "symbol": (symbol or market.get("symbol") or "").upper(),
+            "timeframe": market.get("timeframe"),
+            "direction": market.get("direction", "both"),
+        },
+        "entry": base.get("entry"),          # 신호(진입/청산)는 base 그대로 — 스키마 required
+        "exit": base.get("exit", {}),
+        "sizing": sizing,
+    }
+    if base.get("entryRules"):               # 롱·숏 규칙이 있으면 함께
+        preset["entryRules"] = base["entryRules"]
+    if execution:
+        preset["execution"] = execution
+    if filt:
+        preset["filter"] = filt
+    Preset.from_dict(preset, validate=True)  # 스키마 검증(실패 시 예외 → 파일 안 씀)
+    os.makedirs(dest_dir, exist_ok=True)
+    path = os.path.join(dest_dir, _slugify(name) + ".json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(preset, f, ensure_ascii=False, indent=2)
+    return {"ok": True, "path": path, "name": name}
 
 
 def bot_config_info() -> dict:

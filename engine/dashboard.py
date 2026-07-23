@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from . import candle_store
 from . import control
 from . import ledger
-from .preset import bot_config_info, list_strategies, select_strategy
+from .preset import bot_config_info, list_strategies, save_composed_preset, select_strategy
 from . import settings
 
 _HTML = os.path.join(os.path.dirname(__file__), "dashboard.html")
@@ -119,6 +119,11 @@ class Handler(BaseHTTPRequestHandler):
                 ctrl = control.set_service(body["service"], body["state"])
             elif self.path == "/api/strategy":     # {"path": "presets/..."} 봇 전략 선택
                 ctrl = select_strategy(body["path"])
+            elif self.path == "/api/make_preset":  # 프리셋 만들기 — 신호원+실행설정 → 자기완결 프리셋 저장
+                self._send(200, json.dumps(save_composed_preset(
+                    body.get("name"), body.get("base"), body.get("symbol"),
+                    body.get("sizing") or {}, body.get("execution") or {}, body.get("filter") or {})))
+                return
             elif self.path == "/api/heal":         # 캔들 구멍 수동 복구
                 syms = [body["symbol"]] if body.get("symbol") else [s["symbol"] for s in candle_store.list_stats()]
                 self._send(200, json.dumps({"ok": True, "result": {s: candle_store.heal_gaps(s, verbose=False) for s in syms}}))

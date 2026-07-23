@@ -104,8 +104,8 @@
     <span class="sub" style="margin-left:auto" id="updated"></span>
   </header>
   <div id="tab-trading">
-    <div id="control" class="ctrlbar"></div>
-    <div id="botcfg" class="pos"><div class="sub">봇 설정 불러오는 중…</div></div>
+    <div id="presetmaker" class="pos"><div class="sub">프리셋 만들기 불러오는 중…</div></div>
+    <div id="botrun" class="pos"><div class="sub">매매 봇 불러오는 중…</div></div>
     <div id="grStatusBar"></div><!-- 가드레일 '발동 상태'만 여기(모니터). 설정은 /settings -->
     <div id="body"><div class="empty">상태 불러오는 중…</div></div>
   </div>
@@ -135,7 +135,7 @@ async function loadStrategies(){
 // 전략 출처: examples=배포된 것(git) · saved=로컬 GUI · strategies=볼륨에 던져넣은 것(배포 무관)
 const srcIcon = (s) => s === "saved" ? "📁 " : s === "strategies" ? "📤 " : "";
 
-// 컨트롤바에는 '지금 무슨 일이 벌어지는지'만 — 전략 '선택'은 봇 설정 폼에서 저장과 함께 한다.
+// 컨트롤바(매매 봇 섹션 안)에는 '지금 무슨 일이 벌어지는지'만 — 프리셋 '선택'은 #runSel 이 한다.
 function stratStatus(d, selPath){
   const active = selPath || (d && d.strategy) || "";     // 고른 전략(control.json)
   const running = d && d.strategy;                        // 봇이 실제 실행 중인 전략(state.json)
@@ -147,81 +147,17 @@ function stratStatus(d, selPath){
   if (d && d.strategyError) html += `<span class="svc" style="color:var(--down)">⚠ ${d.strategyError}</span>`;
   return html;
 }
-function _stratOptsHTML(q){
-  const query = (q||"").toLowerCase();
-  const active = window._stratActivePath;
-  const matches = STRATS.filter(s => s.name.toLowerCase().includes(query));
-  window._stratMatches = matches; window._stratIdx = -1;
-  if (!matches.length) return `<div class="empty2">일치하는 전략 없음</div>`;
-  return matches.map(s => {
-    const mark = srcIcon(s.source) + (s.path===active?"✓ ":"");
-    return `<div class="opt" data-path="${s.path}" onmousedown="stratPick(event)">${mark}${s.name}</div>`;
-  }).join("");
-}
-function openStratDrop(q){
-  const dd = document.getElementById("stratDD"); if (!dd) return;
-  document.querySelectorAll(".dropdown").forEach(x => { if (x!==dd) x.style.display="none"; });
-  dd.innerHTML = _stratOptsHTML(q);
-  dd.style.display = ""; window._stratOpen = true;
-}
-function closeStratDrop(){
-  const dd = document.getElementById("stratDD"); if (dd) dd.style.display = "none";
-  window._stratOpen = false;
-}
-function blurStrat(){                                 // 포커스 해제 → 닫고, 안 고른 채 나가면 선택값 복원
-  setTimeout(() => {
-    closeStratDrop();
-    const inp = document.getElementById("stratInput");
-    if (inp && document.activeElement !== inp) inp.value = window._stratCurLabel || "";
-  }, 150);
-}
-function stratPick(e){
-  const el = e.target.closest(".opt"); if (!el || !el.dataset.path) return;
-  e.preventDefault();                              // blur보다 먼저 발생 → 선택 반영
-  pickStrat(el.dataset.path);
-}
-function stratKey(e){
-  if (e.key === "Escape"){ closeStratDrop(); return; }
-  const dd = document.getElementById("stratDD");
-  const els = dd ? [...dd.querySelectorAll(".opt")] : [];
-  if (e.key === "Enter"){
-    e.preventDefault();
-    const el = els[window._stratIdx >= 0 ? window._stratIdx : 0];
-    if (el) pickStrat(el.dataset.path);
-    return;
-  }
-  if (!els.length) return;
-  if (e.key === "ArrowDown"){ window._stratIdx = Math.min((window._stratIdx ?? -1)+1, els.length-1); e.preventDefault(); }
-  else if (e.key === "ArrowUp"){ window._stratIdx = Math.max((window._stratIdx ?? 0)-1, 0); e.preventDefault(); }
-  else return;
-  els.forEach((o,i) => o.classList.toggle("active", i===window._stratIdx));
-  els[window._stratIdx].scrollIntoView({ block:"nearest" });
-}
-function pickStrat(path){
-  // 고르는 즉시 반영하지 않는다 — 폼에 담아두고 '저장'을 눌러야 봇에 적용된다.
-  // (전략과 실행설정을 따로 반영하면 그 사이 봇이 새 전략을 옛 설정으로 돌 수 있다.)
-  window._stratOpen = false;
-  const dd = document.getElementById("stratDD"); if (dd) dd.style.display = "none";
-  window._stratPick = path;
-  const st = STRATS.find(s => s.path === path);
-  window._stratCurLabel = st ? (srcIcon(st.source)+st.name) : path;
-  window._stratActivePath = path;
-  const inp = document.getElementById("stratInput");
-  if (inp){ inp.value = window._stratCurLabel; inp.blur(); }
-  const hint = document.getElementById("bc_strat_hint");
-  if (hint) hint.innerHTML = (path !== window._stratSaved)
-      ? `<span style="color:#e0a030">저장해야 적용됨</span>` : "";
-}
 async function renderControl(d){
   let c = {};
   try { c = await (await fetch("/api/control",{cache:"no-store"})).json(); } catch(e){}
   const html = svcBtn("trader","봇", c.trader||"running") + stratStatus(d, c.strategy);      // 상태만(선택은 봇 설정 폼)
   // tick(3초)마다 통째로 다시 그리면 열어둔/타이핑 중인 전략 콤보박스가 리셋된다.
   // → 내용이 그대로거나, 드롭다운이 열려 있거나, 입력창에 포커스면 재렌더 생략.
-  const si = document.getElementById("stratInput");
-  if (html === window._lastControlHTML || window._stratOpen || (si && document.activeElement === si)) return;
+  const ctrlEl = $("control");
+  if (!ctrlEl) return;                                // 컨트롤바는 매매 봇 섹션 안 — 아직 안 그려졌으면 스킵
+  if (html === window._lastControlHTML) return;
   window._lastControlHTML = html;
-  $("control").innerHTML = html;
+  ctrlEl.innerHTML = html;
 }
 async function setSvc(svc, state){
   try { await fetch("/api/control",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:svc,state})}); }
@@ -465,11 +401,8 @@ function drawEquity(initial, trades){
   ctx.beginPath(); ctx.moveTo(4,y(initial)); ctx.lineTo(W-4,y(initial)); ctx.stroke(); ctx.setLineDash([]);
 }
 
-// ── 봇 설정 (프리셋의 timeframe·진입·청산만 쓰고 나머지는 여기서 재설정) ──
-// tick(3초)이 폼을 지우지 않게 별도 #botcfg에 1회 렌더(저장/초기화 때만 다시 그림).
-// 드롭다운은 네이티브 <select>(흰 팝업) 대신 .combo/.dropdown 다크 컴포넌트 재사용.
-const _picks = {};                                  // 커스텀 드롭다운 선택값 (id → value, ""=프리셋 기본)
-// 표시용 한국어 라벨. **저장되는 값은 스키마 값 그대로**(equityPercent 등) — 라벨만 바꾼다.
+// 프리셋 만들기·매매 봇의 <select> 옵션 표시용 한국어 라벨.
+// **저장되는 값은 스키마 값 그대로**(equityPercent·isolated 등) — 라벨만 바꾼다.
 const LABEL = {
   equityPercent: "자본 % (증거금 비율)",
   riskPercent:   "리스크 % (손절까지 잃을 비율)",
@@ -481,161 +414,124 @@ const LABEL = {
   makerLimit:    "지정가 maker · 수수료↓",
 };
 const label = v => LABEL[v] || v;                   // 매핑 없으면(심볼 등) 원값 그대로
-function pickerHTML(id, options, cur, defLabel){
-  _picks[id] = cur || "";
-  const defOpt = `— 프리셋${defLabel!=null&&defLabel!==""?` · ${label(defLabel)}`:""} —`;
-  const rows = [`<div class="opt" data-v="">${defOpt}</div>`].concat(
-    options.map(o => `<div class="opt${o===cur?" active":""}" data-v="${o}">${label(o)}</div>`)).join("");
-  return `<div class="combo" style="max-width:230px"><div class="syminput" id="${id}_disp"`
-    + ` onclick="togglePicker('${id}')" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center">`
-    + `<span>${cur ? label(cur) : defOpt}</span><span class="sub">▾</span></div>`
-    + `<div class="dropdown" id="${id}_dd" style="display:none">${rows}</div></div>`;
-}
-function togglePicker(id){
-  document.querySelectorAll(".dropdown").forEach(d => { if (d.id !== id+"_dd") d.style.display="none"; });
-  window._stratOpen = false;
-  const dd = $(id+"_dd"); if (dd) dd.style.display = dd.style.display==="none" ? "" : "none";
-}
-function _wirePickers(){
-  document.querySelectorAll("#botcfg .dropdown").forEach(dd => {
-    const id = dd.id.replace(/_dd$/,"");
-    dd.querySelectorAll(".opt").forEach(o => o.addEventListener("mousedown", e => {
-      e.preventDefault();                           // blur보다 먼저 → 선택 반영
-      _picks[id] = o.dataset.v;                     // 저장값은 스키마 값 그대로
-      // 표시는 한국어 라벨로(o.textContent 는 이미 라벨). 원값을 쓰면 선택 순간 영어로 되돌아간다.
-      $(id+"_disp").querySelector("span").textContent = o.textContent;
-      dd.style.display = "none";
-    }));
-  });
-}
-document.addEventListener("click", e => {           // 바깥 클릭 시 모든 커스텀 드롭다운 닫기
-  if (!e.target.closest(".combo")) {
-    document.querySelectorAll(".dropdown").forEach(d => d.style.display="none");
-    window._stratOpen = false;
+
+function _num(id){ const el=$(id); const v=(el&&el.value||"").trim(); return v===""?null:Number(v); }
+
+// ── 🧩 프리셋 만들기: 신호(스튜디오 프리셋) + 심볼·리스크·실행 → 자기완결 프리셋으로 저장 ──
+async function renderPresetMaker(){
+  let cache = [];
+  try { cache = ((await (await fetch("/api/cache",{cache:"no-store"})).json()).symbols||[]).map(s=>s.symbol); } catch(e){}
+  if (!STRATS.length){
+    $("presetmaker").innerHTML = `<h3>🧩 프리셋 만들기</h3>`
+      + `<div class="sub">먼저 🔬 백테스트 스튜디오에서 전략(진입/청산)을 만들어 저장하세요 — `
+      + `여기선 그 신호에 심볼·리스크·실행을 얹어 '돌릴 수 있는 프리셋'으로 굳힙니다.</div>`;
+    return;
   }
-});
-
-async function loadBotConfig(){
-  // 네 엔드포인트는 서로 독립이므로 한꺼번에 띄운다(순차 await 하면 폼이 그만큼 늦게 뜬다).
-  const j = r => r.json();
-  const [rCfg, rCache, rCtrl, rState] = await Promise.allSettled([
-    fetch("/api/bot-config",{cache:"no-store"}).then(j),
-    fetch("/api/cache",{cache:"no-store"}).then(j),
-    fetch("/api/control",{cache:"no-store"}).then(j),
-    fetch("/api/state",{cache:"no-store"}).then(j),
-  ]);
-  if (rCfg.status !== "fulfilled"){ $("botcfg").innerHTML = `<div class="err">봇 설정 로드 실패: ${rCfg.reason}</div>`; return; }
-  const d = rCfg.value;
-  const cache = rCache.status==="fulfilled" ? ((rCache.value.symbols||[]).map(s=>s.symbol)) : [];
-  // 현재(저장된) 전략을 폼 초기값으로. _stratSaved = 저장된 값, _stratPick = 폼에서 고른 값.
-  // ★ control.json 에 strategy 가 없을 수 있다 — 대시보드에서 한 번도 안 골랐고 .env 의 PRESET 으로
-  //   뜬 경우다(기본 상태). 그때는 봇이 '실제로 돌리고 있는' 전략(state.json)을 폼에 채운다.
-  //   안 그러면 봇은 멀쩡히 돌고 있는데 전략 칸만 비어 보인다.
-  const ctrlStrat = rCtrl.status==="fulfilled" ? (rCtrl.value.strategy||"") : "";
-  const running   = rState.status==="fulfilled" ? (rState.value.strategy||"") : "";
-  window._stratSaved = ctrlStrat || running || "";
-  window._stratPick = window._stratSaved;
-  window._stratActivePath = window._stratSaved;
-  const cs = STRATS.find(x => x.path === window._stratSaved);
-  window._stratCurLabel = cs ? (srcIcon(cs.source)+cs.name) : "";
-  const c = d.config || {}, def = d.presetDefaults || {};
-  const szc = c.sizing || {}, szd = def.sizing || {}, fc = c.filter || {}, fd = def.filter || {};
-  const sizeC = szc.size || {}, sizeD = szd.size || {};
-  const ph = v => v==null ? "" : v;
-  const dyn = c.useDynamicLeverage === true;
-  const symOpts = cache.slice();                    // 심볼 = 수집된(캐시) 심볼만
-  if (c.symbol && !symOpts.includes(c.symbol)) symOpts.unshift(c.symbol);
-  $("botcfg").innerHTML =
-      `<h3>⚙️ 봇 설정 <span class="sub">전략(신호) + 실행 설정을 함께 저장 · 무포지션일 때 반영</span></h3>`
-    + `<div class="field"><label>전략</label>`
-    +   `<span class="combo" style="max-width:320px">`
-    +   `<input id="stratInput" class="syminput" autocomplete="off" placeholder="전략 검색"`
-    +   ` title="${window._stratCurLabel||""}"`
-    +   ` value="${window._stratCurLabel||""}"`
-    +   ` onfocus="this.select();openStratDrop('')" oninput="openStratDrop(this.value)" onkeydown="stratKey(event)"`
-    +   ` onblur="blurStrat()">`
-    +   `<span class="dropdown" id="stratDD" style="display:none"></span></span>`
-    +   `<span class="sub" id="bc_strat_hint"></span></div>`
-    + `<div class="sub" style="margin:-4px 0 8px 88px">프리셋에선 <b>timeframe·진입·청산</b>만 쓴다. 아래 항목이 심볼·리스크를 덮어쓴다(빈값=프리셋 값).</div>`
-    + `<div class="field"><label>심볼</label>${pickerHTML("bc_sym", symOpts, c.symbol||"", def.symbol)}`
+  const baseOpts = STRATS.map(s => `<option value="${s.path}">${srcIcon(s.source)}${s.name} · ${s.symbol} ${s.timeframe}</option>`).join("");
+  const symField = cache.length
+    ? `<select id="pm_sym">${cache.map(s=>`<option value="${s}">${s}</option>`).join("")}</select>`
+    : `<input id="pm_sym" placeholder="BTCUSDT" style="max-width:150px">`;
+  const selOpts = (id,arr,oc) => `<select id="${id}"${oc?` onchange="${oc}"`:""}>${arr.map(t=>`<option value="${t}">${label(t)}</option>`).join("")}</select>`;
+  $("presetmaker").innerHTML =
+      `<h3>🧩 프리셋 만들기 <span class="sub">신호(스튜디오) + 심볼·리스크·실행 → 자기완결 프리셋으로 저장</span></h3>`
+    + `<div class="field"><label>이름</label><input id="pm_name" placeholder="예: 내 스캘핑 v2" style="max-width:260px"></div>`
+    + `<div class="field"><label>전략 신호</label><select id="pm_base" onchange="prefillFromBase()" style="max-width:340px">${baseOpts}</select>`
+    +   `<span class="sub">진입/청산 로직은 🔬 스튜디오에서 만든 프리셋을 고릅니다</span></div>`
+    + `<div class="field"><label>심볼</label>${symField}`
     +   (cache.length ? "" : `<span class="sub">수집된 심볼 없음 — /collector에서 먼저 수집</span>`) + `</div>`
-    + `<div class="field"><label>레버리지</label><label style="display:flex;align-items:center;gap:6px;cursor:pointer">`
-    +   `<input type="checkbox" id="bc_dyn" ${dyn?"checked":""} onchange="toggleDynLev()"> 동적 레버리지 사용(잔고별 티어)</label></div>`
-    + `<div class="field" id="bc_levfixed" style="display:${dyn?"none":""}"><label></label>`
-    +   `<input id="bc_lev" type="number" min="1" placeholder="${ph(szd.leverage)}" value="${ph(szc.leverage)}"><span class="sub">고정 레버리지</span></div>`
-    + `<div id="bc_tiers" style="display:${dyn?"":"none"};margin:2px 0 8px"></div>`
-    + `<div class="field"><label>증거금 방식</label>${pickerHTML("bc_margin",["isolated","cross"],szc.marginMode||"",szd.marginMode)}</div>`
-    + `<div class="field"><label>주문 크기</label>${pickerHTML("bc_sizetype",["equityPercent","riskPercent","fixedQuote","fixedBase"],sizeC.type||"",sizeD.type)}`
-    +   `<input id="bc_sizeval" type="number" step="any" style="max-width:110px" placeholder="${ph(sizeD.value)}" value="${ph(sizeC.value)}"></div>`
-    + `<div class="field"><label>진입 체결</label>${pickerHTML("bc_exec",["taker","makerLimit"],(c.execution||{}).entryType||"",(def.execution||{}).entryType)}</div>`
-    + `<div class="field"><label>쿨다운(봉)</label><input id="bc_cd" type="number" min="0" placeholder="${ph(fd.cooldownBars)}" value="${ph(fc.cooldownBars)}"></div>`
-    + `<div class="field"><label>펀딩회피(분)</label><input id="bc_fund" type="number" min="0" placeholder="${ph(fd.avoidFundingWindowMinutes)}" value="${ph(fc.avoidFundingWindowMinutes)}"></div>`
+    + `<div class="field"><label>레버리지</label><input id="pm_lev" type="number" min="1" style="max-width:110px">`
+    +   `<span class="sub">배 · 잔고별 동적 티어는 <a href="/settings" class="sub">설정</a>에서</span></div>`
+    + `<div class="field"><label>증거금 방식</label>${selOpts("pm_margin",["isolated","cross"])}</div>`
+    + `<div class="field"><label>주문 크기</label>${selOpts("pm_sizetype",["equityPercent","riskPercent","fixedQuote","fixedBase"])}`
+    +   `<input id="pm_sizeval" type="number" step="any" style="max-width:110px"></div>`
+    + `<div class="field"><label>진입 체결</label>${selOpts("pm_exec",["taker","makerLimit"])}</div>`
+    + `<div class="field"><label>쿨다운(봉)</label><input id="pm_cd" type="number" min="0" style="max-width:110px"></div>`
+    + `<div class="field"><label>펀딩회피(분)</label><input id="pm_fund" type="number" min="0" style="max-width:110px"></div>`
     + `<div style="margin-top:10px;display:flex;gap:8px;align-items:center">`
-    +   `<button class="btn-go" onclick="saveBotConfig()">저장</button>`
-    +   `<button onclick="resetBotConfig()" style="padding:7px 12px;border-radius:7px;border:1px solid var(--line);background:var(--panel2);color:var(--fg);cursor:pointer">프리셋 기본값 사용(초기화)</button>`
-    +   `<span class="sub" id="bc_msg"></span></div>`
-    + `<div class="sub" style="margin-top:8px">무포지션일 때 다음 폴링에 반영(포지션 있으면 청산 후). 설정 안 한 항목은 프리셋 값 사용.</div>`;
-  _wirePickers();
-  renderTiers();
-}
-// 티어 값은 /settings 에서 관리한다. 여기선 그리로 가는 링크만 — 같은 값을 두 화면에 뿌리면
-// 한쪽이 낡았을 때 어느 게 맞는지 알 수 없다(설정에서 바꿔도 이 화면은 새로고침 전까지 옛 값).
-function renderTiers(){
-  const box = document.getElementById("bc_tiers"); if (!box) return;
-  box.innerHTML = `<div class="field"><a href="/settings" class="sub">잔고별 레버리지 티어 설정 →</a></div>`;
+    +   `<button class="btn-go" onclick="makePreset()">💾 프리셋 저장</button>`
+    +   `<span class="sub" id="pm_msg"></span></div>`;
+  prefillFromBase();
 }
 
-function toggleDynLev(){
-  const dyn = document.getElementById("bc_dyn").checked;
-  document.getElementById("bc_levfixed").style.display = dyn ? "none" : "";
-  document.getElementById("bc_tiers").style.display = dyn ? "" : "none";
+function prefillFromBase(){
+  const sel = $("pm_base"); if (!sel) return;
+  const b = STRATS.find(s => s.path === sel.value); if (!b) return;
+  const sz = b.sizing||{}, size = sz.size||{}, ex = b.execution||{}, fl = b.filter||{};
+  const symEl = $("pm_sym");
+  if (symEl){
+    if (symEl.tagName === "SELECT"){ if ([...symEl.options].some(o=>o.value===b.symbol)) symEl.value = b.symbol; }
+    else symEl.value = b.symbol || "";
+  }
+  const set = (id,v) => { const el=$(id); if (el) el.value = v==null ? "" : v; };
+  set("pm_lev", sz.leverage);
+  if ($("pm_margin")) $("pm_margin").value = sz.marginMode || "isolated";
+  if ($("pm_sizetype")) $("pm_sizetype").value = size.type || "equityPercent";
+  set("pm_sizeval", size.value);
+  if ($("pm_exec")) $("pm_exec").value = ex.entryType || "taker";
+  set("pm_cd", fl.cooldownBars);
+  set("pm_fund", fl.avoidFundingWindowMinutes);
 }
-function _num(id){ const v = ($(id).value||"").trim(); return v==="" ? null : Number(v); }
-async function saveBotConfig(){
-  const cfg = {};
-  const sym = (_picks.bc_sym||"").toUpperCase().replace(/[^A-Z0-9]/g,""); if (sym) cfg.symbol = sym;
-  const sizing = {};
-  const dyn = $("bc_dyn") && $("bc_dyn").checked;
-  cfg.useDynamicLeverage = !!dyn;                   // 동적 on/off는 항상 명시
-  if (!dyn){ const lev = _num("bc_lev"); if (lev!=null) sizing.leverage = lev; }
-  const mm = _picks.bc_margin; if (mm) sizing.marginMode = mm;
-  const st = _picks.bc_sizetype, sv = _num("bc_sizeval");
-  if (st && sv!=null) sizing.size = { type: st, value: sv };
-  if (Object.keys(sizing).length) cfg.sizing = sizing;
-  const et = _picks.bc_exec; if (et) cfg.execution = { entryType: et };
+
+async function makePreset(){
+  const name = ($("pm_name").value||"").trim();
+  if (!name){ $("pm_msg").innerHTML = `<span class="fresh-r">이름을 입력하세요</span>`; return; }
+  const symEl = $("pm_sym");
+  const symbol = ((symEl&&symEl.value)||"").toUpperCase().replace(/[^A-Z0-9]/g,"");
+  const sizing = { marginMode: $("pm_margin").value };
+  const lev = _num("pm_lev"); if (lev!=null) sizing.leverage = lev;
+  const sv = _num("pm_sizeval"); if (sv!=null) sizing.size = { type: $("pm_sizetype").value, value: sv };
+  const execution = { entryType: $("pm_exec").value };
   const filter = {};
-  const cd = _num("bc_cd"); if (cd!=null) filter.cooldownBars = cd;
-  const fw = _num("bc_fund"); if (fw!=null) filter.avoidFundingWindowMinutes = fw;
-  if (Object.keys(filter).length) cfg.filter = filter;
-  $("bc_msg").textContent = "저장 중…";
+  const cd = _num("pm_cd"); if (cd!=null) filter.cooldownBars = cd;
+  const fw = _num("pm_fund"); if (fw!=null) filter.avoidFundingWindowMinutes = fw;
+  $("pm_msg").textContent = "저장 중…";
   try {
-    // 전략을 먼저 — 서버가 경로·스키마를 검증하므로, 실패하면 실행설정도 건드리지 않는다.
-    if (window._stratPick && window._stratPick !== window._stratSaved){
-      const rs = await (await fetch("/api/strategy",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path: window._stratPick})})).json();
-      if (rs.error) throw new Error("전략 선택 실패: " + rs.error);
-      window._stratSaved = window._stratPick;
-    }
-    // 티어 자체는 여기서 저장하지 않는다 — /settings 에서 편집한다.
-    // (여기서도 쓰면 이 화면이 들고 있던 낡은 값으로 방금 설정에서 바꾼 티어를 되돌려버린다.)
-    const r = await (await fetch("/api/bot-config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({config:cfg})})).json();
+    const r = await (await fetch("/api/make_preset",{method:"POST",headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({name, base: $("pm_base").value, symbol, sizing, execution, filter})})).json();
     if (r.error) throw new Error(r.error);
-    loadBotConfig();                                // 새 전략의 프리셋 기본값으로 폼 갱신
-    $("bc_msg").innerHTML = `<span class="fresh-g">✓ 저장됨 (${Object.keys(cfg).length?'오버라이드 '+Object.keys(cfg).join('/'):'비움 → 프리셋 그대로'})</span>`;
-  } catch(e){ $("bc_msg").innerHTML = `<span class="fresh-r">저장 실패: ${e.message}</span>`; }
+    await loadStrategies();                          // 새 프리셋이 목록에 뜨게
+    renderBotRun();                                  // '매매 봇' 드롭다운 갱신
+    $("pm_msg").innerHTML = `<span class="fresh-g">✓ 저장됨 — 아래 '매매 봇'에서 골라 돌리세요</span>`;
+  } catch(e){ $("pm_msg").innerHTML = `<span class="fresh-r">저장 실패: ${e.message}</span>`; }
 }
-async function resetBotConfig(){
-  if (!confirm("봇 설정을 비우고 프리셋 값을 그대로 쓰게 합니다. 진행할까요?")) return;
-  try { await fetch("/api/bot-config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({config:{}})}); }
-  catch(e){ alert("초기화 실패: "+e); }
-  loadBotConfig();
+
+// ── 🤖 매매 봇: 저장된 프리셋 하나를 골라 돌린다(선택 즉시 반영, 무포지션 시 전환) ──
+async function renderBotRun(){
+  let ctrl = {};
+  try { ctrl = await (await fetch("/api/control",{cache:"no-store"})).json(); } catch(e){}
+  window._runSaved = ctrl.strategy || "";
+  const opts = STRATS.length
+    ? STRATS.map(s => `<option value="${s.path}"${s.path===window._runSaved?" selected":""}>${srcIcon(s.source)}${s.name} · ${s.symbol} ${s.timeframe}</option>`).join("")
+    : `<option value="">— 저장된 프리셋 없음 —</option>`;
+  $("botrun").innerHTML =
+      `<h3>🤖 매매 봇 <span class="sub">위에서 만든 프리셋을 골라 돌린다</span></h3>`
+    + `<div class="field"><label>돌릴 프리셋</label>`
+    +   `<select id="runSel" onchange="selectRun()" style="max-width:340px"${STRATS.length?"":" disabled"}>${opts}</select>`
+    +   `<span class="sub" id="run_msg"></span></div>`
+    + `<div id="control" class="ctrlbar" style="margin-top:6px"></div>`;
+  window._lastControlHTML = null;                    // 컨트롤바 다시 그리도록
+  if (window._lastState) renderControl(window._lastState);
+}
+
+async function selectRun(){
+  const path = $("runSel").value; if (!path) return;
+  $("run_msg").textContent = "적용 중…";
+  try {
+    const r = await (await fetch("/api/strategy",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path})})).json();
+    if (r.error) throw new Error(r.error);
+    // 자기완결 프리셋이므로 옛 오버라이드가 남아 프리셋을 덮지 않게 비운다.
+    await fetch("/api/bot-config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({config:{}})}).catch(()=>{});
+    window._runSaved = path;
+    $("run_msg").innerHTML = `<span class="fresh-g">✓ 선택됨 — 무포지션이면 다음 폴링에 전환</span>`;
+  } catch(e){ $("run_msg").innerHTML = `<span class="fresh-r">선택 실패: ${e.message}</span>`; }
 }
 
 // 가드레일·레버리지 티어 '설정'은 /settings 페이지로 옮겼다(계좌 전역 설정이라 성격이 다름).
 // 여기 남는 건 '지금 발동 중인가'라는 모니터링 뿐 — tick()의 grStatus 표시.
 
-// 봇 설정 폼이 전략 '이름'을 STRATS 에서 찾으므로 목록 로드 뒤에 렌더해야 한다
-// (병렬로 띄우면 목록이 늦게 오는 날엔 전략 칸이 빈 채로 그려진다).
-loadStrategies().then(() => { tick(); loadBotConfig(); });
+// 두 섹션 모두 전략 목록(STRATS)에서 이름을 찾으므로 목록 로드 뒤에 렌더한다.
+// 매매 봇(#control 포함)을 먼저 그린 뒤 tick — 안 그러면 tick의 renderControl이 #control을 못 찾는다.
+loadStrategies().then(async () => { renderPresetMaker(); await renderBotRun(); tick(); });
 setInterval(tick, 3000);                                // 상태만 3초마다 갱신(폼은 재렌더 안 함)
 </script>
 <script>
