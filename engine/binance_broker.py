@@ -60,12 +60,21 @@ class BinanceBroker:
                 import ccxt
             except ImportError:
                 raise RuntimeError("ccxt 미설치 — pip install ccxt (실거래 전용).")
-            self._ex = ccxt.binanceusdm({
-                "apiKey": self.api_key, "secret": self.api_secret,
-                "enableRateLimit": True,
+            opts = {
                 # fetchCurrencies=False: load_markets() 가 기본으로 스팟 SAPI(입출금 메타)를 부른다.
                 # 선물 전용 키엔 그 권한이 없어 -2015 로 죽는다. 선물 매매엔 불필요한 정보.
-                "options": {"defaultType": "future", "fetchCurrencies": False}})
+                "defaultType": "future", "fetchCurrencies": False,
+            }
+            if self.testnet:
+                # ccxt 4.5 부터 testnet.binancefuture.com 의 **private** 엔드포인트를 부르면
+                # NotSupported 를 던진다(바이낸스가 옛 선물 테스트넷을 Demo Trading 으로 밀면서
+                # 붙인 경고). 잔고 조회부터 막혀 테스트넷 검증 자체가 불가능해진다.
+                # 엔드포인트는 여전히 동작하므로 그 가드만 끈다 — 끄지 않으면 실주문 경로를
+                # 실돈 말고는 시험해 볼 방법이 없어진다.
+                opts["disableFuturesSandboxWarning"] = True
+            self._ex = ccxt.binanceusdm({
+                "apiKey": self.api_key, "secret": self.api_secret,
+                "enableRateLimit": True, "options": opts})
             if self.testnet:
                 self._ex.set_sandbox_mode(True)
         return self._ex

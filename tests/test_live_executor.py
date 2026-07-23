@@ -307,6 +307,28 @@ def test_ledger_buckets_never_merge():
     assert LiveTrader._ledger_mode(s) == "live"
 
 
+def test_testnet_client_turns_off_ccxt_sandbox_guard():
+    """ccxt 4.5+ 는 테스트넷의 private 엔드포인트 호출을 NotSupported 로 막아버린다.
+
+    바이낸스가 옛 선물 테스트넷을 Demo Trading 으로 밀면서 ccxt 가 붙인 경고인데,
+    엔드포인트는 멀쩡히 산다. 이 가드를 끄지 않으면 잔고 조회부터 실패해서
+    **실주문 경로를 실돈 말고는 시험할 방법이 없어진다.** 그래서 테스트넷일 때만 끈다.
+    """
+    from engine.binance_broker import BinanceBroker
+    try:
+        t = BinanceBroker("k", "s", testnet=True, symbol="BTCUSDT").client()
+        m = BinanceBroker("k", "s", testnet=False, symbol="BTCUSDT").client()
+    except RuntimeError as e:
+        if "ccxt" in str(e):
+            print("   (ccxt 미설치 — 스킵)")
+            return
+        raise
+    assert t.options.get("disableFuturesSandboxWarning") is True
+    assert "testnet" in t.urls["api"]["fapiPrivate"]
+    assert not m.options.get("disableFuturesSandboxWarning")   # 메인넷엔 불필요
+    assert "testnet" not in m.urls["api"]["fapiPrivate"]
+
+
 if __name__ == "__main__":
     import traceback
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
