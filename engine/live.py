@@ -94,7 +94,9 @@ class LiveTrader:
         self._rebuild_effective()            # 신호(프리셋) + 봇설정(심볼·사이징·실행·필터) 병합
         self._last_ot = None                 # 마지막으로 처리한 1분봉 open_time
         self._started_at = int(time.time() * 1000)
-        self._paused = False                 # control.json에서 읽음(멈춤=새 진입 차단)
+        # 멈춤/재개는 control.json 이 진실. 시작 시점의 값을 그대로 읽어둔다 —
+        # False 로 시작하면 첫 폴링에서 '멈춤으로 바뀜'을 오탐해 기동 때마다 알림이 한 번 더 간다.
+        self._paused = control.service_state("trader") == "paused"
         self._events = []                    # 이번 폴링에서 발생한 이벤트(hook이 채움)
         self._guardrail_reason = None        # 리스크 가드레일 발동 사유(없으면 None)
         self._restore_from_ledger()          # 원장에서 잔고·이력 복원(재시작해도 안 사라짐)
@@ -381,7 +383,7 @@ class LiveTrader:
             self._maybe_switch_network(base)
         if len(base) < 2:
             return []
-        self._paused = control.service_state("trader") == "paused"   # 멈춤이면 새 진입 차단
+        self._sync_paused()              # 멈춤이면 새 진입 차단 + 바뀐 순간엔 알림
         signal = resample(base, self.tf_min)
         bar_of, is_close = signal_close_index(base, self.tf_min)
         atr_series = ind.atr(signal.high, signal.low, signal.close, 14)
@@ -401,6 +403,23 @@ class LiveTrader:
     # ---- per-bar 처리 ----
     # 판정 로직은 backtest.Stepper 한 곳에만 있다(백테스트와 문자 그대로 같은 코드).
     # 여기 남는 건 '결과를 어떻게 기록할지' 뿐 — 이벤트 발행·원장 append·진입 게이트.
+
+    def _sync_paused(self) -> bool:
+        """대시보드의 멈춤/재개를 반영. **바뀐 순간에만** 알린다(폴링마다 보내면 스팸).
+
+        가드레일 알림과 같은 방식. '언제 매매를 켜고 껐는지'가 남아야 나중에 로그를 볼 때
+        '이 구간은 왜 진입이 없지?' 를 추적할 수 있다.
+        """
+        paused = control.service_state("trader") == "paused"
+        if paused != self._paused:
+            self._paused = paused
+            if paused:
+                notify("⏸ 매매 멈춤 — 새 진입 차단 (보유 포지션 관리·청산은 계속)")
+                print("  [제어] 멈춤 → 새 진입 차단", flush=True)
+            else:
+                notify(f"▶️ 매매 재개 — 새 진입 시작 ({self.preset.symbol} {self.preset.timeframe})")
+                print("  [제어] 재개 → 새 진입 시작", flush=True)
+        return paused
 
     def _entry_gate(self) -> bool:
         """새 진입 허용 여부. 멈춤·리스크 가드레일은 진입만 막고 기존 포지션 관리는 계속."""

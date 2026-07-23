@@ -380,6 +380,34 @@ def test_notify_failure_is_logged_not_swallowed(capsys=None):
     assert "알림 실패" in buf.getvalue()
 
 
+def test_pause_resume_notifies_only_on_change():
+    """멈춤/재개는 '바뀐 순간'에만 알려야 한다 — 폴링(1분)마다 보내면 알림이 쓸모없어진다."""
+    import engine.live as live
+
+    class Stub:
+        _paused = True                      # 안전 시작 = 멈춤 상태로 떠 있음
+        preset = type("P", (), {"symbol": "BTCUSDC", "timeframe": "15m"})()
+
+    sent, state = [], {"v": "paused"}
+    orig_notify, orig_svc = live.notify, live.control.service_state
+    live.notify = lambda m: sent.append(m)
+    live.control.service_state = lambda *a, **k: state["v"]
+    try:
+        s = Stub()
+        live.LiveTrader._sync_paused(s)                 # 변화 없음
+        assert sent == [], "안 바뀌었는데 알림이 갔다"
+        state["v"] = "running"
+        live.LiveTrader._sync_paused(s)                 # 재개
+        live.LiveTrader._sync_paused(s)                 # 그대로 → 조용해야
+        assert len(sent) == 1 and "재개" in sent[0], sent
+        assert s._paused is False
+        state["v"] = "paused"
+        live.LiveTrader._sync_paused(s)                 # 다시 멈춤
+        assert len(sent) == 2 and "멈춤" in sent[1], sent
+    finally:
+        live.notify, live.control.service_state = orig_notify, orig_svc
+
+
 if __name__ == "__main__":
     import traceback
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
