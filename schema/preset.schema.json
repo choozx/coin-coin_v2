@@ -106,9 +106,13 @@
     "execution": {
       "type": "object",
       "additionalProperties": false,
-      "description": "진입 체결 방식. taker=시장가, makerLimit=지정가. 백테스트에선 둘 다 신호봉 종가에 체결되고 수수료만 다름(maker=지정가). 미체결/슬리피지 모델 없음.",
+      "description": "진입 체결 방식. taker=시장가, makerLimit=지정가. makerTimeoutSeconds 를 주면 passive-then-aggressive(지정가로 걸어두다 미체결이면 시장가 추격), 없으면 신호봉 종가에 즉시 maker 체결(낙관적 근사).",
       "properties": {
-        "entryType": { "type": "string", "enum": ["taker", "makerLimit"], "default": "taker" }
+        "entryType": { "type": "string", "enum": ["taker", "makerLimit"], "default": "taker" },
+        "makerTimeoutSeconds": {
+          "type": "number", "minimum": 0,
+          "description": "makerLimit 진입 시 post-only 지정가를 이만큼 걸어두고(passive), 그 안에 가격이 지정가를 터치하면 maker 체결·아니면 시장가로 추격(aggressive). 백테스트는 1분봉 해상도라 max(1, round(초/60)) 봉으로 반올림. 0/미설정이면 옛 동작(신호봉 종가 즉시 maker)."
+        }
       }
     },
 

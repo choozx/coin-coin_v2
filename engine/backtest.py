@@ -204,9 +204,13 @@ class Stepper:
         self.entry_rules = preset.data.get("entryRules")     # 방향별 진입 규칙(있으면 우선)
         self.entry_side = -1 if preset.direction == "short" else 1
         execution = preset.data.get("execution") or {}
-        # 체결 방식: taker(시장가) vs makerLimit. 백테스트에선 지정가도 신호봉 종가에 그냥
-        # 체결됐다고 가정 — 수수료만 maker로 다르게 적용(미체결/슬리피지 모델 없음).
         self.maker_entry = execution.get("entryType") == "makerLimit"
+        # passive-then-aggressive: makerTimeoutSeconds 를 주면 post-only 지정가를 N봉 걸어두고,
+        # 그 안에 가격이 지정가를 터치하면 maker 체결·아니면 마지막 봉에서 taker 추격.
+        # 1분봉 해상도라 초→봉으로 반올림(최소 1봉). 미설정(0)이면 옛 동작(신호봉 종가 즉시 maker).
+        sec = execution.get("makerTimeoutSeconds") or 0
+        self.maker_timeout_bars = max(1, round(sec / 60)) if (self.maker_entry and sec) else 0
+        self.pending = None                    # 대기 중인 지정가 진입(전략 전환/재설정 시 취소)
 
     def _close(self, price, reason, ts, sb, is_maker=False):
         trade = self.ex.close(price, reason, ts, is_maker=is_maker)
@@ -220,6 +224,8 @@ class Stepper:
         ot = int(base.open_time[t]); hi, lo, cl = base.high[t], base.low[t], base.close[t]
         sb = int(bar_of[t])                   # 이 1분봉이 속한 신호봉
         self.manage_position(ot, hi, lo, cl, sb)
+        if self.pending is not None:          # 지정가 진입 대기 중이면 이 봉에서 체결/추격 판정
+            self._resolve_pending(signal, atr_series, hi, lo, cl, ot, sb)
         if is_close[t]:
             self.signal_step(signal, atr_series, resolver, ot, sb)
 
@@ -290,7 +296,7 @@ class Stepper:
                 self._close(sig_close, "time", fill_time, sb)
 
         # 진입 신호. 펀딩 임박·거래시간 필터는 '체결 순간' 기준이어야 하므로 fill_time 으로 판정.
-        if ex.position is not None:
+        if ex.position is not None or self.pending is not None:   # 지정가 대기 중이면 새 진입 안 냄
             return
         if self.entry_gate is not None and not self.entry_gate():
             return
@@ -306,10 +312,43 @@ class Stepper:
             side = self.entry_side
         if side is None:
             return
+        # passive-then-aggressive: 지정가(신호봉 종가)를 걸어두고 다음 봉들에서 체결/추격.
+        if self.maker_timeout_bars > 0:
+            self.pending = {"side": side, "limit": sig_close, "bars_left": self.maker_timeout_bars}
+            return
         equity = ex.equity()
         lev = _leverage_for(preset.sizing, equity, cfg.max_leverage)   # 현재 자산 기준 레버리지
         p = _open_position(preset, preset.sizing, ex_block, sig_close, fill_time, sb,
                            side, lev, equity, cfg, atr_series, signal, entry_maker=self.maker_entry)
+        if p is not None:
+            ex.open(p)
+            if self.on_open:
+                self.on_open(p, lev)
+
+    def _resolve_pending(self, signal, atr_series, hi, lo, cl, ot, sb):
+        """대기 중 지정가 진입을 이 1분봉에서 판정 — 터치하면 maker 체결, 시간초과면 taker 추격."""
+        pend = self.pending
+        side, L = pend["side"], pend["limit"]
+        touched = (lo <= L) if side == 1 else (hi >= L)   # 롱=지정가까지 내려오면, 숏=올라오면 체결
+        if touched:
+            self._fill_pending(L, ot, sb, side, signal, atr_series, is_maker=True)
+            return
+        pend["bars_left"] -= 1
+        if pend["bars_left"] <= 0:                          # 시간초과 → 시장가로 추격(가격이 신호 방향으로 도망)
+            self._fill_pending(cl, ot, sb, side, signal, atr_series, is_maker=False)
+
+    def _fill_pending(self, price, ot, sb, side, signal, atr_series, is_maker):
+        """대기 지정가 체결 확정 → 실제 포지션 진입(체결가·maker여부는 판정에서 결정됨)."""
+        self.pending = None
+        ex, cfg, preset = self.ex, self.cfg, self.preset
+        if ex.position is not None:
+            return
+        if self.entry_gate is not None and not self.entry_gate():   # 체결 순간 게이트 닫힘 → 주문 취소
+            return
+        equity = ex.equity()
+        lev = _leverage_for(preset.sizing, equity, cfg.max_leverage)
+        p = _open_position(preset, preset.sizing, preset.exit, price, ot, sb,
+                           side, lev, equity, cfg, atr_series, signal, entry_maker=is_maker)
         if p is not None:
             ex.open(p)
             if self.on_open:

@@ -452,7 +452,10 @@ async function renderPresetMaker(){
     + `<div class="field"><label>증거금 방식</label>${selOpts("pm_margin",["isolated","cross"])}</div>`
     + `<div class="field"><label>주문 크기</label>${selOpts("pm_sizetype",["equityPercent","riskPercent","fixedQuote","fixedBase"])}`
     +   `<input id="pm_sizeval" type="number" step="any" style="max-width:110px"></div>`
-    + `<div class="field"><label>진입 체결</label>${selOpts("pm_exec",["taker","makerLimit"])}</div>`
+    + `<div class="field"><label>진입 체결</label>${selOpts("pm_exec",["taker","makerLimit"],"togglePmTimeout()")}`
+    +   `<span id="pm_to_wrap" style="display:none;align-items:center;gap:8px">`
+    +   `<input id="pm_timeout" type="number" min="0" step="1" style="max-width:90px" placeholder="예: 3">`
+    +   `<span class="sub">초 미체결 시 시장가 추격(passive-then-aggressive) · 비우면 즉시 maker</span></span></div>`
     + `<div class="field"><label>쿨다운(봉)</label><input id="pm_cd" type="number" min="0" style="max-width:110px"></div>`
     + `<div class="field"><label>펀딩회피(분)</label><input id="pm_fund" type="number" min="0" style="max-width:110px"></div>`
     + `<div style="margin-top:10px;display:flex;gap:8px;align-items:center">`
@@ -476,8 +479,15 @@ function prefillFromBase(){
   if ($("pm_sizetype")) $("pm_sizetype").value = size.type || "equityPercent";
   set("pm_sizeval", size.value);
   if ($("pm_exec")) $("pm_exec").value = ex.entryType || "taker";
+  set("pm_timeout", ex.makerTimeoutSeconds);
   set("pm_cd", fl.cooldownBars);
   set("pm_fund", fl.avoidFundingWindowMinutes);
+  togglePmTimeout();
+}
+
+function togglePmTimeout(){                          // 폴백(초)은 makerLimit 일 때만 노출
+  const wrap = $("pm_to_wrap"); if (!wrap) return;
+  wrap.style.display = ($("pm_exec") && $("pm_exec").value === "makerLimit") ? "inline-flex" : "none";
 }
 
 async function makePreset(){
@@ -489,6 +499,9 @@ async function makePreset(){
   const lev = _num("pm_lev"); if (lev!=null) sizing.leverage = lev;
   const sv = _num("pm_sizeval"); if (sv!=null) sizing.size = { type: $("pm_sizetype").value, value: sv };
   const execution = { entryType: $("pm_exec").value };
+  if (execution.entryType === "makerLimit"){
+    const to = _num("pm_timeout"); if (to != null) execution.makerTimeoutSeconds = to;
+  }
   const filter = {};
   const cd = _num("pm_cd"); if (cd!=null) filter.cooldownBars = cd;
   const fw = _num("pm_fund"); if (fw!=null) filter.avoidFundingWindowMinutes = fw;

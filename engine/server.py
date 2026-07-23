@@ -180,8 +180,12 @@ def _build_preset(p: dict) -> dict:
         "exit": exit_block,
         "sizing": sizing,
     }
-    if p.get("entryType") == "makerLimit":       # 지정가 maker 진입 (종가 체결, 수수료만 maker)
-        preset["execution"] = {"entryType": "makerLimit"}
+    if p.get("entryType") == "makerLimit":       # 지정가 maker 진입
+        execution = {"entryType": "makerLimit"}
+        to = p.get("makerTimeoutSeconds")
+        if to not in (None, ""):                 # passive-then-aggressive (미체결 시 taker 추격)
+            execution["makerTimeoutSeconds"] = float(to)
+        preset["execution"] = execution
     if filt:
         preset["filter"] = filt
     return preset

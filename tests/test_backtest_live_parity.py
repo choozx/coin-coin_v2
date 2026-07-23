@@ -152,6 +152,30 @@ def test_backtest_and_live_agree_on_pnl():
                 f"{i}번째 거래 {field} 불일치: 백테스트 {getattr(b, field)} vs 라이브 {getattr(l, field)}")
 
 
+def test_maker_timeout_parity():
+    """passive-then-aggressive(makerLimit + makerTimeoutSeconds)도 백테스트↔라이브 일치.
+
+    이 경로는 Stepper에 '대기 지정가' 상태를 둔다 — 백테스트와 라이브가 그 상태를
+    같은 순서로 풀어야 체결(maker/taker)·시각이 일치한다."""
+    assert _isolated()
+    base = synthetic.generate(n_minutes=60 * 24 * 15, seed=5)
+    cfg = _cfg()
+    over = {"execution": {"entryType": "makerLimit", "makerTimeoutSeconds": 120}}
+
+    bt = run(base, _preset(**over), cfg)
+    live_trades, live_pos = _live_trades(base, _preset(**over), cfg)
+
+    assert bt.num_trades > 5, f"대조가 의미 있으려면 거래가 있어야 함 (실제 {bt.num_trades}건)"
+    bt_trades = list(bt.trades)
+    if live_pos is not None:
+        bt_trades.pop()
+    assert len(bt_trades) == len(live_trades), (
+        f"maker-timeout 거래 수 불일치: 백테스트 {len(bt_trades)} vs 라이브 {len(live_trades)}")
+    for i, (b, l) in enumerate(zip(bt_trades, live_trades)):
+        assert _fmt(b) == _fmt(l), (
+            f"{i}번째 maker-timeout 거래 불일치:\n  백테스트 {_fmt(b)}\n  라이브   {_fmt(l)}")
+
+
 def test_live_replay_is_chunk_independent():
     """캔들을 한 번에 주든 나눠서 주든 결과가 같아야 한다(폴링 경계 무관).
 

@@ -316,6 +316,8 @@
           <option value="taker" selected>시장가 (taker)</option>
           <option value="makerLimit">지정가 (maker)</option>
         </select></div>
+      <div class="row" data-when="entry-timeout"><label>폴백(초)</label>
+        <input id="makerTimeoutSeconds" type="number" min="0" step="1" placeholder="예: 3 (비우면 즉시 maker)"></div>
       <div class="note" id="entryTypeNote" style="color:var(--mut)"></div>
     </div>
 
@@ -355,7 +357,7 @@ const FIELDS = ["symbol","timeframe","days","equity",
   "exitStEnabled","exitStPeriod","exitStMult",
   "trailingEnabled","trailingCallback","trailingActivation",
   "leverage","levTierEnabled","sizeType","sizeValue","minLiqBuffer","cooldownBars","avoidFundingMin",
-  "entryType"];
+  "entryType","makerTimeoutSeconds"];
 
 // ---- 잔고별 레버리지 티어 (글로벌 — 대시보드 봇 설정과 공유, /api/settings) ----
 let levTiers = [{maxBalance:1000, leverage:20},{maxBalance:5000, leverage:10},{maxBalance:null, leverage:5}];
@@ -667,9 +669,14 @@ function sync() {
   show("tp-swing", tpT === "swing");
   show("tp-st", tpT === "supertrend");
   show("exit-st", $("exitStEnabled").checked);
-  $("entryTypeNote").textContent = $("entryType").value === "makerLimit"
-    ? "지정가(BBO) 체결 가정 → 진입 + SuperTrend 청산 둘 다 maker 수수료(BTCUSDC면 0). 손절·강제청산은 시장가(taker) 유지. 미체결·슬리피지는 모델링 안 함."
-    : "신호봉 종가에 즉시 시장가 체결(taker 수수료).";
+  const maker = $("entryType").value === "makerLimit";
+  show("entry-timeout", maker);
+  const to = ($("makerTimeoutSeconds").value || "").trim();
+  $("entryTypeNote").textContent = !maker
+    ? "신호봉 종가에 즉시 시장가 체결(taker 수수료)."
+    : to !== ""
+    ? `passive-then-aggressive: post-only 지정가를 ${to}초 걸어두고 미체결이면 시장가 추격(taker). 백테스트는 1분봉이라 max(1, round(초/60))봉으로 반올림.`
+    : "지정가(BBO) 체결 가정 → 신호봉 종가에 즉시 maker 수수료. 미체결·슬리피지 모델 없음(폴백 초 입력 시 passive-then-aggressive).";
   const levTier = $("levTierEnabled").checked;
   show("levtier", levTier);
   $("leverageLabel").textContent = levTier ? "레버리지 (티어 사용중 — 무시)" : "레버리지 (배)";
@@ -696,7 +703,7 @@ function sync() {
     : "";
   if (typeof updateHints === "function") updateHints();
 }
-["slType","tpType","sizeType","exitStEnabled","entryType","levTierEnabled"].forEach(id => $(id).addEventListener("change", sync));
+["slType","tpType","sizeType","exitStEnabled","entryType","levTierEnabled","makerTimeoutSeconds"].forEach(id => $(id).addEventListener("change", sync));
 $("levTierAdd").onclick = () => { levTiers.push({maxBalance:null, leverage:5}); renderLevTiers(); saveTiers(); };
 renderLevTiers();
 loadTiers();                                        // 글로벌 티어 로드(대시보드 봇 설정과 공유)
