@@ -168,16 +168,16 @@ vendor/         외부 JS. lightweight-charts.standalone.production.js
 - [ ] ADX/DMI 레짐 게이트를 실제 프리셋에 적용해 재백테스트 (지표·조건은 이미 있고 쓰는 프리셋이 없음)
 - [ ] CLI 백테스트(`run.py`)도 실제 펀딩 히스토리 사용 — 지금은 상수 근사 (GUI/`backtest.py`는 실히스토리)
 - [ ] direction "both" 롱·숏 동시 (스키마 v2: entryLong/entryShort 분리)
-- [ ] **지정가 체결 현실화 (미체결·슬리피지 모델)** — 현재 `execution.entryType`은
-      `taker`(시장가)와 `makerLimit`(지정가) 둘 다 **신호봉 종가에 체결됐다고 가정하고 수수료만
-      다르게** 적용(maker=지정가). maker 모드에선 **진입 + SuperTrend 전환 청산**이 maker,
-      가격 익절도 항상 maker, **손절·강제청산은 시장가(taker) 유지**. 즉 지정가의 체결 불확실성은
-      모델링 안 함(낙관적). 실거래에선 지정가가 (a) 가격이 불리하게 올 때만 체결(역선택),
-      (b) 신호 방향으로 튀면 미체결, 로 갈린다. 더 정직하게 하려면 ① fill-if-touched + 타임아웃
-      미체결 스킵(패시브/역추세용), ② **passive-then-aggressive** = post-only 지정가 먼저 →
-      타임아웃 내 미체결이면 시장가(taker) 추격(모멘텀용, 추격 슬리피지 반영). BTCUSDC(maker 0)
-      스캘핑의 실전 표준 체결. 백테스트↔실거래 동일 로직 원칙. (상태머신은 커밋 eb4edcd에 있었으나
-      단순화하며 제거 — 필요 시 복구.)
+- [x] **maker 진입 passive-then-aggressive** (백테스트/페이퍼) — `execution.makerTimeoutSeconds`
+      를 주면 post-only 지정가를 걸어두고(passive) 그 안에 가격이 지정가를 터치하면 maker 체결,
+      아니면 시장가로 추격(aggressive). Stepper의 대기 지정가(pending) 상태머신, 룩어헤드 없이
+      봉당 판정 → 백테스트·라이브 step() 공유 유지(1분봉이라 초→max(1,round(초/60))봉). 미설정이면
+      옛 동작(신호봉 종가 즉시 maker). 프리셋 만들기·스튜디오 진입체결에 '폴백(초)' 노출.
+      (남은 것: ⓐ SuperTrend/역추세 청산에도 같은 폴백, ⓑ maker 체결가를 종가 대신 BBO(bid/ask)로
+      — 호가 데이터 필요, ⓒ 아래 LiveExecutor에서 진짜 초 단위 타이머로 실주문.)
+- [ ] **지정가 청산 현실화 (미체결·슬리피지)** — 진입은 위에서 처리. 남은 건 청산: maker 모드에선
+      **SuperTrend 전환 청산**과 가격 익절이 maker(종가 체결 가정), **손절·강제청산은 taker 유지**.
+      청산도 fill-if-touched / passive-then-aggressive 로 정직화 필요. 백테스트↔실거래 동일 로직 원칙.
 - [ ] **SuperTrend 청산의 실전 체결 정책 (BBO → 3초 → taker 폴백)** — 백테스트는 maker 모드에서
       SuperTrend 전환 청산을 maker(BBO 지정가 체결)로 가정한다. 실거래 실행 규칙은:
       **① 전환 신호 시 post-only 지정가(BBO)로 청산 주문 → ② 3초 내 미체결이면 그 주문 취소 →
