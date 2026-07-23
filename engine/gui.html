@@ -792,7 +792,7 @@ function cpRender(){
   $("cpList").innerHTML = names.length
     ? names.map(n => {
         const srvOnly = !(n in local) && (n in serverPresets);      // 서버에만 있는 프리셋
-        return `<span class="cpreset"><button class="cp-load" data-name="${escapeHtml(n)}">${srvOnly?"📁 ":""}${escapeHtml(n)}</button>`
+        return `<span class="cpreset"><button class="cp-load" data-name="${escapeHtml(n)}" title="${escapeHtml(n)}">${srvOnly?"📁 ":""}${escapeHtml(n)}</button>`
           + `<button class="cp-del" data-name="${escapeHtml(n)}" title="삭제">✕</button></span>`;
       }).join("")
     : `<span class="cp-empty">저장된 프리셋 없음 — 세팅 후 “💾 현재 설정 저장”</span>`;

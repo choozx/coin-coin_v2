@@ -114,6 +114,13 @@
 const $ = id => document.getElementById(id);
 const fmt = n => n==null ? "–" : Number(n).toLocaleString(undefined,{maximumFractionDigits:2});
 const fmtT = ms => { const d=new Date(ms); return d.toLocaleString('ko-KR',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}); };
+const fmtAgo = ms => {                               // 경과시간 사람이 읽게(초 raw 대신)
+  const s = Math.max(0, Math.round(ms/1000));
+  if (s < 60) return `${s}초 전`;
+  const m = Math.floor(s/60);   if (m < 60) return `${m}분 전`;
+  const h = Math.floor(m/60);   if (h < 24) return `${h}시간 ${m%60}분 전`;
+  return `${Math.floor(h/24)}일 ${h%24}시간 전`;
+};
 const RN = {take_profit:"익절", stop_loss:"손절", trailing:"트레일링", signal:"신호청산", time:"시간청산", supertrend:"ST전환", liquidation:"강제청산"};
 
 function svcBtn(svc, label, state){
@@ -236,7 +243,7 @@ async function tick(){
   if (!alive){ $("status").className="badge stale"; $("status").textContent="🔴 멈춤/지연"; }
   else if (d.paused){ $("status").className="badge"; $("status").style.cssText="background:rgba(224,160,48,.15);color:#e0a030"; $("status").textContent="⏸ 일시정지(새 진입 차단)"; }
   else { $("status").className="badge ok"; $("status").style.cssText=""; $("status").textContent="🟢 정상"; }
-  $("updated").textContent = `갱신 ${fmtT(d.updatedAt)} (${Math.round(age/1000)}s 전)`;
+  $("updated").textContent = `갱신 ${fmtT(d.updatedAt)} (${fmtAgo(age)})`;
   const gs = $("grStatusBar");                         // 가드레일 발동 상태(설정은 /settings)
   if (gs) gs.innerHTML = d.guardrail
       ? `<div class="pos" style="border-color:var(--down)"><span class="fresh-r">🛡 가드레일 발동 중 — ${d.guardrail} (새 진입 차단)</span> <a href="/settings" class="sub">설정 →</a></div>`
@@ -471,12 +478,12 @@ const LABEL = {
   isolated:      "격리 (isolated)",
   cross:         "교차 (cross)",
   taker:         "시장가 (taker)",
-  makerLimit:    "지정가 (maker · 수수료 낮음)",
+  makerLimit:    "지정가 maker · 수수료↓",
 };
 const label = v => LABEL[v] || v;                   // 매핑 없으면(심볼 등) 원값 그대로
 function pickerHTML(id, options, cur, defLabel){
   _picks[id] = cur || "";
-  const defOpt = `— 프리셋${defLabel!=null&&defLabel!==""?` (${label(defLabel)})`:""} —`;
+  const defOpt = `— 프리셋${defLabel!=null&&defLabel!==""?` · ${label(defLabel)}`:""} —`;
   const rows = [`<div class="opt" data-v="">${defOpt}</div>`].concat(
     options.map(o => `<div class="opt${o===cur?" active":""}" data-v="${o}">${label(o)}</div>`)).join("");
   return `<div class="combo" style="max-width:230px"><div class="syminput" id="${id}_disp"`
@@ -509,20 +516,24 @@ document.addEventListener("click", e => {           // 바깥 클릭 시 모든 
 });
 
 async function loadBotConfig(){
-  let d, cache = [];
-  try { d = await (await fetch("/api/bot-config",{cache:"no-store"})).json(); }
-  catch(e){ $("botcfg").innerHTML = `<div class="err">봇 설정 로드 실패: ${e}</div>`; return; }
-  try { cache = ((await (await fetch("/api/cache",{cache:"no-store"})).json()).symbols||[]).map(s=>s.symbol); } catch(e){}
+  // 네 엔드포인트는 서로 독립이므로 한꺼번에 띄운다(순차 await 하면 폼이 그만큼 늦게 뜬다).
+  const j = r => r.json();
+  const [rCfg, rCache, rCtrl, rState] = await Promise.allSettled([
+    fetch("/api/bot-config",{cache:"no-store"}).then(j),
+    fetch("/api/cache",{cache:"no-store"}).then(j),
+    fetch("/api/control",{cache:"no-store"}).then(j),
+    fetch("/api/state",{cache:"no-store"}).then(j),
+  ]);
+  if (rCfg.status !== "fulfilled"){ $("botcfg").innerHTML = `<div class="err">봇 설정 로드 실패: ${rCfg.reason}</div>`; return; }
+  const d = rCfg.value;
+  const cache = rCache.status==="fulfilled" ? ((rCache.value.symbols||[]).map(s=>s.symbol)) : [];
   // 현재(저장된) 전략을 폼 초기값으로. _stratSaved = 저장된 값, _stratPick = 폼에서 고른 값.
   // ★ control.json 에 strategy 가 없을 수 있다 — 대시보드에서 한 번도 안 골랐고 .env 의 PRESET 으로
   //   뜬 경우다(기본 상태). 그때는 봇이 '실제로 돌리고 있는' 전략(state.json)을 폼에 채운다.
   //   안 그러면 봇은 멀쩡히 돌고 있는데 전략 칸만 비어 보인다.
-  try {
-    const ctrl = await (await fetch("/api/control",{cache:"no-store"})).json();
-    let running = "";
-    try { running = ((await (await fetch("/api/state",{cache:"no-store"})).json()).strategy)||""; } catch(e){}
-    window._stratSaved = ctrl.strategy || running || "";
-  } catch(e){ window._stratSaved = ""; }
+  const ctrlStrat = rCtrl.status==="fulfilled" ? (rCtrl.value.strategy||"") : "";
+  const running   = rState.status==="fulfilled" ? (rState.value.strategy||"") : "";
+  window._stratSaved = ctrlStrat || running || "";
   window._stratPick = window._stratSaved;
   window._stratActivePath = window._stratSaved;
   const cs = STRATS.find(x => x.path === window._stratSaved);
@@ -539,6 +550,7 @@ async function loadBotConfig(){
     + `<div class="field"><label>전략</label>`
     +   `<span class="combo" style="max-width:320px">`
     +   `<input id="stratInput" class="syminput" autocomplete="off" placeholder="전략 검색"`
+    +   ` title="${window._stratCurLabel||""}"`
     +   ` value="${window._stratCurLabel||""}"`
     +   ` onfocus="this.select();openStratDrop('')" oninput="openStratDrop(this.value)" onkeydown="stratKey(event)"`
     +   ` onblur="blurStrat()">`
