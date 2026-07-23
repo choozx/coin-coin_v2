@@ -321,7 +321,7 @@ class Stepper:
         p = _open_position(preset, preset.sizing, ex_block, sig_close, fill_time, sb,
                            side, lev, equity, cfg, atr_series, signal, entry_maker=self.maker_entry)
         if p is not None:
-            ex.open(p)
+            ex.open(p, is_maker=self.maker_entry)
             if self.on_open:
                 self.on_open(p, lev)
 
@@ -350,7 +350,7 @@ class Stepper:
         p = _open_position(preset, preset.sizing, preset.exit, price, ot, sb,
                            side, lev, equity, cfg, atr_series, signal, entry_maker=is_maker)
         if p is not None:
-            ex.open(p)
+            ex.open(p, is_maker=is_maker)
             if self.on_open:
                 self.on_open(p, lev)
 
