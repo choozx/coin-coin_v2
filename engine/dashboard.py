@@ -119,10 +119,11 @@ class Handler(BaseHTTPRequestHandler):
                 ctrl = control.set_service(body["service"], body["state"])
             elif self.path == "/api/strategy":     # {"path": "presets/..."} 봇 전략 선택
                 ctrl = select_strategy(body["path"])
-            elif self.path == "/api/make_preset":  # 프리셋 만들기 — 신호원+실행설정 → 자기완결 프리셋 저장
+            elif self.path == "/api/make_preset":  # 프리셋 만들기/수정 — 신호원+실행설정 → 자기완결 프리셋 저장
                 self._send(200, json.dumps(save_composed_preset(
                     body.get("name"), body.get("base"), body.get("symbol"),
-                    body.get("sizing") or {}, body.get("execution") or {}, body.get("filter") or {})))
+                    body.get("sizing") or {}, body.get("execution") or {}, body.get("filter") or {},
+                    replace_path=body.get("replace"))))
                 return
             elif self.path == "/api/heal":         # 캔들 구멍 수동 복구
                 syms = [body["symbol"]] if body.get("symbol") else [s["symbol"] for s in candle_store.list_stats()]

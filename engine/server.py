@@ -740,7 +740,8 @@ class Handler(BaseHTTPRequestHandler):
                 body = json.loads(self.rfile.read(length) or b"{}")
                 self._send(200, json.dumps(save_composed_preset(
                     body.get("name"), body.get("base"), body.get("symbol"),
-                    body.get("sizing") or {}, body.get("execution") or {}, body.get("filter") or {})))
+                    body.get("sizing") or {}, body.get("execution") or {}, body.get("filter") or {},
+                    replace_path=body.get("replace"))))
             except Exception as e:
                 self._send(400, json.dumps({"error": str(e)}))
             return

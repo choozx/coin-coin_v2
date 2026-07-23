@@ -155,11 +155,12 @@ def _slugify(name: str) -> str:
 
 def save_composed_preset(name: str, base_path: str, symbol: str,
                          sizing: dict, execution: dict, filt: dict,
-                         dest_dir: str = STRATEGY_DIR_DATA) -> dict:
-    """'프리셋 만들기' — 신호원(base)의 진입/청산/타임프레임/방향 + 주어진 심볼·사이징·실행·필터를
+                         dest_dir: str = STRATEGY_DIR_DATA, replace_path: str = None) -> dict:
+    """'프리셋 만들기/수정' — 신호원(base)의 진입/청산/타임프레임/방향 + 주어진 심볼·사이징·실행·필터를
     합쳐 '자기완결 프리셋'으로 data/strategies/ 에 저장. 봇은 오버라이드 없이 이걸 그대로 돌린다.
 
-    base_path : 진입/청산 신호를 가져올 기존 프리셋(스튜디오에서 만든 것). market·entry·exit만 씀.
+    base_path    : 진입/청산 신호를 가져올 프리셋. 수정 시 자기 자신을 주면 신호 유지.
+    replace_path : 수정 대상 원본 경로. 이름이 바뀌어 저장 경로가 달라지면 원본을 지운다(rename).
     반환: {ok, path, name}.
     """
     name = (name or "").strip()
@@ -193,6 +194,11 @@ def save_composed_preset(name: str, base_path: str, symbol: str,
     path = os.path.join(dest_dir, _slugify(name) + ".json")
     with open(path, "w", encoding="utf-8") as f:
         json.dump(preset, f, ensure_ascii=False, indent=2)
+    # 수정 중 이름이 바뀌어 파일명이 달라졌으면 원본 삭제(rename). data/strategies 안의 것만 안전하게.
+    if replace_path and os.path.abspath(replace_path) != os.path.abspath(path):
+        rp = os.path.abspath(replace_path)
+        if rp.startswith(os.path.abspath(dest_dir) + os.sep) and os.path.exists(rp):
+            os.remove(rp)
     return {"ok": True, "path": path, "name": name}
 
 
