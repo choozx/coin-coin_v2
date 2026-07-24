@@ -51,14 +51,25 @@ def record(trade, symbol: str, strategy: str, mode: str, equity_after: float,
     return rid
 
 
-def load(db_path=LEDGER_PATH, mode: str = None, strategy: str = None, limit: int = None) -> list:
-    """원장 조회 → dict 리스트(오래된→최신, 삽입순). 대시보드/복원용."""
+def load(db_path=LEDGER_PATH, mode: str = None, strategy: str = None, symbol: str = None,
+         start_ms: int = None, end_ms: int = None, limit: int = None) -> list:
+    """원장 조회 → dict 리스트(오래된→최신, 삽입순). 대시보드/복원용.
+
+    필터(모두 선택): mode·strategy·symbol 은 정확일치, start_ms/end_ms 는 청산시각(exit_time)
+    범위(대시보드 '기간' 필터). limit 은 최신 N건이 아니라 삽입순 앞 N건이라 조회 상한 용도.
+    """
     q = f"SELECT id,{','.join(_COLS)} FROM trade"
     where, params = [], []
     if mode:
         where.append("mode=?"); params.append(mode)
     if strategy:
         where.append("strategy=?"); params.append(strategy)
+    if symbol:
+        where.append("symbol=?"); params.append(symbol)
+    if start_ms is not None:
+        where.append("exit_time>=?"); params.append(int(start_ms))
+    if end_ms is not None:
+        where.append("exit_time<=?"); params.append(int(end_ms))
     if where:
         q += " WHERE " + " AND ".join(where)
     q += " ORDER BY id"
@@ -74,9 +85,11 @@ def load(db_path=LEDGER_PATH, mode: str = None, strategy: str = None, limit: int
     return [dict(zip(keys, r)) for r in rows]
 
 
-def stats(db_path=LEDGER_PATH, mode: str = None) -> dict:
-    """원장 집계 — 전체 + 전략별 성과(승률·손익비·MDD 등)."""
-    rows = load(db_path, mode=mode)
+def stats(db_path=LEDGER_PATH, mode: str = None, strategy: str = None, symbol: str = None,
+          start_ms: int = None, end_ms: int = None) -> dict:
+    """원장 집계 — 전체 + 전략별 성과(승률·손익비·MDD 등). 필터는 load 와 동일."""
+    rows = load(db_path, mode=mode, strategy=strategy, symbol=symbol,
+                start_ms=start_ms, end_ms=end_ms)
     overall = _agg(rows)
     by_strat = {}
     for r in rows:

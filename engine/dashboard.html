@@ -45,6 +45,15 @@
   .svc select { background:var(--panel2); color:var(--fg); border:1px solid var(--line); border-radius:6px;
                 padding:4px 8px; font-size:12px; cursor:pointer; max-width:260px; }
   .svc select:hover { border-color:var(--blue); }
+  /* 거래 이력 탭 필터 바 */
+  .filters { display:flex; gap:14px; flex-wrap:wrap; align-items:center; background:var(--panel);
+             border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:16px; }
+  .fitem { display:flex; align-items:center; gap:6px; font-size:13px; }
+  .fitem label { color:var(--mut); }
+  .filters select, .filters input { background:var(--panel2); color:var(--fg); border:1px solid var(--line);
+             border-radius:6px; padding:5px 9px; font-size:13px; cursor:pointer; }
+  .filters select:hover, .filters input:hover { border-color:var(--blue); }
+  .filters input[type=date] { cursor:text; }
   .trow { cursor:pointer; }
   .trow:hover td { background:rgba(255,255,255,.04); }
   .trow .cursor { color:var(--mut); font-size:10px; }
@@ -120,12 +129,26 @@
     <button id="openMaker" class="btn-go" style="margin-left:10px" onclick="openMaker()">🧩 프리셋 만들기</button>
   </header>
 
-  <!-- 매매 대시보드(기본) -->
+  <div id="view-main">
+  <div class="tabs">
+    <button class="tab active" id="tab-trading" onclick="showTab('trading')">매매</button>
+    <button class="tab" id="tab-history" onclick="showTab('history')">📒 거래 이력</button>
+  </div>
+
+  <!-- 매매 대시보드(기본) — 라이브 상태만(카드·포지션·제어). 상세 이력은 '거래 이력' 탭으로 분리 -->
   <div id="view-trading">
     <div id="botrun" class="pos"><div class="sub">매매 봇 불러오는 중…</div></div>
     <div id="grStatusBar"></div><!-- 가드레일 '발동 상태'만 여기(모니터). 설정은 /settings -->
     <div id="body"><div class="empty">상태 불러오는 중…</div></div>
   </div>
+
+  <!-- 거래 이력(탭) — 라이브 상태와 분리된 영구 원장 뷰. 모드·전략·심볼·기간으로 필터.
+       행을 펼치면 그 거래의 진입~청산 구간을 백테스트처럼 캔들+지표 차트로 본다. -->
+  <div id="view-history" style="display:none">
+    <div id="histFilters" class="filters"></div>
+    <div id="histBody"><div class="empty">불러오는 중…</div></div>
+  </div>
+  </div><!-- /view-main -->
 
   <!-- 프리셋 만들기(별도 화면) — 상단 '프리셋 만들기' 버튼으로 열고, 저장하면 대시보드로 복귀 -->
   <div id="view-maker" style="display:none">
@@ -233,10 +256,10 @@ async function setSvc(svc, state){
 async function tick(){
   let d;
   try { d = await (await fetch("/api/state",{cache:"no-store"})).json(); }
-  catch(e){ renderControl(null); window._lastTradeN=-1; $("body").innerHTML = `<div class="err">상태 서버 응답 없음: ${e}</div>`; return; }
+  catch(e){ renderControl(null); $("body").innerHTML = `<div class="err">상태 서버 응답 없음: ${e}</div>`; return; }
   window._lastState = d;
   renderControl(d);
-  if (d.error){ window._lastTradeN=-1; $("body").innerHTML = `<div class="err">${d.error}</div>`; $("status").className="badge stale"; $("status").textContent="대기"; return; }
+  if (d.error){ $("body").innerHTML = `<div class="err">${d.error}</div>`; $("status").className="badge stale"; $("status").textContent="대기"; return; }
 
   // 실거래는 테스트넷(가짜돈)과 실돈을 반드시 구분해 보여준다 — 한 덩어리로 보면 제일 위험한 착각이 생긴다.
   // mode 는 원장 버킷이기도 하다(paper/testnet/live 분리 저장) → 아래 거래이력 조회 키로 그대로 쓰인다.
@@ -253,13 +276,7 @@ async function tick(){
       ? `<div class="pos" style="border-color:var(--down)"><span class="fresh-r">🛡 가드레일 발동 중 — ${d.guardrail} (새 진입 차단)</span> <a href="/settings" class="sub">설정 →</a></div>`
       : "";
 
-  // 원장에서 전체 매매기록·통계 조회(대시보드 표시는 스냅샷 아닌 영구 원장 기준)
-  const mode = d.mode || "paper";
-  let led = [], st = null;
-  try { led = ((await (await fetch(`/api/trades?mode=${mode}`,{cache:"no-store"})).json()).trades)||[]; } catch(e){}
-  try { st = await (await fetch(`/api/stats?mode=${mode}`,{cache:"no-store"})).json(); } catch(e){}
-
-  // ── 라이브 영역(매 틱 갱신): 카드 + 현재 포지션 ──
+  // ── 라이브 영역(매 틱 갱신): 카드 + 현재 포지션. 상세 이력·통계는 '거래 이력' 탭 ──
   const retCls = d.returnPct>=0 ? "g" : "r";
   const pos = d.position;
   const posCls = pos ? (pos.side>0?"g":"r") : "";
@@ -267,7 +284,7 @@ async function tick(){
     <div class="card"><div class="k">잔고</div><div class="v">${fmt(d.equity)}</div></div>
     <div class="card"><div class="k">수익률</div><div class="v ${retCls}">${d.returnPct>=0?"+":""}${fmt(d.returnPct)}%</div></div>
     <div class="card"><div class="k">포지션</div><div class="v ${posCls}">${pos?(pos.side>0?"롱":"숏"):"없음"}</div></div>
-    <div class="card"><div class="k">총 거래</div><div class="v">${st?st.n:d.numTrades}</div></div>
+    <div class="card"><div class="k">총 거래</div><div class="v">${d.numTrades}</div></div>
   </div>`;
   if (pos){
     live += `<div class="pos"><h3>현재 포지션</h3><div class="posgrid">
@@ -281,43 +298,7 @@ async function tick(){
       <div><div class="k">진입시각</div><div class="v">${fmtT(pos.entryTime)}</div></div>
     </div></div>`;
   }
-
-  if (!$("live")) $("body").innerHTML = '<div id="live"></div><div id="history"></div>';
-  $("live").innerHTML = live;
-
-  // ── 히스토리 영역: 거래 수가 바뀔 때만 재구성(펼쳐둔 차트가 새로고침에 안 사라지게) ──
-  if (led.length !== window._lastTradeN){
-    window._lastTradeN = led.length;
-    let html = "";
-    if (st && st.n){
-      html += `<div class="pos"><h3>성과 통계 <span class="sub">원장 ${st.n}건</span></h3><div class="posgrid">
-        <div><div class="k">승률</div><div class="v">${st.winRate}%</div></div>
-        <div><div class="k">손익비 PF</div><div class="v">${st.profitFactor}</div></div>
-        <div><div class="k">총손익</div><div class="v ${st.totalPnl>=0?'g':'r'}">${st.totalPnl>=0?'+':''}${fmt(st.totalPnl)}</div></div>
-        <div><div class="k">최대낙폭 MDD</div><div class="v r">-${fmt(st.maxDrawdown)}</div></div>
-        <div><div class="k">평균손익</div><div class="v ${st.avgPnl>=0?'g':'r'}">${st.avgPnl>=0?'+':''}${fmt(st.avgPnl)}</div></div>
-      </div>`;
-      if (st.byStrategy && st.byStrategy.length>1){
-        html += `<h3 style="margin:14px 0 8px">전략별 성과</h3><table><thead><tr><th>전략</th><th>거래</th><th>승률</th><th>총손익</th><th>PF</th></tr></thead><tbody>`;
-        for (const b of st.byStrategy){
-          const nm=(b.strategy||'-').split('/').pop().replace('.json','');
-          html += `<tr><td>${nm}</td><td>${b.n}</td><td>${b.winRate}%</td>`
-            + `<td class="${b.totalPnl>=0?'g':'r'}">${b.totalPnl>=0?'+':''}${fmt(b.totalPnl)}</td><td>${b.profitFactor}</td></tr>`;
-        }
-        html += `</tbody></table>`;
-      }
-      html += `</div>`;
-    }
-    html += `<div class="pos"><h3>자산 곡선</h3><canvas id="eq"></canvas></div>`;
-
-    html += `<div class="trades pos"><h3>매매 기록 <span class="sub">${led.length}건 · 원장 · 행 클릭 시 차트</span></h3>`
-      + `<div id="tradetable"></div><div id="tradepager" class="pager"></div></div>`;
-    $("history").innerHTML = html;
-    window._led = led;
-    window._tradePage = 0;                 // 새 거래 생기면 최신(1쪽)부터
-    renderTrades();
-    drawEquity(d.initialEquity, led);
-  }
+  $("body").innerHTML = live;
 }
 
 const PER_PAGE = 50;                        // 매매기록 한 쪽당 건수
@@ -375,7 +356,7 @@ async function toggleTrade(id){
   if (caret) caret.textContent = "▾";
   const cont = document.getElementById("tc-"+id);
   cont.innerHTML = `<div class="caption">차트 불러오는 중…</div>`;
-  const mode = (window._lastState && window._lastState.mode) || "paper";
+  const mode = (window._hist && window._hist.mode) || (window._lastState && window._lastState.mode) || "paper";
   try {
     const data = await (await fetch(`/api/trade_chart?id=${id}&mode=${mode}`,{cache:"no-store"})).json();
     if (data.error){ cont.innerHTML = `<div class="err">${data.error}</div>`; return; }
@@ -536,7 +517,7 @@ async function renderPresetMaker(editPath){
 // 프리셋 만들기/수정 = 별도 화면. 상단 버튼(만들기)·매매봇 수정 버튼으로 열고, 저장/뒤로 하면 복귀.
 function openMaker(editPath){
   window._editPath = editPath || null;              // 수정이면 원본 경로(덮어쓰기·이름변경 판정용)
-  $("view-trading").style.display = "none";
+  $("view-main").style.display = "none";
   $("view-maker").style.display = "";
   $("openMaker").style.display = "none";
   $("pm_msg").textContent = "";
@@ -549,7 +530,7 @@ function editSelected(){                             // 매매 봇에서 지금 
 function closeMaker(){
   window._editPath = null;
   $("view-maker").style.display = "none";
-  $("view-trading").style.display = "";
+  $("view-main").style.display = "";
   $("openMaker").style.display = "";
   renderBotRun();                                   // 새로/수정한 프리셋이 매매 봇 목록에 반영
 }
@@ -707,6 +688,117 @@ async function selectRun(){
     window._runSaved = path;
     $("run_msg").innerHTML = `<span class="fresh-g">✓ 선택됨 — 무포지션이면 다음 폴링에 전환</span>`;
   } catch(e){ $("run_msg").innerHTML = `<span class="fresh-r">선택 실패: ${e.message}</span>`; }
+}
+
+// ── 📒 거래 이력 탭: 라이브 상태와 분리된 영구 원장 뷰(모드·전략·심볼·기간 필터) ──
+// 매매 탭은 '지금'만 보여준다. 여기선 원장 전체를 골라 본다 — 페이퍼/테스트넷/실돈이
+// 원장에 따로 쌓이므로(ledger.mode 버킷) 돌고 있는 봇과 무관하게 과거 기록을 조회할 수 있다.
+window._hist = {mode:"paper", strategy:"", symbol:"", from:"", to:"", page:0};
+
+function showTab(name){
+  const trading = name === "trading";
+  $("view-trading").style.display = trading ? "" : "none";
+  $("view-history").style.display = trading ? "none" : "";
+  $("tab-trading").classList.toggle("active", trading);
+  $("tab-history").classList.toggle("active", !trading);
+  if (!trading && !window._histInit){ window._histInit = true; initHistory(); }
+}
+
+// 'YYYY-MM-DD'(날짜 입력) → epoch ms. end=true 면 그날 끝(23:59:59.999)까지 포함.
+function dayToMs(v, end){
+  if (!v) return "";
+  const [y,m,d] = v.split("-").map(Number);
+  const base = new Date(y, m-1, d).getTime();
+  return end ? base + 86400000 - 1 : base;
+}
+function histQuery(){
+  const h = window._hist, p = new URLSearchParams();
+  if (h.mode) p.set("mode", h.mode);
+  if (h.strategy) p.set("strategy", h.strategy);
+  if (h.symbol) p.set("symbol", h.symbol);
+  const f = dayToMs(h.from,false), t = dayToMs(h.to,true);
+  if (f!=="") p.set("from", f);
+  if (t!=="") p.set("to", t);
+  return p.toString();
+}
+function renderHistFilters(){
+  const h = window._hist;
+  const modeOpts = [["paper","페이퍼"],["testnet","🧪 테스트넷"],["live","🔴 실돈"]]
+    .map(([v,l]) => `<option value="${v}"${v===h.mode?" selected":""}>${l}</option>`).join("");
+  const stratOpts = `<option value="">전체</option>` + (window._histStrats||[])
+    .map(s => `<option value="${s}"${s===h.strategy?" selected":""}>${s.split('/').pop().replace('.json','')}</option>`).join("");
+  const symOpts = `<option value="">전체</option>` + (window._histSyms||[])
+    .map(s => `<option value="${s}"${s===h.symbol?" selected":""}>${s}</option>`).join("");
+  $("histFilters").innerHTML =
+      `<div class="fitem"><label>모드</label><select onchange="setHist('mode',this.value,true)">${modeOpts}</select></div>`
+    + `<div class="fitem"><label>전략</label><select onchange="setHist('strategy',this.value)">${stratOpts}</select></div>`
+    + `<div class="fitem"><label>심볼</label><select onchange="setHist('symbol',this.value)">${symOpts}</select></div>`
+    + `<div class="fitem"><label>기간</label><input type="date" value="${h.from}" onchange="setHist('from',this.value)">`
+    +   `<span class="sub">~</span><input type="date" value="${h.to}" onchange="setHist('to',this.value)"></div>`
+    + `<button class="btn-ghost" onclick="resetHist()">필터 초기화</button>`;
+}
+function setHist(k, v, reloadOpts){
+  window._hist[k] = v;
+  window._hist.page = 0;
+  if (reloadOpts){                          // 모드가 바뀌면 전략·심볼 목록도 그 버킷 기준으로 다시
+    window._hist.strategy = ""; window._hist.symbol = "";
+    refreshHistOptions().then(loadHistory);
+  } else loadHistory();
+}
+function resetHist(){
+  const m = window._hist.mode;              // 모드는 유지, 나머지만 비움
+  window._hist = {mode:m, strategy:"", symbol:"", from:"", to:"", page:0};
+  renderHistFilters(); loadHistory();
+}
+async function initHistory(){
+  const m = window._lastState && window._lastState.mode;   // 돌고 있는 봇 모드를 기본 선택
+  if (m) window._hist.mode = m;
+  await refreshHistOptions();
+  renderHistFilters();
+  loadHistory();
+}
+async function refreshHistOptions(){       // 현재 모드 전체 거래에서 전략·심볼 목록 추출(드롭다운)
+  let all = [];
+  try { all = ((await (await fetch(`/api/trades?mode=${window._hist.mode}`,{cache:"no-store"})).json()).trades)||[]; } catch(e){}
+  window._histStrats = [...new Set(all.map(t=>t.strategy).filter(Boolean))].sort();
+  window._histSyms   = [...new Set(all.map(t=>t.symbol).filter(Boolean))].sort();
+}
+async function loadHistory(){
+  const qs = histQuery();
+  let led = [], st = null;
+  try { led = ((await (await fetch(`/api/trades?${qs}`,{cache:"no-store"})).json()).trades)||[]; } catch(e){}
+  try { st  = await (await fetch(`/api/stats?${qs}`,{cache:"no-store"})).json(); } catch(e){}
+  window._led = led;
+  // 필터가 바뀌면 이전에 펼쳐둔 차트는 DOM이 교체되므로 정리
+  window._charts = window._charts || {};
+  for (const id in window._charts){ try{window._charts[id].remove();}catch(e){} delete window._charts[id]; }
+  let html = "";
+  if (st && st.n){
+    html += `<div class="pos"><h3>성과 통계 <span class="sub">원장 ${st.n}건</span></h3><div class="posgrid">
+      <div><div class="k">승률</div><div class="v">${st.winRate}%</div></div>
+      <div><div class="k">손익비 PF</div><div class="v">${st.profitFactor}</div></div>
+      <div><div class="k">총손익</div><div class="v ${st.totalPnl>=0?'g':'r'}">${st.totalPnl>=0?'+':''}${fmt(st.totalPnl)}</div></div>
+      <div><div class="k">최대낙폭 MDD</div><div class="v r">-${fmt(st.maxDrawdown)}</div></div>
+      <div><div class="k">평균손익</div><div class="v ${st.avgPnl>=0?'g':'r'}">${st.avgPnl>=0?'+':''}${fmt(st.avgPnl)}</div></div>
+    </div>`;
+    if (st.byStrategy && st.byStrategy.length>1){
+      html += `<h3 style="margin:14px 0 8px">전략별 성과</h3><table><thead><tr><th>전략</th><th>거래</th><th>승률</th><th>총손익</th><th>PF</th></tr></thead><tbody>`;
+      for (const b of st.byStrategy){
+        const nm=(b.strategy||'-').split('/').pop().replace('.json','');
+        html += `<tr><td>${nm}</td><td>${b.n}</td><td>${b.winRate}%</td>`
+          + `<td class="${b.totalPnl>=0?'g':'r'}">${b.totalPnl>=0?'+':''}${fmt(b.totalPnl)}</td><td>${b.profitFactor}</td></tr>`;
+      }
+      html += `</tbody></table>`;
+    }
+    html += `</div>`;
+  }
+  html += `<div class="pos"><h3>자산 곡선 <span class="sub">누적 손익</span></h3><canvas id="eq"></canvas></div>`;
+  html += `<div class="trades pos"><h3>매매 기록 <span class="sub">${led.length}건 · 원장 · 행 클릭 시 차트</span></h3>`
+    + `<div id="tradetable"></div><div id="tradepager" class="pager"></div></div>`;
+  $("histBody").innerHTML = html;
+  window._tradePage = window._hist.page || 0;
+  renderTrades();
+  drawEquity(0, led);                       // 필터된 집합의 '누적 손익' 곡선(기준선 0)
 }
 
 // 가드레일·레버리지 티어 '설정'은 /settings 페이지로 옮겼다(계좌 전역 설정이라 성격이 다름).

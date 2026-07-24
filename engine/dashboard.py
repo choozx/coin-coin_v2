@@ -41,6 +41,23 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _ledger_filters(self) -> dict:
+        """거래 이력 조회 필터를 쿼리스트링에서 파싱 → ledger.load/stats 공통 kwargs.
+        빈 값·잘못된 값은 '필터 없음'으로(None) 떨어뜨려 전체 조회로 폴백한다."""
+        from urllib.parse import parse_qs, urlparse
+        q = parse_qs(urlparse(self.path).query)
+        def s(k):
+            v = (q.get(k, [""])[0] or "").strip()
+            return v or None
+        def ms(k):
+            v = s(k)
+            try:
+                return int(v) if v is not None else None
+            except ValueError:
+                return None
+        return {"mode": s("mode"), "strategy": s("strategy"), "symbol": s("symbol"),
+                "start_ms": ms("from"), "end_ms": ms("to")}
+
     def do_GET(self):
         if self.path == "/" or self.path.startswith("/?"):
             with open(_HTML, "rb") as f:
@@ -77,13 +94,10 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/cache":           # 수집된 심볼 목록(커버리지 요약)
             self._send(200, json.dumps({"symbols": candle_store.list_stats()}))
         elif self.path.split("?")[0] == "/api/trades":
-            from urllib.parse import parse_qs, urlparse
-            mode = parse_qs(urlparse(self.path).query).get("mode", [None])[0]
-            self._send(200, json.dumps({"trades": ledger.load(mode=mode, limit=1000)}))
+            f = self._ledger_filters()
+            self._send(200, json.dumps({"trades": ledger.load(limit=1000, **f)}))
         elif self.path.split("?")[0] == "/api/stats":
-            from urllib.parse import parse_qs, urlparse
-            mode = parse_qs(urlparse(self.path).query).get("mode", [None])[0]
-            self._send(200, json.dumps(ledger.stats(mode=mode)))
+            self._send(200, json.dumps(ledger.stats(**self._ledger_filters())))
         elif self.path.split("?")[0] == "/api/trade_chart":
             from urllib.parse import parse_qs, urlparse
             from . import trade_chart
