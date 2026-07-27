@@ -10,9 +10,11 @@
     DISCORD_BOT_TOKEN        봇 토큰(필수)
     DISCORD_GUILD_ID         이 서버(길드)에만 명령 등록 → 즉시 반영(권장)
     DISCORD_ALLOWED_USER_IDS 콤마구분 유저ID 화이트리스트 — 이들만 응답(실돈 정보 보호)
-    STATE_PATH / LEDGER_PATH 대시보드와 동일(기본 data/state.json, data/trades.db)
+    STATE_PATH / LEDGER_PATH / CONTROL_PATH 대시보드와 동일(data/state.json·trades.db·control.json)
 
-보안: 모든 응답은 ephemeral(요청자만 봄) + 유저 화이트리스트. 조회 전용이라 매매를 못 바꾼다.
+명령: /status /position /stats (조회) · /control (봇 시작/정지 버튼).
+보안: 모든 응답은 ephemeral(요청자만 봄) + 유저 화이트리스트. /control 버튼도 클릭 시 재검문.
+제어는 '우아한 정지'(control.paused)까지만 — 강제청산·주문 같은 파괴적 행위는 없다.
 """
 from __future__ import annotations
 
@@ -20,6 +22,7 @@ import json
 import os
 import time
 
+from . import control
 from . import discord_views as views
 from . import ledger
 
@@ -53,6 +56,7 @@ def run() -> None:
         raise RuntimeError("DISCORD_BOT_TOKEN 없음(.env) — 디스코드 개발자 포털에서 봇 토큰 발급.")
     state_path = os.environ.get("STATE_PATH", "data/state.json")
     ledger_path = os.environ.get("LEDGER_PATH", ledger.LEDGER_PATH)
+    control_path = os.environ.get("CONTROL_PATH", control.DEFAULT_PATH)
     guild_id = os.environ.get("DISCORD_GUILD_ID")
     allowed = allowed_ids()
     if not allowed:
@@ -70,6 +74,37 @@ def run() -> None:
         await interaction.response.send_message(
             "⛔ 권한 없음 — 허용된 사용자만 조회할 수 있습니다.", ephemeral=True)
         return False
+
+    def control_panel() -> str:
+        """control.json(현재 정지 여부) + state.json(포지션 보유) → 패널 텍스트."""
+        paused = control.service_state("trader", control_path) == "paused"
+        st = load_state(state_path)
+        return views.control_text(paused, bool(st.get("position")))
+
+    class ControlView(discord.ui.View):
+        """봇 시작/정지 버튼. ephemeral 메시지에 붙어 요청자만 보고 누른다(+클릭 시 재검문)."""
+
+        def __init__(self):
+            super().__init__(timeout=300)          # 5분 후 버튼 비활성(만료된 패널 오작동 방지)
+
+        async def interaction_check(self, interaction) -> bool:
+            if interaction.user.id in allowed:
+                return True
+            await interaction.response.send_message("⛔ 권한 없음", ephemeral=True)
+            return False
+
+        async def _set(self, interaction, state: str):
+            control.set_service("trader", state, path=control_path)
+            # 버튼을 그대로 둔 채 패널 텍스트만 새 상태로 갱신(연속 조작 가능).
+            await interaction.response.edit_message(content=control_panel(), view=self)
+
+        @discord.ui.button(label="시작", emoji="▶️", style=discord.ButtonStyle.success)
+        async def start(self, interaction, button):
+            await self._set(interaction, "running")
+
+        @discord.ui.button(label="정지", emoji="⏸", style=discord.ButtonStyle.danger)
+        async def stop(self, interaction, button):
+            await self._set(interaction, "paused")
 
     @tree.command(name="status", description="봇 상태·포지션·잔고 요약")
     async def status(interaction: "discord.Interaction"):
@@ -97,6 +132,12 @@ def run() -> None:
         start, label = views.period_bounds(period, int(time.time() * 1000))
         s = ledger.stats(ledger_path, start_ms=start)
         await interaction.response.send_message(views.stats_text(s, label), ephemeral=True)
+
+    @tree.command(name="control", description="봇 시작/정지 (graceful — 보유 포지션은 계속 관리)")
+    async def control_cmd(interaction: "discord.Interaction"):
+        if not await guard(interaction):
+            return
+        await interaction.response.send_message(control_panel(), view=ControlView(), ephemeral=True)
 
     @client.event
     async def on_ready():

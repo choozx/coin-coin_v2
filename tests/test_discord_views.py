@@ -92,6 +92,23 @@ def test_stats_breaks_down_by_strategy_when_multiple():
     assert "전략별" in t and "`A`" in t and "`B`" in t
 
 
+# ---- /control 패널 ----
+
+def test_control_text_running_and_paused():
+    r = v.control_text(paused=False, has_position=False)
+    assert "실행중" in r and "시작" in r and "정지" in r
+    p = v.control_text(paused=True, has_position=False)
+    assert "정지됨" in p
+
+
+def test_control_text_warns_when_holding_position():
+    """실행중 + 포지션 보유면 '정지해도 자연청산까지 관리' 안내가 붙는다(graceful 강조)."""
+    t = v.control_text(paused=False, has_position=True)
+    assert "자연 청산까지 관리" in t
+    # 이미 정지 상태면 그 안내는 불필요
+    assert "자연 청산까지 관리" not in v.control_text(paused=True, has_position=True)
+
+
 # ---- period_bounds ----
 
 def test_period_bounds():

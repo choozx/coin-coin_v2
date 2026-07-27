@@ -133,6 +133,23 @@ def position_text(state: dict) -> str:
     return "\n".join(rows)
 
 
+def control_text(paused: bool, has_position: bool) -> str:
+    """/control — 봇 시작/정지 패널. 버튼 아래 붙는 안내 텍스트.
+
+    정지는 '우아한 정지'(control.py) — 새 진입만 막고 보유 포지션은 자연 청산까지 계속 관리한다.
+    강제청산이 아니므로 포지션을 들고 있어도 안전하게 누를 수 있다.
+    """
+    state = "⏸ 정지됨 (새 진입 차단 중)" if paused else "▶️ 실행중"
+    lines = [
+        f"**봇 제어** · 현재: {state}",
+        "• ▶️ **시작** — 새 진입 재개",
+        "• ⏸ **정지** — 새 진입 차단 (graceful: 보유 포지션은 계속 관리·청산, 강제청산 안 함)",
+    ]
+    if has_position and not paused:
+        lines.append("_보유 포지션 있음 — 정지해도 이 포지션은 자연 청산까지 관리됩니다._")
+    return "\n".join(lines)
+
+
 def stats_text(stats: dict, label: str = "전체") -> str:
     """/stats — 원장 집계(승률·손익비·MDD). label 은 기간 표기('오늘'/'7일'/'전체')."""
     if not stats or stats.get("n", 0) == 0:
