@@ -93,6 +93,7 @@ class LiveTrader:
         self._bot_cfg = {}                   # 마지막 적용한 봇 설정
         self._rebuild_effective()            # 신호(프리셋) + 봇설정(심볼·사이징·실행·필터) 병합
         self._last_ot = None                 # 마지막으로 처리한 1분봉 open_time
+        self._last_price = None              # 마지막 닫힌 1분봉 종가(대시보드 현재가·미실현손익)
         self._started_at = int(time.time() * 1000)
         # 멈춤/재개는 control.json 이 진실. 시작 시점의 값을 그대로 읽어둔다 —
         # False 로 시작하면 첫 폴링에서 '멈춤으로 바뀜'을 오탐해 기동 때마다 알림이 한 번 더 간다.
@@ -310,6 +311,21 @@ class LiveTrader:
         notify(f"🔄 전략 전환 {old} → {self.preset.name} ({self.preset.symbol} {self.preset.timeframe})")
         print(f"  [전략전환] {old} → {self.preset.name} ({self.preset.symbol} {self.preset.timeframe})", flush=True)
 
+    def _unrealized(self, pos) -> dict:
+        """보유 포지션의 현재가·미실현손익(대시보드). 현재가 = 마지막 닫힌 1분봉 종가.
+
+        uPnl 은 gross(수수료·펀딩 전) — 백테스트 Stepper 가 종가로 평가하는 것과 같은 기준이라
+        이력의 실현손익과 미묘하게 다를 수 있다(그건 수수료·펀딩까지 반영). uPnlPct 는 증거금
+        대비 수익률(ROE) — 레버리지가 반영된, 레버리지 트레이더가 보는 숫자.
+        """
+        mark = self._last_price
+        if mark is None:
+            return {"mark": None, "uPnl": None, "uPnlPct": None}
+        gross = pos.side * (float(mark) - float(pos.entry_price)) * float(pos.qty)
+        margin = pos.margin or (float(pos.entry_price) * float(pos.qty) / max(1, pos.leverage))
+        return {"mark": round(float(mark), 2), "uPnl": round(gross, 2),
+                "uPnlPct": round(gross / margin * 100, 2) if margin else None}
+
     def _write_state(self):
         """포지션·트레이드·잔고 스냅샷을 state_path에 원자적으로 기록(대시보드용)."""
         if not self.state_path:
@@ -341,7 +357,8 @@ class LiveTrader:
             "position": None if pos is None else {
                 "side": pos.side, "entryPrice": _px(pos.entry_price), "qty": round(pos.qty, 6),
                 "leverage": pos.leverage, "stop": _px(pos.stop_price), "tp": _px(pos.tp_price),
-                "liq": _px(pos.liq_price), "entryTime": int(pos.entry_time)},
+                "liq": _px(pos.liq_price), "entryTime": int(pos.entry_time),
+                **self._unrealized(pos)},
             "trades": [{
                 "side": t.side, "entryTime": int(t.entry_time), "entryPrice": _px(t.entry_price),
                 "exitTime": int(t.exit_time), "exitPrice": _px(t.exit_price),
@@ -383,6 +400,7 @@ class LiveTrader:
             self._maybe_switch_network(base)
         if len(base) < 2:
             return []
+        self._last_price = float(base.close[len(base) - 1])   # 현재가 = 마지막 닫힌 1분봉 종가
         self._sync_paused()              # 멈춤이면 새 진입 차단 + 바뀐 순간엔 알림
         signal = resample(base, self.tf_min)
         bar_of, is_close = signal_close_index(base, self.tf_min)

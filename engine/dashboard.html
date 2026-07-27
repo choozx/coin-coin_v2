@@ -287,9 +287,15 @@ async function tick(){
     <div class="card"><div class="k">총 거래</div><div class="v">${d.numTrades}</div></div>
   </div>`;
   if (pos){
+    // 미실현손익: 금액(gross) + 증거금 대비 수익률(ROE). 현재가는 마지막 닫힌 1분봉 종가.
+    const upCls = pos.uPnl==null ? "" : (pos.uPnl>=0?"g":"r");
+    const upTxt = pos.uPnl==null ? "–"
+      : `${pos.uPnl>=0?"+":""}${fmt(pos.uPnl)}${pos.uPnlPct==null?"":` (${pos.uPnlPct>=0?"+":""}${fmt(pos.uPnlPct)}%)`}`;
     live += `<div class="pos"><h3>현재 포지션</h3><div class="posgrid">
       <div><div class="k">방향</div><div class="v ${posCls}">${pos.side>0?"롱 LONG":"숏 SHORT"}</div></div>
       <div><div class="k">진입가</div><div class="v">${fmt(pos.entryPrice)}</div></div>
+      <div><div class="k">현재가</div><div class="v">${pos.mark==null?"–":fmt(pos.mark)}</div></div>
+      <div><div class="k">미실현손익</div><div class="v ${upCls}">${upTxt}</div></div>
       <div><div class="k">수량</div><div class="v">${fmt(pos.qty)}</div></div>
       <div><div class="k">레버리지</div><div class="v">${pos.leverage}x</div></div>
       <div><div class="k">손절</div><div class="v">${pos.stop==null?"–":fmt(pos.stop)}</div></div>

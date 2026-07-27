@@ -219,6 +219,26 @@ def test_position_sidecar_roundtrip():
     assert ex.load_saved_position() == {}
 
 
+def test_unrealized_pnl_marks_to_last_close_as_roe():
+    """보유 포지션의 미실현손익 = 마지막 종가 기준 gross, 수익률은 증거금 대비 ROE(레버리지 반영)."""
+    from engine.live import LiveTrader
+
+    class S:
+        _last_price = 110.0
+    s = S()
+    long = _pos(side=1, price=100.0, qty=1.0, lev=5)      # margin = 100*1/5 = 20
+    u = LiveTrader._unrealized(s, long)
+    assert u["mark"] == 110.0
+    assert _near(u["uPnl"], 10.0)                          # (110-100)*1
+    assert _near(u["uPnlPct"], 50.0)                       # 10/20*100 — 5x 라 가격 +10%가 ROE +50%
+    short = _pos(side=-1, price=100.0, qty=1.0, lev=5)
+    assert _near(LiveTrader._unrealized(s, short)["uPnl"], -10.0)   # 숏은 오르면 손실
+
+    class S0:
+        _last_price = None                                 # 첫 폴 전 → 현재가 미확정
+    assert LiveTrader._unrealized(S0(), long) == {"mark": None, "uPnl": None, "uPnlPct": None}
+
+
 def test_merge_fills_weighted_average():
     a = Fill(price=100.0, qty=0.5, maker_qty=0.5, fee=0.01)
     b = Fill(price=102.0, qty=0.5, taker_qty=0.5, fee=0.05)
