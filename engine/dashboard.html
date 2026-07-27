@@ -171,7 +171,7 @@ const fmtAgo = ms => {                               // 경과시간 사람이 �
   const h = Math.floor(m/60);   if (h < 24) return `${h}시간 ${m%60}분 전`;
   return `${Math.floor(h/24)}일 ${h%24}시간 전`;
 };
-const RN = {take_profit:"익절", stop_loss:"손절", trailing:"트레일링", signal:"신호청산", time:"시간청산", supertrend:"ST전환", liquidation:"강제청산"};
+const RN = {take_profit:"익절", stop_loss:"손절", trailing:"트레일링", signal:"신호청산", time:"시간청산", supertrend:"ST전환", liquidation:"강제청산", external:"외부청산"};
 
 function svcBtn(svc, label, state){
   const paused = state === "paused";

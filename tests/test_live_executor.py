@@ -268,6 +268,182 @@ def test_symbol_change_rebinds_and_is_blocked_while_holding():
     assert holding.symbol == "BTCUSDT"
 
 
+# ---- 폴 루프 중 거래소 포지션 재조정 (유령 포지션 방지) --------------------
+# 재시작 때만 맞추면, 도는 중에 봇 모르게 강제청산·수동청산·수동진입·부분축소가 나도 엔진이
+# 유령 포지션 위에서 판정을 계속한다. _reconcile_live_position 이 매 폴 그 갭을 닫는다.
+
+class _FakeBase:
+    """open_time 만 있으면 되는 초경량 캔들 대역(_external_close 가 마지막 봉 시각만 씀)."""
+    def __init__(self, times):
+        self.open_time = times
+
+    def __len__(self):
+        return len(self.open_time)
+
+
+class _RecEx:
+    """reconcile 라우팅용 가짜 executor — sync_position/position/_save_position 만."""
+    def __init__(self, xpos, local, fail=False):
+        self._xpos, self.position, self._fail = xpos, local, fail
+        self.saved = 0
+
+    def sync_position(self):
+        if self._fail:
+            raise RuntimeError("조회 실패")
+        return self._xpos
+
+    def _save_position(self):
+        self.saved += 1
+
+
+class _LP:
+    """로컬 포지션 대역(side/qty 만 본다)."""
+    def __init__(self, side, qty):
+        self.side, self.qty = side, qty
+
+
+class _RecTrader:
+    """reconcile 라우팅만 확인 — 하위 동작(_external_close/_sync_live_position)은 호출만 기록."""
+    def __init__(self, ex, is_live=True):
+        self.is_live, self.ex = is_live, ex
+        self._last_price, self._flat_divergence, self.calls = 95.0, 0, []
+
+    def _external_close(self, pos, base):
+        self.calls.append("external_close")
+
+    def _sync_live_position(self, base, context="재시작"):
+        self.calls.append(f"sync:{context}")
+
+
+def _reconcile(rec, base=None):
+    LiveTrader._reconcile_live_position(rec, base)
+
+
+def _xp(side=1, qty=1.0, price=100.0):
+    return {"side": side, "qty": qty, "entry_price": price, "leverage": 5,
+            "liq_price": 80.0, "margin": 20.0}
+
+
+def test_reconcile_flat_divergence_needs_two_polls():
+    """거래소 무포지션인데 로컬 보유 — 1폴은 관망, 2폴 연속이어야 외부청산 기록(순간 조회오류 방어)."""
+    rec = _RecTrader(_RecEx(xpos=None, local=_LP(1, 1.0)))
+    _reconcile(rec)
+    assert rec._flat_divergence == 1 and rec.calls == []      # 1회차: 관망
+    _reconcile(rec)
+    assert rec.calls == ["external_close"] and rec._flat_divergence == 0
+
+
+def test_reconcile_transient_flat_does_not_close():
+    """1폴 플랫이었다가 다음 폴에 포지션이 다시 보이면 외부청산하지 않는다(디바운스 리셋)."""
+    ex = _RecEx(xpos=None, local=_LP(1, 1.0))
+    rec = _RecTrader(ex)
+    _reconcile(rec)                                           # div=1
+    ex._xpos = _xp(1, 1.0)                                    # 거래소에 다시 보임(조회오류였을 뿐)
+    _reconcile(rec)
+    assert rec.calls == [] and rec._flat_divergence == 0      # 기록 안 함
+
+
+def test_reconcile_adopts_untracked_position():
+    """거래소 보유 + 로컬 무포지션 → 추적 안 되던 포지션 인계."""
+    rec = _RecTrader(_RecEx(xpos=_xp(1, 1.0), local=None))
+    _reconcile(rec)
+    assert rec.calls == ["sync:동기화"]
+
+
+def test_reconcile_adjusts_qty_on_partial_change():
+    """방향 같고 수량만 어긋나면(>2%) 거래소 수량으로 맞추고 사이드카 갱신."""
+    import engine.live as live
+    local = _LP(1, 1.0)
+    ex = _RecEx(xpos=_xp(1, 1.5), local=local)
+    rec = _RecTrader(ex)
+    orig, sent = live.notify, []
+    live.notify = lambda m: sent.append(m)
+    try:
+        _reconcile(rec)
+    finally:
+        live.notify = orig
+    assert local.qty == 1.5 and ex.saved == 1 and rec.calls == []
+    assert any("수량 조정" in m for m in sent)
+
+
+def test_reconcile_ignores_qty_within_tolerance():
+    """2% 이내 차이는 반올림·정밀도 노이즈로 보고 건드리지 않는다."""
+    local = _LP(1, 1.0)
+    rec = _RecTrader(_RecEx(xpos=_xp(1, 1.01), local=local))
+    _reconcile(rec)
+    assert local.qty == 1.0 and rec.ex.saved == 0 and rec.calls == []
+
+
+def test_reconcile_reinherits_on_side_flip():
+    """방향까지 다르면 통째로 재인계(로컬을 비우고 거래소 기준으로)."""
+    import engine.live as live
+    ex = _RecEx(xpos=_xp(-1, 1.0), local=_LP(1, 1.0))
+    rec = _RecTrader(ex)
+    orig = live.notify
+    live.notify = lambda m: None
+    try:
+        _reconcile(rec)
+    finally:
+        live.notify = orig
+    assert ex.position is None and rec.calls == ["sync:동기화"]
+
+
+def test_reconcile_skips_on_fetch_failure():
+    """거래소 조회가 실패하면 이번 폴은 손대지 않는다(모르는 채 지우지 않기)."""
+    local = _LP(1, 1.0)
+    rec = _RecTrader(_RecEx(xpos=None, local=local, fail=True))
+    _reconcile(rec)
+    assert rec.calls == [] and rec._flat_divergence == 0 and rec.ex.position is local
+
+
+def test_reconcile_noop_when_in_sync():
+    """양쪽이 일치하면 아무 일도 없다(가장 흔한 경로)."""
+    rec = _RecTrader(_RecEx(xpos=_xp(1, 1.0), local=_LP(1, 1.0)))
+    _reconcile(rec)
+    assert rec.calls == [] and rec._flat_divergence == 0
+
+
+def test_reconcile_skips_paper_mode():
+    """페이퍼는 거래소가 없으니 재조정을 건너뛴다."""
+    ex = _RecEx(xpos=None, local=_LP(1, 1.0))
+    rec = _RecTrader(ex, is_live=False)
+    _reconcile(rec)
+    assert rec.calls == [] and rec._flat_divergence == 0      # sync_position 도 안 부름
+
+
+def test_external_close_records_ledger_and_clears_position():
+    """봇 몰래 사라진 포지션 → 마지막 종가로 external 청산 기록 + 로컬 정리 + 알림."""
+    import engine.live as live
+    broker = FakeBroker()
+    ex = _ex(broker)
+    ex.open(_pos(price=100.0, qty=1.0))               # 포지션 보유 + 사이드카 기록
+    broker.position_data = None                       # 거래소는 이미 플랫
+
+    class T:
+        pass
+    t = T()
+    t.ex, t._last_price = ex, 95.0
+    t.preset = type("P", (), {"name": "슈퍼", "symbol": "BTCUSDT", "timeframe": "15m"})()
+    t.strategy_path, t.mode = None, "testnet"
+    t.ledger_path = os.path.join(tempfile.mkdtemp(prefix="ledger-"), "t.db")
+    base = _FakeBase([1_000, 2_000])
+    orig, sent = live.notify, []
+    live.notify = lambda m: sent.append(m)
+    try:
+        LiveTrader._external_close(t, ex.position, base)
+    finally:
+        live.notify = orig
+
+    assert ex.position is None
+    assert len(ex.trades) == 1
+    tr = ex.trades[-1]
+    assert tr.exit_reason == "external" and tr.exit_price == 95.0 and tr.exit_time == 2_000
+    from engine import ledger
+    rows = ledger.load(t.ledger_path, mode="testnet")
+    assert len(rows) == 1 and rows[0]["reason"] == "external"
+    assert any("외부 청산" in m for m in sent)
+
+
 # ---- 거래소 네트워크 전환 (테스트넷 ↔ 실돈) --------------------------------
 # 전환은 플래그 뒤집기가 아니라 '다른 계정으로 이사'다. 잘못 새면 가짜돈 전략이 실돈에 나가거나,
 # 반쯤 바뀐 상태로 매매가 이어진다. 아래가 그 두 가지를 막는다.

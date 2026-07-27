@@ -94,6 +94,7 @@ class LiveTrader:
         self._rebuild_effective()            # 신호(프리셋) + 봇설정(심볼·사이징·실행·필터) 병합
         self._last_ot = None                 # 마지막으로 처리한 1분봉 open_time
         self._last_price = None              # 마지막 닫힌 1분봉 종가(대시보드 현재가·미실현손익)
+        self._flat_divergence = 0            # '거래소 무포지션인데 로컬 보유' 연속 관측 수(디바운스)
         self._started_at = int(time.time() * 1000)
         # 멈춤/재개는 control.json 이 진실. 시작 시점의 값을 그대로 읽어둔다 —
         # False 로 시작하면 첫 폴링에서 '멈춤으로 바뀜'을 오탐해 기동 때마다 알림이 한 번 더 간다.
@@ -408,6 +409,7 @@ class LiveTrader:
         resolver = SeriesResolver(signal)
 
         self._events = []                # hook(_on_open/_on_close)이 여기에 쌓는다
+        self._reconcile_live_position(base)   # 유령 포지션 위에서 판정하지 않게 스텝 전에 거래소와 맞춘다
         # 아직 처리 안 한 1분봉만 (갭이 있어도 순서대로 따라잡음)
         start = 0
         if self._last_ot is not None:
@@ -473,8 +475,8 @@ class LiveTrader:
         start = "플랫으로" if self.ex.position is None else "포지션 인계받아"
         print(f"부트스트랩: {len(base)}봉 워밍업, {start} 시작 → 이후 새로 닫히는 봉만 실행.", flush=True)
 
-    def _sync_live_position(self, base):
-        """재시작 시 거래소의 실제 포지션을 진실로 삼아 엔진 상태를 맞춘다.
+    def _sync_live_position(self, base, context: str = "재시작"):
+        """거래소의 실제 포지션을 진실로 삼아 엔진 상태를 맞춘다(재시작·폴 중 재조정 공통).
 
         거래소는 손절/익절가·최고가(트레일링) 를 모른다 — 그건 우리가 진입 때 남긴 사이드카에서
         되살린다. 사이드카가 없거나 수량이 어긋나면 그 값들은 포기하고(nan) 크게 경고한다:
@@ -512,12 +514,78 @@ class LiveTrader:
         self.ex.position = p
         self.ex._save_position()
         side_k = "롱" if p.side > 0 else "숏"
-        msg = (f"🔁 재시작: 거래소 포지션 인계 {side_k} {p.qty} @{p.entry_price:.2f} "
+        msg = (f"🔁 {context}: 거래소 포지션 인계 {side_k} {p.qty} @{p.entry_price:.2f} "
                f"x{p.leverage} (손절 {'없음' if np.isnan(p.stop_price) else f'{p.stop_price:.2f}'})")
         if not same:
             msg += " ⚠️ 로컬 기록 불일치 — 손절/익절가를 못 살렸습니다. 대시보드에서 확인하세요."
         notify(msg)
         print(f"  [동기화] {msg}", flush=True)
+
+    def _reconcile_live_position(self, base):
+        """폴 루프 중 거래소 실제 포지션과 로컬 상태를 대조해 어긋나면 맞춘다(live 전용).
+
+        재시작 때만 맞추면, 도는 중에 봇 모르게 강제청산·수동청산·수동진입·부분축소가 나도
+        엔진이 '유령 포지션' 위에서 판정을 계속한다. 그 갭을 매 폴(스텝 전에) 닫는다.
+        조회가 실패하면 이번 폴은 손대지 않는다 — 모르는 채로 지우는 게 제일 위험하다.
+        """
+        if not self.is_live or not hasattr(self.ex, "sync_position"):
+            return
+        try:
+            xpos = self.ex.sync_position()        # 거래소 진실(None=플랫)
+        except Exception as e:
+            print(f"  [동기화] 거래소 포지션 조회 실패 — 이번 폴 스킵: {e}", flush=True)
+            return
+        local = self.ex.position
+
+        # ① 거래소 무포지션 + 로컬 보유 → 봇 모르게 청산됨. 파괴적(원장 기록)이라 2폴 연속 확인 후 조치.
+        if xpos is None and local is not None:
+            self._flat_divergence += 1
+            if self._flat_divergence < 2:
+                print("  [동기화] 거래소 무포지션인데 로컬 보유 — 1회차, 다음 폴 재확인", flush=True)
+                return
+            self._flat_divergence = 0
+            self._external_close(local, base)
+            return
+        self._flat_divergence = 0
+
+        # ② 거래소 보유 + 로컬 무포지션 → 추적 안 되던 포지션(수동진입/상태저장 실패) → 인계.
+        if xpos is not None and local is None:
+            self._sync_live_position(base, context="동기화")
+            return
+
+        # ③ 둘 다 보유하지만 방향/수량 불일치 → 거래소를 기준으로 맞춘다.
+        if xpos is not None and local is not None:
+            if xpos["side"] != local.side:
+                notify(f"⚠️ 포지션 방향 불일치(거래소 {xpos['side']} vs 로컬 {local.side}) — 거래소 기준 재인계")
+                self.ex.position = None            # 방향까지 다르면 통째로 재인계가 안전
+                self._sync_live_position(base, context="동기화")
+            elif abs(xpos["qty"] - local.qty) > local.qty * 0.02:
+                old = local.qty
+                local.qty = float(xpos["qty"])     # 부분 축소/증가 반영(방향 동일 → 손절·익절 유지)
+                self.ex._save_position()
+                notify(f"⚠️ 포지션 수량 조정 {old} → {xpos['qty']} (거래소 기준)")
+                print(f"  [동기화] 수량 조정 {old} → {xpos['qty']}", flush=True)
+
+    def _external_close(self, pos, base):
+        """봇 모르게 사라진 포지션을 '외부 청산(external)'으로 원장에 남기고 로컬 정리.
+
+        실제 체결가를 모르므로 청산가는 마지막 종가로 근사한다 — reason='external' 이 그 사실을
+        표시한다. 실거래 잔고는 어차피 거래소에서 읽어 정확하지만, 이력이 비면 '왜 잔고가 바뀌었나'를
+        못 쫓으므로 한 건 남긴다(펀딩은 거래소 정산분을 조회해 반영).
+        """
+        exit_price = float(self._last_price or pos.entry_price)
+        exit_time = int(base.open_time[len(base) - 1])
+        trade = self.ex._record(pos, exit_price, 0.0, "external", exit_time)
+        try:
+            ledger.record(trade, symbol=self.preset.symbol,
+                          strategy=self.strategy_path or self.preset.name,
+                          mode=self.mode, equity_after=self.ex.equity(), db_path=self.ledger_path)
+        except Exception as e:
+            print(f"  [원장기록 실패] {e}", flush=True)
+        side_k = "롱" if pos.side > 0 else "숏"
+        notify(f"⚠️ 봇 몰래 청산됨 — 외부 청산으로 기록 ({side_k} @{pos.entry_price:.2f} → ~{exit_price:.2f} "
+               f"pnl ~{trade.pnl:+.2f}). 강제청산/수동청산 의심 — 청산가는 근사치.")
+        print(f"  [동기화] 외부 청산 기록 pnl~{trade.pnl:+.2f} (청산가 근사 {exit_price:.2f})", flush=True)
 
     def run(self, interval: int = 60, once: bool = False):
         """폴링 루프. once=True면 한 번만. interval초마다 poll_once(now)."""
