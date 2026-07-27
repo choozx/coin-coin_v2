@@ -224,40 +224,54 @@ class BinanceBroker:
         return self._fill_of(self._settled(o), fallback_maker=False)
 
     def limit_then_market(self, side: str, qty: float, timeout_s: float,
-                          reduce_only: bool = False) -> Fill:
-        """post-only 지정가(BBO) → timeout 초 미체결분은 시장가 추격. 반환: 합산 Fill."""
+                          reduce_only: bool = False, max_attempts: int = 1) -> Fill:
+        """post-only 지정가(BBO)를 매 회차 재호가하며 최대 max_attempts 회 추격 →
+        소진 후 남은 수량만 시장가(taker). 반환: 회차별 체결을 합산한 Fill.
+
+        max_attempts=1 이면 '한 번 걸고 안 되면 taker'(구 동작). >1 이면 미체결 시 취소하고
+        새 BBO 로 다시 걸기를 반복 — 호가가 도망가도 붙는 쪽을 따라가 maker 비율을 높인다.
+        회차당 대기는 timeout_s(최악 max_attempts×timeout_s 초 블록). 이미 채워진 maker 분은
+        시장가 마무리에도 그대로 유지된다.
+        """
         if timeout_s <= 0:
             return self.market_order(side, qty, reduce_only)
-        bid, ask = self.bbo()
-        limit = self.round_price(bid if side == "buy" else ask)   # 붙는 쪽에 걸어야 maker
+        attempts = max(1, int(max_attempts))
         params = {"timeInForce": "GTX"}                           # GTX = post-only(테이커면 거부)
         if reduce_only:
             params["reduceOnly"] = True
-        try:
-            o = self.client().create_order(self.symbol, "limit", side, qty, limit, params)
-        except Exception as e:
-            if not _is_post_only_reject(e):
-                raise OrderError(f"지정가 주문 거부: {e}")
-            return self.market_order(side, qty, reduce_only)      # 이미 교차 → 바로 taker
-
-        o = self._wait_fill(o, timeout_s)
-        maker = self._fill_of(o, fallback_maker=True)
-        remaining = self.round_qty(max(0.0, qty - maker.qty))
+        filled = None                                             # 누적 maker 체결(합산 Fill)
+        remaining = self.round_qty(qty)
+        limit = None
+        for _ in range(attempts):
+            if remaining <= 0:
+                break
+            bid, ask = self.bbo()                                 # 매 회차 재호가(reprice)
+            limit = self.round_price(bid if side == "buy" else ask)   # 붙는 쪽에 걸어야 maker
+            try:
+                o = self.client().create_order(self.symbol, "limit", side, remaining, limit, params)
+            except Exception as e:
+                if not _is_post_only_reject(e):
+                    raise OrderError(f"지정가 주문 거부: {e}")
+                break                                             # 이미 교차 → 남은 수량 taker 로 마무리
+            o = self._wait_fill(o, timeout_s)
+            got = self._fill_of(o, fallback_maker=True)
+            if self.round_qty(max(0.0, remaining - got.qty)) > 0:
+                try:
+                    self.client().cancel_order(o["id"], self.symbol)
+                except Exception:
+                    pass                                          # 그 사이 체결됐을 수 있다 → 재확인
+                got = self._fill_of(self._settled({"id": o["id"]}), fallback_maker=True)
+            filled = got if filled is None else _merge(filled, got)
+            remaining = self.round_qty(max(0.0, qty - filled.qty))
         if remaining <= 0:
-            return maker
-        try:
-            self.client().cancel_order(o["id"], self.symbol)
-        except Exception:
-            pass                                                  # 그 사이 체결됐을 수 있다 → 아래서 재확인
-        done = self._fill_of(self._settled({"id": o["id"]}), fallback_maker=True)
-        remaining = self.round_qty(max(0.0, qty - done.qty))
-        if remaining <= 0:
-            return done
-        try:
-            self.check_order_size(remaining, limit)
-        except OrderError:
-            return done                                           # 잔량이 최소주문 미만이면 그대로 둔다
-        return _merge(done, self.market_order(side, remaining, reduce_only))
+            return filled
+        if filled is not None:                                    # 잔량이 최소주문 미만이면 그대로 둔다
+            try:
+                self.check_order_size(remaining, limit)
+            except OrderError:
+                return filled
+        taker = self.market_order(side, remaining, reduce_only)
+        return taker if filled is None else _merge(filled, taker)
 
     def _wait_fill(self, order: dict, timeout_s: float) -> dict:
         """지정가가 다 채워질 때까지(또는 timeout) 폴링."""

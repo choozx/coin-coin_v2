@@ -135,7 +135,8 @@ def _testnet_flag() -> bool:
         "(.env에 인라인 주석이 값에 붙지 않았는지 확인)")
 
 
-DEFAULT_FILL_TIMEOUT = 3.0       # post-only 지정가를 기다리는 초 — 넘으면 시장가 추격
+DEFAULT_FILL_TIMEOUT = 3.0       # post-only 지정가를 기다리는 초 — 넘으면 재호가/시장가 추격
+DEFAULT_MAKER_ATTEMPTS = 5       # BBO 재호가 추격 횟수 — 소진 후 남은 수량만 taker(1이면 구 동작)
 LIVE_POSITION_PATH = os.environ.get("LIVE_POSITION_PATH", "data/live_position.json")
 
 
@@ -169,7 +170,7 @@ class LiveExecutor(Executor):
 
     def __init__(self, testnet: bool = None, symbol: str = None,
                  taker_fee: float = None, maker_fee: float = None,
-                 fill_timeout_s: float = None, broker=None,
+                 fill_timeout_s: float = None, maker_max_attempts: int = None, broker=None,
                  position_path: str = LIVE_POSITION_PATH, allow_mainnet: bool = False):
         self.testnet = _testnet_flag() if testnet is None else testnet
         # 실돈 권한은 기동 때 한 번 준다(--real-money). 대시보드 스위치는 '이미 준 권한 안에서'만
@@ -185,6 +186,8 @@ class LiveExecutor(Executor):
         self.taker_fee = tk if taker_fee is None else taker_fee
         self.fill_timeout_s = (float(os.environ.get("MAKER_FILL_TIMEOUT_SEC", DEFAULT_FILL_TIMEOUT))
                                if fill_timeout_s is None else fill_timeout_s)
+        self.maker_max_attempts = (int(os.environ.get("MAKER_MAX_ATTEMPTS", DEFAULT_MAKER_ATTEMPTS))
+                                   if maker_max_attempts is None else int(maker_max_attempts))
         self.position_path = position_path
         self.position = None
         self.trades: list[ClosedTrade] = []      # 원장에서 복원됨(가드레일의 연속손실 계산용)
@@ -312,7 +315,8 @@ class LiveExecutor(Executor):
         b.check_order_size(qty, pos.entry_price)          # 미달이면 OrderError → 진입 스킵
         b.set_leverage(pos.leverage)
         side = "buy" if pos.side == 1 else "sell"
-        fill = (b.limit_then_market(side, qty, self.fill_timeout_s) if is_maker
+        fill = (b.limit_then_market(side, qty, self.fill_timeout_s,
+                                    max_attempts=self.maker_max_attempts) if is_maker
                 else b.market_order(side, qty))
         if fill.qty <= 0:
             raise OrderError("진입 주문이 하나도 안 채워짐 — 이번 신호는 건너뜀")
@@ -367,7 +371,8 @@ class LiveExecutor(Executor):
 
         side = "sell" if pos.side == 1 else "buy"
         qty = self._broker.round_qty(pos.qty)
-        fill = (self._broker.limit_then_market(side, qty, self.fill_timeout_s, reduce_only=True)
+        fill = (self._broker.limit_then_market(side, qty, self.fill_timeout_s, reduce_only=True,
+                                               max_attempts=self.maker_max_attempts)
                 if is_maker else self._broker.market_order(side, qty, reduce_only=True))
         if fill.qty <= 0:
             raise OrderError(f"청산 주문 미체결({reason}) — 포지션 유지, 다음 봉에 재시도")
