@@ -562,9 +562,12 @@ def test_notify_sets_user_agent_and_right_payload_key():
     orig = live.urllib.request.urlopen
     live.urllib.request.urlopen = lambda req, timeout=None: sent.append(req) or FakeResp()
     try:
-        with _with_env(NOTIFY_WEBHOOK="https://discord.com/api/webhooks/1/abc"):
+        # 봇 토큰이 없어야 웹훅 경로를 탄다 — 환경에 새어 있을 수 있으니 명시적으로 끈다.
+        with _with_env(DISCORD_BOT_TOKEN=None, DISCORD_CHANNEL_ID=None,
+                       NOTIFY_WEBHOOK="https://discord.com/api/webhooks/1/abc"):
             live.notify("hi")
-        with _with_env(NOTIFY_WEBHOOK="https://hooks.slack.com/services/x"):
+        with _with_env(DISCORD_BOT_TOKEN=None, DISCORD_CHANNEL_ID=None,
+                       NOTIFY_WEBHOOK="https://hooks.slack.com/services/x"):
             live.notify("hi")
     finally:
         live.urllib.request.urlopen = orig
@@ -573,9 +576,51 @@ def test_notify_sets_user_agent_and_right_payload_key():
     for req in sent:
         ua = req.get_header("User-agent") or ""
         assert ua and "urllib" not in ua.lower(), f"UA 없음/기본값: {ua!r}"
+        assert req.get_header("Authorization") is None    # 웹훅엔 인증 헤더 없음
     import json as _j
     assert "content" in _j.loads(sent[0].data)      # Discord
     assert "text" in _j.loads(sent[1].data)         # Slack
+
+
+def test_notify_prefers_bot_token_over_webhook():
+    """봇 토큰+채널이 있으면 웹훅 대신 봇 채널 REST 로 보낸다(Authorization: Bot, 채널 엔드포인트)."""
+    import engine.live as live
+    import json as _j
+    sent = []
+
+    class FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    orig = live.urllib.request.urlopen
+    live.urllib.request.urlopen = lambda req, timeout=None: sent.append(req) or FakeResp()
+    try:
+        with _with_env(DISCORD_BOT_TOKEN="tok123", DISCORD_CHANNEL_ID="999",
+                       NOTIFY_WEBHOOK="https://discord.com/api/webhooks/1/abc"):  # 있어도 봇이 이긴다
+            live.notify("hi")
+    finally:
+        live.urllib.request.urlopen = orig
+
+    assert len(sent) == 1
+    req = sent[0]
+    assert req.full_url == "https://discord.com/api/v10/channels/999/messages"
+    assert req.get_header("Authorization") == "Bot tok123"
+    assert req.get_header("User-agent") and "urllib" not in req.get_header("User-agent").lower()
+    assert _j.loads(req.data)["content"] == "hi"
+
+
+def test_notify_silent_when_nothing_configured():
+    """봇도 웹훅도 없으면 조용히 아무것도 안 보낸다(설정 안 했으면 무동작)."""
+    import engine.live as live
+    sent = []
+    orig = live.urllib.request.urlopen
+    live.urllib.request.urlopen = lambda req, timeout=None: sent.append(req)
+    try:
+        with _with_env(DISCORD_BOT_TOKEN=None, DISCORD_CHANNEL_ID=None, NOTIFY_WEBHOOK=None):
+            live.notify("hi")
+    finally:
+        live.urllib.request.urlopen = orig
+    assert sent == []
 
 
 def test_notify_failure_is_logged_not_swallowed(capsys=None):
@@ -589,7 +634,8 @@ def test_notify_failure_is_logged_not_swallowed(capsys=None):
     live.urllib.request.urlopen = boom
     buf = io.StringIO()
     try:
-        with _with_env(NOTIFY_WEBHOOK="https://discord.com/api/webhooks/1/abc"):
+        with _with_env(DISCORD_BOT_TOKEN=None, DISCORD_CHANNEL_ID=None,
+                       NOTIFY_WEBHOOK="https://discord.com/api/webhooks/1/abc"):
             with contextlib.redirect_stdout(buf):
                 live.notify("hi")            # 예외가 밖으로 나가면 안 됨
     finally:

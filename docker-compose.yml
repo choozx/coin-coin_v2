@@ -23,6 +23,9 @@ services:
       PRESET: ${PRESET:-presets/examples/rsi-oversold-long.json}
       INTERVAL: ${INTERVAL:-60}
       EQUITY: ${EQUITY:-10000}
+      # 알림: 봇 토큰+채널이 있으면 봇으로(버튼 준비), 없으면 웹훅으로 폴백.
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+      DISCORD_CHANNEL_ID: ${DISCORD_CHANNEL_ID:-}   # 알림 보낼 채널(봇 발신 시 필수)
       NOTIFY_WEBHOOK: ${NOTIFY_WEBHOOK:-}
       CONTROL_PATH: /app/data/control.json  # 대시보드의 멈춤/재개 신호를 읽음
       LEDGER_PATH: /app/data/trades.db      # 매매 원장(대시보드가 읽음)
