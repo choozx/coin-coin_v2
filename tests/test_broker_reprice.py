@@ -1,0 +1,179 @@
+"""BBO 재호가 체결 루프 — 실 브로커 로직을 '가짜 ccxt 클라이언트'로 검증(네트워크 없음).
+
+test_live_executor.py 의 FakeBroker 는 limit_then_market 을 통째로 대역한다(executor 분기 검증용).
+여기서는 반대로 **limit_then_market 자신**을 시험한다 — 그래서 그 안이 부르는 ccxt 표면
+(fetch_order_book·create_order·fetch_order·cancel_order·fetch_my_trades)만 가짜로 끼우고,
+재호가 루프·부분체결 누적·GTX 거부·taker 마무리 경로를 그대로 밟는다.
+
+지키려는 것: maker 를 매 회차 새 BBO 로 추격하되, 소진 후 남은 수량만 taker 로 마무리하고,
+회차별 부분체결이 합산 Fill 로 정확히 접히는가.
+"""
+from __future__ import annotations
+
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from engine.binance_broker import BinanceBroker, OrderError    # noqa: E402
+
+
+class FakeCCXT:
+    """주문을 받아 '정해둔 회차별 체결'을 돌려주는 가짜 ccxt 클라이언트.
+
+    books      : 회차별 (bid, ask) — limit 주문마다 하나씩 소비(=재호가 확인).
+    limit_fills: limit 주문마다 실제 체결될 수량(요청 수량 이하). 부족분은 미체결로 남는다.
+    market_px  : 시장가(taker) 체결가. remaining 을 그 가격에 전량 체결.
+    reject_at  : 이 인덱스의 limit 주문은 post-only(-5022) 거부를 던진다(이미 교차).
+    """
+
+    def __init__(self, books, limit_fills, market_px=None, reject_at=()):
+        self.books = books if isinstance(books, list) else [books]
+        self.limit_fills = list(limit_fills)
+        self.market_px = market_px
+        self.reject_at = set(reject_at)
+        self.orders = {}
+        self.created = []            # (type, side, qty, price) 로그
+        self._n = 0
+        self._limit_i = 0            # 지금까지 낸 limit 주문 수(=재호가 회차 인덱스)
+
+    def fetch_order_book(self, symbol, limit=5):
+        bid, ask = self.books[min(self._limit_i, len(self.books) - 1)]
+        return {"bids": [[bid, 10.0]], "asks": [[ask, 10.0]]}
+
+    def create_order(self, symbol, type, side, qty, price, params):
+        self._n += 1
+        oid = f"o{self._n}"
+        if type == "limit":
+            idx = self._limit_i
+            self._limit_i += 1
+            if idx in self.reject_at:
+                raise Exception("binance -5022 Post Only order will be rejected")
+            filled = min(qty, self.limit_fills[idx] if idx < len(self.limit_fills) else 0.0)
+            o = {"id": oid, "status": "closed" if filled >= qty - 1e-12 else "open",
+                 "filled": filled, "average": price if filled > 0 else None,
+                 "price": price, "amount": qty, "timestamp": 1, "type": "limit"}
+        else:
+            o = {"id": oid, "status": "closed", "filled": qty, "average": self.market_px,
+                 "price": self.market_px, "amount": qty, "timestamp": 1, "type": "market"}
+        self.orders[oid] = o
+        self.created.append((type, side, qty, price))
+        return dict(o)
+
+    def fetch_order(self, oid, symbol):
+        return dict(self.orders[oid])
+
+    def cancel_order(self, oid, symbol):
+        o = self.orders[oid]
+        if o["status"] == "open":
+            o["status"] = "canceled"
+        return dict(o)
+
+    def fetch_my_trades(self, symbol, limit=50):
+        return []                    # 빈 목록 → _fill_of 가 주문타입으로 maker/taker 추정
+
+
+class _Broker(BinanceBroker):
+    """ccxt·load_markets 없이 도는 브로커 — client/market/정밀도만 가짜로 덮는다."""
+
+    def __init__(self, fake):
+        super().__init__("k", "s", testnet=True, symbol="BTCUSDT", poll_interval=0.005)
+        self._fake = fake
+
+    def client(self):
+        return self._fake
+
+    def market(self):
+        return {"symbol": "BTC/USDT:USDT", "quote": "USDT",
+                "limits": {"amount": {"min": 0.001}, "cost": {"min": 5.0}}}
+
+    def round_qty(self, qty):
+        return round(qty, 6)
+
+    def round_price(self, price):
+        return round(price, 2)
+
+
+def _near(a, b, tol=1e-6):
+    return abs(float(a) - float(b)) <= tol + 1e-6 * abs(float(b))
+
+
+TIMEOUT = 0.02        # 회차당 대기 — 미체결 회차는 이만큼만 돈다(테스트 속도)
+
+
+def test_full_maker_first_attempt():
+    """첫 회차에 전량 체결되면 재호가도 taker 도 없어야 한다."""
+    fake = FakeCCXT(books=(100.0, 101.0), limit_fills=[1.0])
+    fill = _Broker(fake).limit_then_market("buy", 1.0, TIMEOUT, max_attempts=5)
+    assert _near(fill.qty, 1.0) and _near(fill.maker_qty, 1.0) and _near(fill.taker_qty, 0.0)
+    assert _near(fill.price, 100.0)                       # 매수는 best bid 에 붙는다
+    assert [c[0] for c in fake.created] == ["limit"]      # 주문 1건뿐
+
+
+def test_reprice_across_attempts_all_maker():
+    """호가가 도망가도 매 회차 새 BBO 로 다시 붙어 전량 maker 로 채운다(taker 0)."""
+    fake = FakeCCXT(books=[(100.0, 101.0), (100.5, 101.5)], limit_fills=[0.4, 0.6])
+    fill = _Broker(fake).limit_then_market("buy", 1.0, TIMEOUT, max_attempts=5)
+    assert _near(fill.qty, 1.0) and _near(fill.taker_qty, 0.0)
+    assert _near(fill.maker_qty, 1.0)
+    assert _near(fill.price, (0.4 * 100.0 + 0.6 * 100.5) / 1.0)   # 회차별 재호가 평단
+    assert [c[0] for c in fake.created] == ["limit", "limit"]     # 재호가 2회, 시장가 없음
+    assert fake.created[1][2] == 0.6                             # 2회차는 '남은 수량'만
+
+
+def test_all_attempts_miss_then_full_taker():
+    """전 회차 미체결이면 소진 후 남은 전량을 시장가로 마무리한다."""
+    fake = FakeCCXT(books=(100.0, 101.0), limit_fills=[0.0, 0.0, 0.0], market_px=101.0)
+    fill = _Broker(fake).limit_then_market("buy", 1.0, TIMEOUT, max_attempts=3)
+    assert _near(fill.qty, 1.0) and _near(fill.maker_qty, 0.0) and _near(fill.taker_qty, 1.0)
+    assert _near(fill.price, 101.0)
+    assert [c[0] for c in fake.created] == ["limit", "limit", "limit", "market"]
+
+
+def test_partial_maker_then_taker_remainder():
+    """회차마다 조금씩 maker 로 먹고, 소진 후 남은 수량만 taker — 이미 먹은 maker 는 유지."""
+    fake = FakeCCXT(books=(100.0, 101.0), limit_fills=[0.3, 0.2], market_px=101.0)
+    fill = _Broker(fake).limit_then_market("buy", 1.0, TIMEOUT, max_attempts=2)
+    assert _near(fill.qty, 1.0)
+    assert _near(fill.maker_qty, 0.5) and _near(fill.taker_qty, 0.5)
+    assert _near(fill.price, (0.3 * 100.0 + 0.2 * 100.0 + 0.5 * 101.0) / 1.0)
+    assert [c[0] for c in fake.created] == ["limit", "limit", "market"]
+
+
+def test_gtx_reject_falls_straight_to_taker():
+    """걸자마자 교차(GTX 거부)면 그 회차를 소진으로 보고 남은 수량을 taker 로."""
+    fake = FakeCCXT(books=(100.0, 101.0), limit_fills=[], market_px=101.0, reject_at={0})
+    fill = _Broker(fake).limit_then_market("buy", 1.0, TIMEOUT, max_attempts=5)
+    assert _near(fill.qty, 1.0) and _near(fill.taker_qty, 1.0) and _near(fill.maker_qty, 0.0)
+    assert [c[0] for c in fake.created] == ["market"]     # limit 은 거부돼 기록 안 됨
+
+
+def test_sell_side_attaches_to_ask():
+    """매도는 best ask 에 붙어야 maker(반대쪽에 걸면 즉시 체결돼 taker)."""
+    fake = FakeCCXT(books=(100.0, 101.0), limit_fills=[1.0])
+    fill = _Broker(fake).limit_then_market("sell", 1.0, TIMEOUT, max_attempts=5)
+    assert _near(fill.price, 101.0) and _near(fill.maker_qty, 1.0)
+
+
+def test_attempts_one_is_legacy_behavior():
+    """max_attempts=1 이면 '한 번 걸고 안 되면 taker'(구 동작)와 동일해야 한다."""
+    fake = FakeCCXT(books=(100.0, 101.0), limit_fills=[0.0], market_px=101.0)
+    fill = _Broker(fake).limit_then_market("buy", 1.0, TIMEOUT, max_attempts=1)
+    assert _near(fill.taker_qty, 1.0)
+    assert [c[0] for c in fake.created] == ["limit", "market"]   # 재호가 없음
+
+
+if __name__ == "__main__":
+    import traceback
+    fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
+    passed = 0
+    for fn in fns:
+        try:
+            fn()
+            print(f"PASS {fn.__name__}")
+            passed += 1
+        except Exception:
+            print(f"FAIL {fn.__name__}")
+            traceback.print_exc()
+    print(f"\n{passed}/{len(fns)} passed")
+    sys.exit(0 if passed == len(fns) else 1)

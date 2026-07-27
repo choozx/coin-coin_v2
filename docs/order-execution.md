@@ -23,7 +23,9 @@ maker 로만 체결됐다면 그 5.00 은 0 이었다.
 ①은 "언제 진입 주문을 낼지", ②는 "그 주문을 어떤 방식으로 체결시킬지"다. 이 문서의 재호가 설계는
 ②에만 들어간다 — ①의 봉 단위 pending 로직은 안 건드린다.
 
-## 지금 구현: 직접 만든 BBO (한 번 걸고 안 되면 taker)
+## 이전 구현(v1): 직접 만든 BBO — 한 번 걸고 안 되면 taker
+
+> 아래는 재호가 도입 **전** 동작이다(`max_attempts=1` 이면 지금도 이 경로). 문제와 그 원인을 남겨둔다.
 
 `limit_then_market` 은 바이낸스 네이티브 BBO 옵션(아래 참조)을 **쓰지 않고 직접 구현**했다.
 
@@ -38,7 +40,7 @@ maker 로만 체결됐다면 그 5.00 은 0 이었다.
 - **GTX(post-only)** 라 지정가 부분은 maker 보장 — 만약 걸자마자 교차하면 거래소가 거부하고 즉시 시장가.
 - **부분체결은 섞인다** — 채워진 만큼 maker, 남은 만큼만 taker. 손익·수수료는 실제 체결내역(my_trades)에서 확정.
 
-### 문제: taker 로 잘 샌다
+### 문제였던 것: taker 로 잘 샜다 (아래 '재호가'로 해결)
 
 1. **재호가가 없다.** 처음 읽은 best bid 에 한 번 걸고 `timeout_s`(기본 3초) 동안 기다리기만 한다.
    대기 중 호가가 도망가면 걸어둔 지정가는 터치에서 멀어져 미체결 → taker.
@@ -62,7 +64,9 @@ maker 로만 체결됐다면 그 5.00 은 0 이었다.
 
 ## 결정: BBO 재호가(maker 추격) N회 → 남으면 taker
 
-**상태: 결정됨, 아직 미구현.** 스프레드를 넘지 않고 maker 로 붙되, 못 채우면 무한정 끌지 않고
+**상태: 구현됨(2026-07).** 코드: `binance_broker.limit_then_market(max_attempts=…)` +
+`executor.LiveExecutor.maker_max_attempts`(env `MAKER_MAX_ATTEMPTS`, 기본 5). 테스트:
+`tests/test_broker_reprice.py`. 스프레드를 넘지 않고 maker 로 붙되, 못 채우면 무한정 끌지 않고
 정해진 횟수만큼만 추격한 뒤 남은 수량을 taker 로 마무리한다.
 
 ### 새 플로우
@@ -112,9 +116,9 @@ maker 로만 체결됐다면 그 5.00 은 0 이었다.
 
 ## 구현 시 체크리스트
 
-- [ ] `binance_broker.limit_then_market` 에 `max_attempts` 추가, 회차 루프로 재작성
-- [ ] 회차별 부분체결 누적 + 취소/재확인 레이스 처리(기존 `_settled` 재사용)
-- [ ] GTX 거부(교차) 회차 처리 — 그 회차를 소진으로 보고 계속
-- [ ] `executor.LiveExecutor` 에 `maker_max_attempts`(env `MAKER_MAX_ATTEMPTS`, 기본 5) → open/close 에서 전달
-- [ ] `.env.example` 에 `MAKER_MAX_ATTEMPTS` 문서화
-- [ ] 테스트: 전량 maker / 부분체결 후 taker / 전 회차 미체결 후 전량 taker / GTX 거부
+- [x] `binance_broker.limit_then_market` 에 `max_attempts` 추가, 회차 루프로 재작성
+- [x] 회차별 부분체결 누적 + 취소/재확인 레이스 처리(기존 `_settled` 재사용)
+- [x] GTX 거부(교차) 회차 처리 — 그 회차를 소진으로 보고 남은 수량 taker
+- [x] `executor.LiveExecutor` 에 `maker_max_attempts`(env `MAKER_MAX_ATTEMPTS`, 기본 5) → open/close 에서 전달
+- [x] `.env.example` 에 `MAKER_MAX_ATTEMPTS` 문서화
+- [x] 테스트: 전량 maker / 부분체결 후 taker / 전 회차 미체결 후 전량 taker / GTX 거부 (`tests/test_broker_reprice.py`)

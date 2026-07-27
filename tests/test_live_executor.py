@@ -49,6 +49,7 @@ class FakeBroker:
         self.orders = []                     # (kind, side, qty, reduce_only)
         self.leverage = None
         self.hedge = False
+        self.maker_attempts = None           # 마지막 limit 주문에 넘어온 재호가 횟수
 
     # -- 메타/조회 --
     def market(self):
@@ -97,7 +98,8 @@ class FakeBroker:
     def market_order(self, side, qty, reduce_only=False):
         return self._next("market", side, qty, reduce_only)
 
-    def limit_then_market(self, side, qty, timeout_s, reduce_only=False):
+    def limit_then_market(self, side, qty, timeout_s, reduce_only=False, max_attempts=1):
+        self.maker_attempts = max_attempts
         return self._next("limit", side, qty, reduce_only)
 
 
@@ -147,6 +149,25 @@ def test_open_uses_post_only_path_when_maker():
     ex.open(_pos(), is_maker=True)
     assert broker.orders[0][0] == "limit"
     assert broker.orders[0][3] is False           # 진입은 reduceOnly 아님
+
+
+def test_maker_open_threads_reprice_attempts_to_broker():
+    """maker 진입이면 재호가 횟수(기본 5)가 브로커까지 전달돼야 한다."""
+    broker = FakeBroker()
+    ex = _ex(broker)
+    assert ex.maker_max_attempts == 5              # env 없으면 기본 5
+    ex.open(_pos(), is_maker=True)
+    assert broker.maker_attempts == 5
+
+
+def test_maker_max_attempts_env_override():
+    """MAKER_MAX_ATTEMPTS 로 재호가 횟수를 바꿀 수 있다(1=구 동작)."""
+    with _with_env(MAKER_MAX_ATTEMPTS="1"):
+        broker = FakeBroker()
+        ex = _ex(broker)
+        assert ex.maker_max_attempts == 1
+        ex.open(_pos(), is_maker=True)
+        assert broker.maker_attempts == 1
 
 
 def test_open_rejected_below_min_notional_leaves_no_position():
