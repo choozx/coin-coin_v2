@@ -12,9 +12,10 @@
     DISCORD_ALLOWED_USER_IDS 콤마구분 유저ID 화이트리스트 — 이들만 응답(실돈 정보 보호)
     STATE_PATH / LEDGER_PATH / CONTROL_PATH 대시보드와 동일(data/state.json·trades.db·control.json)
 
-명령: /status /position /stats (조회) · /control (봇 시작/정지 버튼).
-보안: 모든 응답은 ephemeral(요청자만 봄) + 유저 화이트리스트. /control 버튼도 클릭 시 재검문.
-제어는 '우아한 정지'(control.paused)까지만 — 강제청산·주문 같은 파괴적 행위는 없다.
+명령: /status /position /stats /info (조회) · /control (시작/정지) · /strategy /config (변경).
+보안: 모든 응답 ephemeral(요청자만) + 유저 화이트리스트(버튼·선택·모달 모두 재검문).
+변경(/strategy·/config)은 확인 버튼을 한 번 더 거치고, 무포지션일 때만 적용된다(보유 중이면
+청산 후 대기 — live.py 의 pendingStrategy/봇설정 반영과 같은 규칙). 강제청산·주문은 없다.
 """
 from __future__ import annotations
 
@@ -25,6 +26,7 @@ import time
 from . import control
 from . import discord_views as views
 from . import ledger
+from . import preset
 
 
 def load_state(path: str) -> dict:
@@ -106,6 +108,103 @@ def run() -> None:
         async def stop(self, interaction, button):
             await self._set(interaction, "paused")
 
+    class ConfirmView(discord.ui.View):
+        """[확인]/[취소] — 실돈 반영 전 한 번 더. 확인 시 apply_fn() 실행(예외는 메시지로)."""
+
+        def __init__(self, apply_fn, applied_msg: str):
+            super().__init__(timeout=120)
+            self._apply_fn, self._applied_msg = apply_fn, applied_msg
+
+        async def interaction_check(self, interaction) -> bool:
+            if interaction.user.id in allowed:
+                return True
+            await interaction.response.send_message("⛔ 권한 없음", ephemeral=True)
+            return False
+
+        @discord.ui.button(label="확인", emoji="✅", style=discord.ButtonStyle.success)
+        async def ok(self, interaction, button):
+            try:
+                self._apply_fn()
+                msg = f"✅ {self._applied_msg}"
+            except Exception as e:
+                msg = f"⚠️ 실패: {e}"
+            for c in self.children:
+                c.disabled = True
+            await interaction.response.edit_message(content=msg, view=self)
+
+        @discord.ui.button(label="취소", style=discord.ButtonStyle.secondary)
+        async def cancel(self, interaction, button):
+            for c in self.children:
+                c.disabled = True
+            await interaction.response.edit_message(content="취소됨.", view=self)
+
+    class StrategySelect(discord.ui.Select):
+        """전략 선택 드롭다운 → 고르면 확인 단계로. Discord 옵션 상한 25개."""
+
+        def __init__(self, strategies):
+            self._strategies = strategies[:25]
+            opts = [discord.SelectOption(label=(s["name"] or "?")[:100], value=str(i),
+                                         description=f"{s['symbol']} {s['timeframe']}"[:100])
+                    for i, s in enumerate(self._strategies)]
+            super().__init__(placeholder="전략 선택…", options=opts, min_values=1, max_values=1)
+
+        async def callback(self, interaction):
+            choice = self._strategies[int(self.values[0])]
+            has_pos = bool(load_state(state_path).get("position"))
+            view = ConfirmView(lambda: preset.select_strategy(choice["path"]),
+                               f"전략 전환 예약: {choice['name']}")
+            await interaction.response.edit_message(
+                content=views.strategy_confirm_text(choice, has_pos), view=view)
+
+    class StrategyView(discord.ui.View):
+        def __init__(self, strategies):
+            super().__init__(timeout=120)
+            self.add_item(StrategySelect(strategies))
+
+        async def interaction_check(self, interaction) -> bool:
+            if interaction.user.id in allowed:
+                return True
+            await interaction.response.send_message("⛔ 권한 없음", ephemeral=True)
+            return False
+
+    class ConfigModal(discord.ui.Modal, title="봇 설정 수정"):
+        """레버리지·자본비중·maker 타임아웃·심볼 편집. 빈 칸은 유지. 제출 → 확인 단계."""
+
+        def __init__(self, eff: dict):
+            super().__init__()
+            self._symbol = discord.ui.TextInput(
+                label="심볼(빈칸=유지)", required=False, default=str(eff.get("symbol") or ""))
+            self._leverage = discord.ui.TextInput(
+                label="레버리지 1~125", required=False, default=str(eff.get("leverage") or ""))
+            self._equity = discord.ui.TextInput(
+                label="자본비중 %(0~100)", required=False,
+                default=str(eff.get("equityPercent") if eff.get("equityPercent") is not None else ""))
+            self._timeout = discord.ui.TextInput(
+                label="maker 타임아웃(초)", required=False,
+                default=str(eff.get("makerTimeoutSeconds") if eff.get("makerTimeoutSeconds") is not None else ""))
+            for it in (self._symbol, self._leverage, self._equity, self._timeout):
+                self.add_item(it)
+
+        async def on_submit(self, interaction):
+            edits, errors = views.parse_config_form({
+                "symbol": self._symbol.value, "leverage": self._leverage.value,
+                "equity_percent": self._equity.value, "maker_timeout": self._timeout.value})
+            if errors:
+                await interaction.response.send_message("⚠️ " + " / ".join(errors), ephemeral=True)
+                return
+            if not edits:
+                await interaction.response.send_message("변경할 값이 없습니다.", ephemeral=True)
+                return
+            has_pos = bool(load_state(state_path).get("position"))
+
+            def apply():
+                new = views.apply_config_edits(control.get_bot_config(control_path), edits)
+                control.set_bot_config(new, path=control_path)
+
+            await interaction.response.send_message(
+                views.config_confirm_text(edits, has_pos),
+                view=ConfirmView(apply, "봇 설정 반영됨"), ephemeral=True)
+
     @tree.command(name="status", description="봇 상태·포지션·잔고 요약")
     async def status(interaction: "discord.Interaction"):
         if not await guard(interaction):
@@ -138,6 +237,32 @@ def run() -> None:
         if not await guard(interaction):
             return
         await interaction.response.send_message(control_panel(), view=ControlView(), ephemeral=True)
+
+    @tree.command(name="info", description="지금 돌고 있는 봇의 설정(전략·레버리지·사이징·실행)")
+    async def info_cmd(interaction: "discord.Interaction"):
+        if not await guard(interaction):
+            return
+        await interaction.response.send_message(
+            views.info_text(load_state(state_path), preset.bot_config_info()), ephemeral=True)
+
+    @tree.command(name="strategy", description="전략 전환 — 프리셋 목록에서 선택(무포지션 시 적용)")
+    async def strategy_cmd(interaction: "discord.Interaction"):
+        if not await guard(interaction):
+            return
+        strategies = preset.list_strategies()
+        if not strategies:
+            await interaction.response.send_message("사용 가능한 전략이 없습니다.", ephemeral=True)
+            return
+        cur = (load_state(state_path) or {}).get("preset", "?")
+        await interaction.response.send_message(
+            f"현재 전략: **{cur}**\n바꿀 전략을 고르세요:", view=StrategyView(strategies), ephemeral=True)
+
+    @tree.command(name="config", description="봇 설정 수정 — 레버리지·자본비중·maker·심볼(무포지션 시 적용)")
+    async def config_cmd(interaction: "discord.Interaction"):
+        if not await guard(interaction):
+            return
+        eff = views.effective_config(preset.bot_config_info())
+        await interaction.response.send_modal(ConfigModal(eff))
 
     @client.event
     async def on_ready():

@@ -10,6 +10,7 @@ discord.py·네트워크에 의존하지 않는 순수 함수만 둔다(engine.d
 """
 from __future__ import annotations
 
+import copy
 import time
 
 _MODE = {"paper": "📝 페이퍼", "testnet": "🧪 테스트넷(실거래)", "live": "🔴 실돈(실거래)"}
@@ -131,6 +132,142 @@ def position_text(state: dict) -> str:
         f"• 진입: {_fmt_time(pos.get('entryTime'))} (보유 {hold})",
     ]
     return "\n".join(rows)
+
+
+def apply_note(has_position: bool) -> str:
+    """전략/설정 변경이 언제 적용되는지 안내. 무포지션이면 즉시, 보유 중이면 청산 후(대기)."""
+    return ("_무포지션 → 다음 폴에 즉시 적용._" if not has_position
+            else "_⚠️ 포지션 보유 중 → 청산 후 적용(대기). 지금 열려 있는 거래엔 영향 없음._")
+
+
+def effective_config(info: dict) -> dict:
+    """bot_config_info(){config, presetDefaults} → 지금 봇이 실제로 쓰는 유효 설정.
+
+    config(봇 설정 오버라이드)가 있으면 그게 이기고, 없으면 presetDefaults(프리셋 값). 자본비중은
+    sizing.size.value(type=equityPercent)에 들어 있고, 레버리지/마진은 sizing, maker 설정은 execution.
+    """
+    cfg = (info or {}).get("config") or {}
+    dflt = (info or {}).get("presetDefaults") or {}
+
+    def sect(name):
+        merged = dict(dflt.get(name) or {})
+        merged.update(cfg.get(name) or {})          # 오버라이드가 프리셋을 덮음(얕은 병합)
+        return merged
+
+    sizing, execu = sect("sizing"), sect("execution")
+    size = sizing.get("size") or {}
+    return {
+        "symbol": cfg.get("symbol") or dflt.get("symbol"),
+        "leverage": sizing.get("leverage"),
+        "marginMode": sizing.get("marginMode"),
+        "sizeType": size.get("type"),
+        "equityPercent": size.get("value") if size.get("type") == "equityPercent" else None,
+        "entryType": execu.get("entryType"),
+        "makerTimeoutSeconds": execu.get("makerTimeoutSeconds"),
+        "useDynamicLeverage": bool(cfg.get("useDynamicLeverage")),
+    }
+
+
+def info_text(state: dict, info: dict) -> str:
+    """/info — 지금 돌고 있는 봇의 유효 설정(전략·심볼·사이징·실행)."""
+    e = effective_config(info)
+    mode = _MODE.get((state or {}).get("mode"), (state or {}).get("mode") or "?")
+    lev = "동적 티어" if e["useDynamicLeverage"] else f"{e['leverage']}x 고정"
+    entry = "maker 지정가" if e["entryType"] == "makerLimit" else (e["entryType"] or "시장가")
+    lines = [
+        f"**봇 정보** · {mode}",
+        f"전략: `{(state or {}).get('preset', '?')}`",
+        f"심볼/주기: {e['symbol']} · {(state or {}).get('timeframe', '?')}",
+        f"레버리지: **{lev}** · 마진: {e['marginMode'] or '?'}",
+        f"자본비중: {_n(e['equityPercent'], 1)}% (진입당 명목 = 잔고×비중×레버리지)",
+        f"진입방식: {entry} · maker 타임아웃 {_n(e['makerTimeoutSeconds'], 0)}s",
+    ]
+    return "\n".join(lines)
+
+
+def strategy_confirm_text(choice: dict, has_position: bool) -> str:
+    """/strategy — 고른 전략으로 바꾸기 전 확인 요약."""
+    return "\n".join([
+        f"**전략 전환 확인**",
+        f"→ `{choice.get('name')}`  ({choice.get('symbol')} {choice.get('timeframe')})",
+        apply_note(has_position),
+    ])
+
+
+def parse_config_form(raw: dict):
+    """모달 입력(문자열) → (edits, errors). 빈 칸은 '변경 안 함'(스킵). 실돈이라 범위 검증을 엄격히.
+
+    edits 키: symbol / leverage / equityPercent / makerTimeoutSeconds (준 것만).
+    """
+    edits, errors = {}, []
+    sym = (raw.get("symbol") or "").strip()
+    if sym:
+        clean = "".join(c for c in sym.upper() if c.isalnum())
+        if clean:
+            edits["symbol"] = clean
+        else:
+            errors.append("심볼 형식 오류")
+    lev = (raw.get("leverage") or "").strip()
+    if lev:
+        try:
+            v = int(lev)
+            if 1 <= v <= 125:
+                edits["leverage"] = v
+            else:
+                errors.append("레버리지는 1~125")
+        except ValueError:
+            errors.append("레버리지는 정수")
+    eq = (raw.get("equity_percent") or "").strip()
+    if eq:
+        try:
+            v = float(eq)
+            if 0 < v <= 100:
+                edits["equityPercent"] = v
+            else:
+                errors.append("자본비중은 0 초과 100 이하")
+        except ValueError:
+            errors.append("자본비중은 숫자")
+    to = (raw.get("maker_timeout") or "").strip()
+    if to:
+        try:
+            v = float(to)
+            if v >= 0:
+                edits["makerTimeoutSeconds"] = v
+            else:
+                errors.append("maker 타임아웃은 0 이상")
+        except ValueError:
+            errors.append("maker 타임아웃은 숫자")
+    return edits, errors
+
+
+def apply_config_edits(current: dict, edits: dict) -> dict:
+    """현재 bot_config 에 edits 를 얹은 새 bot_config. set_bot_config 가 통째로 교체하므로
+    **기존 키(useDynamicLeverage·filter·나머지 sizing/execution)를 보존**하려고 깊은 병합한다."""
+    cfg = copy.deepcopy(current or {})
+    if "symbol" in edits:
+        cfg["symbol"] = edits["symbol"]
+    if "leverage" in edits or "equityPercent" in edits:
+        s = dict(cfg.get("sizing") or {})
+        if "leverage" in edits:
+            s["leverage"] = edits["leverage"]
+        if "equityPercent" in edits:
+            s["size"] = {"type": "equityPercent", "value": edits["equityPercent"]}
+        cfg["sizing"] = s
+    if "makerTimeoutSeconds" in edits:
+        e = dict(cfg.get("execution") or {})
+        e["makerTimeoutSeconds"] = edits["makerTimeoutSeconds"]
+        cfg["execution"] = e
+    return cfg
+
+
+_EDIT_LABEL = {"symbol": "심볼", "leverage": "레버리지", "equityPercent": "자본비중%",
+               "makerTimeoutSeconds": "maker 타임아웃(s)"}
+
+
+def config_confirm_text(edits: dict, has_position: bool) -> str:
+    """/config — 바꿀 값 요약 + 적용 시점 안내(확인 전)."""
+    rows = [f"• {_EDIT_LABEL.get(k, k)}: **{edits[k]}**" for k in edits]
+    return "\n".join(["**봇 설정 변경 확인**", *rows, apply_note(has_position)])
 
 
 def control_text(paused: bool, has_position: bool) -> str:

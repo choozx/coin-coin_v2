@@ -109,6 +109,76 @@ def test_control_text_warns_when_holding_position():
     assert "자연 청산까지 관리" not in v.control_text(paused=True, has_position=True)
 
 
+# ---- /info · effective_config ----
+
+def _info(config=None, defaults=None):
+    return {"config": config or {}, "presetDefaults": defaults or {}}
+
+
+def test_effective_config_prefers_override_else_preset():
+    dflt = {"symbol": "BTCUSDC", "sizing": {"marginMode": "isolated", "leverage": 20,
+            "size": {"type": "equityPercent", "value": 10}},
+            "execution": {"entryType": "makerLimit", "makerTimeoutSeconds": 2}}
+    # 오버라이드 없음 → 프리셋 값 그대로
+    e = v.effective_config(_info(defaults=dflt))
+    assert e["leverage"] == 20 and e["equityPercent"] == 10 and e["symbol"] == "BTCUSDC"
+    assert e["makerTimeoutSeconds"] == 2 and e["marginMode"] == "isolated"
+    # 봇 설정이 레버리지·심볼을 덮으면 그게 이긴다
+    e2 = v.effective_config(_info(config={"symbol": "ETHUSDC", "sizing": {"leverage": 5},
+                                          "useDynamicLeverage": True}, defaults=dflt))
+    assert e2["leverage"] == 5 and e2["symbol"] == "ETHUSDC" and e2["useDynamicLeverage"] is True
+
+
+def test_info_text_shows_leverage_mode():
+    dflt = {"symbol": "BTCUSDC", "sizing": {"leverage": 20, "marginMode": "isolated",
+            "size": {"type": "equityPercent", "value": 10}},
+            "execution": {"entryType": "makerLimit", "makerTimeoutSeconds": 3}}
+    t = v.info_text({"mode": "testnet", "preset": "슈퍼트렌드_V1", "timeframe": "15m"}, _info(defaults=dflt))
+    assert "봇 정보" in t and "20x 고정" in t and "BTCUSDC" in t and "maker 지정가" in t
+    dyn = v.info_text({"mode": "live"}, _info(config={"useDynamicLeverage": True}, defaults=dflt))
+    assert "동적 티어" in dyn
+
+
+# ---- /config · parse + apply ----
+
+def test_parse_config_form_validates_and_skips_blanks():
+    edits, errs = v.parse_config_form({"leverage": "10", "equity_percent": "25",
+                                       "maker_timeout": "", "symbol": " btcusdc "})
+    assert edits == {"leverage": 10, "equityPercent": 25.0, "symbol": "BTCUSDC"}
+    assert errs == []
+
+
+def test_parse_config_form_rejects_bad_ranges():
+    _, e1 = v.parse_config_form({"leverage": "0"})
+    _, e2 = v.parse_config_form({"leverage": "200"})
+    _, e3 = v.parse_config_form({"equity_percent": "150"})
+    _, e4 = v.parse_config_form({"leverage": "abc"})
+    _, e5 = v.parse_config_form({"maker_timeout": "-1"})
+    assert e1 and e2 and e3 and e4 and e5
+
+
+def test_apply_config_edits_preserves_other_keys():
+    """set_bot_config 는 통째 교체 → 병합이 useDynamicLeverage·filter·다른 sizing 키를 지켜야 한다."""
+    current = {"useDynamicLeverage": True, "filter": {"minAdx": 20},
+               "sizing": {"marginMode": "isolated", "leverage": 20}}
+    out = v.apply_config_edits(current, {"leverage": 5, "equityPercent": 30, "symbol": "ETHUSDC"})
+    assert out["useDynamicLeverage"] is True              # 안 날아감
+    assert out["filter"] == {"minAdx": 20}
+    assert out["sizing"]["marginMode"] == "isolated"      # 기존 sizing 키 유지
+    assert out["sizing"]["leverage"] == 5
+    assert out["sizing"]["size"] == {"type": "equityPercent", "value": 30}
+    assert out["symbol"] == "ETHUSDC"
+    # 원본 불변(deepcopy)
+    assert current["sizing"]["leverage"] == 20
+
+
+def test_config_and_strategy_confirm_text_note_position():
+    c = v.config_confirm_text({"leverage": 10}, has_position=True)
+    assert "변경 확인" in c and "레버리지" in c and "청산 후" in c
+    s = v.strategy_confirm_text({"name": "X", "symbol": "BTCUSDC", "timeframe": "15m"}, has_position=False)
+    assert "전략 전환 확인" in s and "즉시 적용" in s
+
+
 # ---- period_bounds ----
 
 def test_period_bounds():
