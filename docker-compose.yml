@@ -98,6 +98,9 @@ services:
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}          # 봇 토큰(없으면 기동 실패 — 켜려면 필수)
       DISCORD_GUILD_ID: ${DISCORD_GUILD_ID:-}            # 이 서버에만 명령 등록 → 즉시 반영
       DISCORD_ALLOWED_USER_IDS: ${DISCORD_ALLOWED_USER_IDS:-}   # 콤마구분 유저ID(비면 전원 거부)
+      DISCORD_CHANNEL_ID: ${DISCORD_CHANNEL_ID:-}        # 정기 요약 보낼 채널(비면 요약 OFF)
+      DIGEST_HOUR: ${DIGEST_HOUR:-8}                     # 정기 요약 시각(시)
+      DIGEST_TZ: ${DIGEST_TZ:-Asia/Seoul}                # 그 시각의 타임존(컨테이너 TZ=UTC 라 명시)
       STATE_PATH: /app/data/state.json      # trader 가 기록한 상태(대시보드와 동일)
       LEDGER_PATH: /app/data/trades.db      # 매매 원장(성과 집계)
       CONTROL_PATH: /app/data/control.json  # /control 버튼이 쓰는 멈춤/재개 신호(대시보드와 공용)

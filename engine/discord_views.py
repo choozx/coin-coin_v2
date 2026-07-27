@@ -270,6 +270,47 @@ def config_confirm_text(edits: dict, has_position: bool) -> str:
     return "\n".join(["**봇 설정 변경 확인**", *rows, apply_note(has_position)])
 
 
+_REASON = {"take_profit": "익절", "stop_loss": "손절", "trailing": "트레일링", "signal": "신호청산",
+           "time": "시간청산", "supertrend": "ST전환", "liquidation": "강제청산", "external": "외부청산"}
+
+
+def _trade_line(r: dict) -> str:
+    """원장 한 행 → 한 줄 요약(방향 진입→청산 손익 (사유))."""
+    side = "롱" if r.get("side", 0) > 0 else "숏"
+    reason = _REASON.get(r.get("reason"), r.get("reason") or "")
+    return f"{side} {_n(r.get('entry_price'))}→{_n(r.get('exit_price'))} {_signed(r.get('pnl'))} ({reason})"
+
+
+def daily_digest_text(rows: list, stats: dict, state: dict, hours: int = 24) -> str:
+    """정기 요약 — 지난 hours 시간 청산된 거래 정리. rows=ledger.load(구간), stats=ledger.stats(구간).
+
+    청산이 없으면 짧게 '거래 없음 + 현재 잔고/포지션'. 있으면 집계 + 최고/최저 + 거래 목록(상한).
+    """
+    head = f"📅 **일일 요약 · 지난 {hours}시간**"
+    eq = _n((state or {}).get("equity"))
+    pos = (state or {}).get("position")
+    posline = _pos_line(pos) if pos else "무포지션"
+    n = (stats or {}).get("n", 0)
+    if n == 0:
+        return "\n".join([head, "청산된 거래 없음.", f"현재: 잔고 {eq} · {posline}"])
+    pnls = [r.get("pnl") or 0 for r in rows]
+    lines = [
+        head,
+        f"거래 **{n}건** · 승률 {_n(stats.get('winRate'), 1)}% ({stats.get('wins', 0)}승) "
+        f"· 누적 **{_signed(stats.get('totalPnl'))}**",
+        f"손익비 PF {_n(stats.get('profitFactor'))} · MDD {_n(stats.get('maxDrawdown'))} "
+        f"· 최고 {_signed(max(pnls))} / 최저 {_signed(min(pnls))}",
+        "— 거래 —",
+    ]
+    cap = 15
+    for r in rows[-cap:]:                          # 오래된→최신, 최근 cap 건만
+        lines.append("• " + _trade_line(r))
+    if len(rows) > cap:
+        lines.append(f"…외 {len(rows) - cap}건")
+    lines.append(f"현재: 잔고 {eq} · {posline}")
+    return "\n".join(lines)
+
+
 def control_text(paused: bool, has_position: bool) -> str:
     """/control — 봇 시작/정지 패널. 버튼 아래 붙는 안내 텍스트.
 

@@ -179,6 +179,37 @@ def test_config_and_strategy_confirm_text_note_position():
     assert "전략 전환 확인" in s and "즉시 적용" in s
 
 
+# ---- 정기 요약 (daily_digest) ----
+
+def _row(side=1, entry=100.0, exit=101.0, pnl=1.0, reason="signal"):
+    return {"side": side, "entry_price": entry, "exit_price": exit, "pnl": pnl, "reason": reason}
+
+
+def test_daily_digest_empty_shows_balance_only():
+    t = v.daily_digest_text([], {"n": 0}, {"equity": 4971.0, "position": None})
+    assert "지난 24시간" in t and "거래 없음" in t and "4,971" in t and "무포지션" in t
+
+
+def test_daily_digest_summarizes_trades():
+    rows = [_row(1, 65000, 65300, 30.0, "take_profit"),
+            _row(-1, 64000, 64200, -20.0, "supertrend")]
+    stats = {"n": 2, "wins": 1, "winRate": 50.0, "totalPnl": 10.0, "avgPnl": 5.0,
+             "profitFactor": 1.5, "maxDrawdown": 20.0}
+    t = v.daily_digest_text(rows, stats, {"equity": 5010.0, "position": None})
+    assert "2건" in t and "50.0%" in t and "+10.00" in t
+    assert "최고 +30.00 / 최저 -20.00" in t
+    assert "익절" in t and "ST전환" in t              # 사유 한글 라벨
+    assert "롱 65,000.00→65,300.00 +30.00" in t
+
+
+def test_daily_digest_caps_trade_list():
+    rows = [_row(pnl=float(i)) for i in range(20)]
+    stats = {"n": 20, "wins": 19, "winRate": 95.0, "totalPnl": 190.0, "avgPnl": 9.5,
+             "profitFactor": 99.0, "maxDrawdown": 0.0}
+    t = v.daily_digest_text(rows, stats, {"equity": 100.0})
+    assert "…외 5건" in t                             # 20건 중 15만 나열
+
+
 # ---- period_bounds ----
 
 def test_period_bounds():

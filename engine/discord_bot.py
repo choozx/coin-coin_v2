@@ -10,6 +10,8 @@
     DISCORD_BOT_TOKEN        봇 토큰(필수)
     DISCORD_GUILD_ID         이 서버(길드)에만 명령 등록 → 즉시 반영(권장)
     DISCORD_ALLOWED_USER_IDS 콤마구분 유저ID 화이트리스트 — 이들만 응답(실돈 정보 보호)
+    DISCORD_CHANNEL_ID       정기 요약을 보낼 채널(알림과 동일). 비면 요약 OFF.
+    DIGEST_HOUR / DIGEST_TZ  정기 요약 시각(기본 8시 / Asia/Seoul — 컨테이너 TZ=UTC 라 명시).
     STATE_PATH / LEDGER_PATH / CONTROL_PATH 대시보드와 동일(data/state.json·trades.db·control.json)
 
 명령: /status /position /stats /info (조회) · /control (시작/정지) · /strategy /config (변경).
@@ -60,6 +62,7 @@ def run() -> None:
     ledger_path = os.environ.get("LEDGER_PATH", ledger.LEDGER_PATH)
     control_path = os.environ.get("CONTROL_PATH", control.DEFAULT_PATH)
     guild_id = os.environ.get("DISCORD_GUILD_ID")
+    channel_id = os.environ.get("DISCORD_CHANNEL_ID")     # 정기 요약 보낼 채널(알림과 동일)
     allowed = allowed_ids()
     if not allowed:
         # 화이트리스트가 비면 아무도 못 쓴다 — 실돈 정보를 실수로 전체공개하지 않기 위한 안전기본값.
@@ -264,6 +267,32 @@ def run() -> None:
         eff = views.effective_config(preset.bot_config_info())
         await interaction.response.send_modal(ConfigModal(eff))
 
+    # ── 정기 요약: 매일 지정 시각에 지난 24시간 거래를 채널로 push ──
+    import datetime as _dt
+    from discord.ext import tasks
+    try:
+        from zoneinfo import ZoneInfo
+        digest_tz = ZoneInfo(os.environ.get("DIGEST_TZ", "Asia/Seoul"))   # 컨테이너 TZ=UTC 라 명시
+    except Exception:
+        digest_tz = _dt.timezone.utc
+    try:
+        digest_hour = int(os.environ.get("DIGEST_HOUR", "8"))
+    except ValueError:
+        digest_hour = 8
+
+    @tasks.loop(time=_dt.time(hour=digest_hour, minute=0, tzinfo=digest_tz))
+    async def daily_digest():
+        if not channel_id:
+            return
+        try:
+            ch = client.get_channel(int(channel_id)) or await client.fetch_channel(int(channel_id))
+            start = int(time.time() * 1000) - 24 * 3600 * 1000
+            rows = ledger.load(ledger_path, start_ms=start)
+            st = ledger.stats(ledger_path, start_ms=start)
+            await ch.send(views.daily_digest_text(rows, st, load_state(state_path)))
+        except Exception as e:
+            print(f"[디스코드봇] 일일 요약 전송 실패: {e}", flush=True)
+
     @client.event
     async def on_ready():
         try:
@@ -273,8 +302,10 @@ def run() -> None:
                 await tree.sync(guild=g)
             else:
                 await tree.sync()
-            print(f"[디스코드봇] 로그인 {client.user} · 명령 동기화 완료 "
-                  f"(허용 유저 {len(allowed)}명)", flush=True)
+            if channel_id and not daily_digest.is_running():
+                daily_digest.start()                  # 매일 digest_hour 시(digest_tz)에 요약 push
+            print(f"[디스코드봇] 로그인 {client.user} · 명령 동기화 완료 · "
+                  f"일일요약 {digest_hour}시({digest_tz}) {'ON' if channel_id else 'OFF(채널 미설정)'}", flush=True)
         except Exception as e:
             print(f"[디스코드봇] 명령 동기화 실패: {e}", flush=True)
 
