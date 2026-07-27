@@ -84,4 +84,23 @@ services:
       - ./data:/app/data
     logging: { driver: json-file, options: { max-size: "10m", max-file: "3" } }
 
+  discordbot:                               # 디스코드 조회 봇 — read-only, 슬래시 명령(/status /position /stats)
+    build: .                                # 대시보드처럼 state.json·trades.db 만 읽는 별개 프로세스(매매 무관)
+    image: ${IMAGE:-auto-trading}
+    restart: unless-stopped
+    mem_limit: 200m
+    mem_reservation: 80m
+    command: python -m engine.discord_bot
+    environment:
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}          # 봇 토큰(없으면 기동 실패 — 켜려면 필수)
+      DISCORD_GUILD_ID: ${DISCORD_GUILD_ID:-}            # 이 서버에만 명령 등록 → 즉시 반영
+      DISCORD_ALLOWED_USER_IDS: ${DISCORD_ALLOWED_USER_IDS:-}   # 콤마구분 유저ID(비면 전원 거부)
+      STATE_PATH: /app/data/state.json      # trader 가 기록한 상태(대시보드와 동일)
+      LEDGER_PATH: /app/data/trades.db      # 매매 원장(성과 집계)
+      PYTHONUNBUFFERED: 1
+      TZ: UTC
+    volumes:
+      - ./data:/app/data                    # 읽기 전용 성격(제어 파일은 안 건드림)
+    logging: { driver: json-file, options: { max-size: "10m", max-file: "3" } }
+
 # ⚠️ 실거래(LiveExecutor) 시 BINANCE_API_KEY/SECRET은 .env(gitignore)/시크릿으로. compose에 직접 X.

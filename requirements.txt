@@ -5,4 +5,5 @@ TA-Lib>=0.6           # 지표 계산(검증된 C 구현). ★ 먼저 C 라이�
                       #   Ubuntu: apt-get install ta-lib  (또는 소스 빌드)
                       # 그 후: pip install TA-Lib
 ccxt>=4.0             # 실거래(LiveExecutor) 전용 — 바이낸스 주문/체결/잔고. 페이퍼엔 불필요.
+discord.py>=2.3       # 디스코드 조회 봇(engine.discord_bot) 전용 — Gateway 슬래시 명령. 그 외 서비스엔 불필요.
 # pandas 불필요 (numpy + TA-Lib). 실데이터 어댑터 추가 시 mysql 커넥터 등 별도.
