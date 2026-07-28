@@ -52,6 +52,13 @@ def test_alert_recovery():
     assert w.alert_for(None, "ok", 1) is None
 
 
+def test_startup_text_reports_current_state():
+    assert "정상" in w.startup_text("ok", 120, 600) and "2분 전" in w.startup_text("ok", 120, 600)
+    assert "응답 없음" in w.startup_text("stale", 3600, 600) and "60분째" in w.startup_text("stale", 3600, 600)
+    assert "상태 파일 없음" in w.startup_text("missing", None, 600)
+    assert "10분 이상" in w.startup_text("ok", 0, 600)      # stale_sec 600 → 10분
+
+
 def test_read_updated_ms():
     d = tempfile.mkdtemp()
     p = os.path.join(d, "state.json")

@@ -64,20 +64,33 @@ def alert_for(prev, cur, age_sec):
     return None                                   # None→ok(정상 기동)은 조용히
 
 
+def startup_text(status, age_sec, stale_sec: int) -> str:
+    """워치독 기동 시 보낼 '현재 트레이더 상태' 한 줄. 배포되는 순간 봇 생사를 바로 알린다."""
+    mins = int((age_sec or 0) // 60)
+    cur = {"ok": f"정상 (마지막 갱신 {mins}분 전)",
+           "stale": f"⚠️ 응답 없음 ({mins}분째 무갱신)",
+           "missing": "⚠️ 상태 파일 없음"}.get(status, status)
+    return f"🐕 워치독 시작 — 현재 트레이더 {cur}. {stale_sec // 60}분 이상 무갱신이면 경고합니다."
+
+
 def run() -> None:
     state_path = os.environ.get("STATE_PATH", "data/state.json")
     stale_sec = int(os.environ.get("WATCHDOG_STALE_SEC", "600"))
     interval = int(os.environ.get("WATCHDOG_INTERVAL_SEC", "120"))
     print(f"[워치독] 시작 — {state_path} 를 {interval}초마다 확인, {stale_sec // 60}분 무갱신 시 경고", flush=True)
-    prev = None
+    # 기동 즉시 현재 상태를 한 번 보고(배포 확인 + 지금 봇이 살았는지). 이후엔 '전이'에만 알림.
+    status, age = evaluate(read_updated_ms(state_path), int(time.time() * 1000), stale_sec)
+    notify(startup_text(status, age, stale_sec))
+    print(f"[워치독] 기동 보고: {status} (age={age})", flush=True)
+    prev = status
     while True:
+        time.sleep(interval)
         status, age = evaluate(read_updated_ms(state_path), int(time.time() * 1000), stale_sec)
         msg = alert_for(prev, status, age)
         if msg:
             notify(msg)
             print(f"[워치독] {status}: {msg}", flush=True)
         prev = status
-        time.sleep(interval)
 
 
 def main() -> None:
