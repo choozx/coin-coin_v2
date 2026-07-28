@@ -129,7 +129,9 @@ dnotify() {
     local msg="$1" hook token channel payload
     hook=$(sed -n 's/^NOTIFY_WEBHOOK=//p' .env 2>/dev/null | head -1)
     token=$(sed -n 's/^DISCORD_BOT_TOKEN=//p' .env 2>/dev/null | head -1)
-    channel=$(sed -n 's/^DISCORD_CHANNEL_ID=//p' .env 2>/dev/null | head -1)
+    # 배포는 시스템 카테고리 → 시스템 채널(있으면), 없으면 기본 채널로 폴백.
+    channel=$(sed -n 's/^DISCORD_CHANNEL_SYSTEM=//p' .env 2>/dev/null | head -1)
+    [ -z "$channel" ] && channel=$(sed -n 's/^DISCORD_CHANNEL_ID=//p' .env 2>/dev/null | head -1)
     payload=$(printf '{"content":"%s"}' "$msg")
     if [ -n "$token" ] && [ -n "$channel" ]; then
         curl -sf -m 5 -X POST "https://discord.com/api/v10/channels/${channel}/messages" \

@@ -165,7 +165,7 @@ class LiveTrader:
         except Exception as e:
             self._strategy_error = f"{desired}: {e}"
             self._pending_strategy = desired
-            notify(f"⚠️ 전략 전환 실패 {desired}: {e}")
+            notify(f"⚠️ 전략 전환 실패 {desired}: {e}", category="system")
             print(f"  [전략전환 실패] {e}", flush=True)
             return
         self._apply_strategy(new, desired)
@@ -192,7 +192,7 @@ class LiveTrader:
         except Exception as e:
             self._network_error = f"{desired}: {e}"
             self._pending_network = desired
-            notify(f"⚠️ 네트워크 전환 실패 {old} → {desired}: {e}")
+            notify(f"⚠️ 네트워크 전환 실패 {old} → {desired}: {e}", category="system")
             print(f"  [네트워크 전환 실패] {e}", flush=True)
             return
         self._pending_network = None
@@ -203,7 +203,7 @@ class LiveTrader:
         self.stepper.last_exit_sb = -10 ** 9     # 쿨다운 리셋(다른 계정이니 이어갈 게 없다)
         self._sync_live_position(base)           # 새 계정에 포지션이 남아 있으면 인계
         tag = "🧪 테스트넷(가짜돈)" if self.ex.testnet else "🔴 메인넷(실돈)"
-        notify(f"🔀 네트워크 전환 {old} → {desired} · {tag} · 잔고 {self.ex.equity():.2f}")
+        notify(f"🔀 네트워크 전환 {old} → {desired} · {tag} · 잔고 {self.ex.equity():.2f}", category="system")
         print(f"  [네트워크 전환] {old} → {desired} · 잔고 {self.ex.equity():.2f}", flush=True)
 
     def _guardrail_block(self):
@@ -241,7 +241,7 @@ class LiveTrader:
         if gr != self._guardrail_reason:
             self._guardrail_reason = gr
             if gr:
-                notify(f"🛡 리스크 가드레일 발동 — 새 진입 차단: {gr}")
+                notify(f"🛡 리스크 가드레일 발동 — 새 진입 차단: {gr}", category="trade")
                 print(f"  [가드레일] {gr} → 새 진입 차단", flush=True)
             else:
                 print("  [가드레일] 해제 → 진입 재개", flush=True)
@@ -260,7 +260,7 @@ class LiveTrader:
             self._last_ot = None
         self.stepper.last_exit_sb = -10 ** 9
         s = self.preset.sizing
-        notify(f"⚙️ 봇 설정 반영 — {self.preset.symbol} lev{s.get('leverage')}")
+        notify(f"⚙️ 봇 설정 반영 — {self.preset.symbol} lev{s.get('leverage')}", category="system")
         print(f"  [봇설정 반영] {self.preset.symbol} · lev{s.get('leverage')} · "
               f"{(s.get('size') or {}).get('type')} · maker={self.stepper.maker_entry}", flush=True)
 
@@ -281,7 +281,7 @@ class LiveTrader:
                 self._last_ot = int(base.open_time[-1])
         except Exception:
             pass
-        notify(f"🔄 전략 전환 {old} → {self.preset.name} ({self.preset.symbol} {self.preset.timeframe})")
+        notify(f"🔄 전략 전환 {old} → {self.preset.name} ({self.preset.symbol} {self.preset.timeframe})", category="system")
         print(f"  [전략전환] {old} → {self.preset.name} ({self.preset.symbol} {self.preset.timeframe})", flush=True)
 
     def _unrealized(self, pos) -> dict:
@@ -406,10 +406,10 @@ class LiveTrader:
         if paused != self._paused:
             self._paused = paused
             if paused:
-                notify("⏸ 매매 멈춤 — 새 진입 차단 (보유 포지션 관리·청산은 계속)")
+                notify("⏸ 매매 멈춤 — 새 진입 차단 (보유 포지션 관리·청산은 계속)", category="trade")
                 print("  [제어] 멈춤 → 새 진입 차단", flush=True)
             else:
-                notify(f"▶️ 매매 재개 — 새 진입 시작 ({self.preset.symbol} {self.preset.timeframe})")
+                notify(f"▶️ 매매 재개 — 새 진입 시작 ({self.preset.symbol} {self.preset.timeframe})", category="trade")
                 print("  [제어] 재개 → 새 진입 시작", flush=True)
         return paused
 
@@ -460,7 +460,7 @@ class LiveTrader:
         if pos is None:
             if saved:
                 notify("⚠️ 재시작: 거래소는 무포지션인데 로컬엔 포지션 기록이 있음 — "
-                       "봇이 멈춘 사이 강제청산/수동청산된 것으로 보고 기록을 정리합니다.")
+                       "봇이 멈춘 사이 강제청산/수동청산된 것으로 보고 기록을 정리합니다.", category="trade")
                 print("  [동기화] 거래소 무포지션 → 로컬 포지션 기록 폐기", flush=True)
             self.ex.position = None
             self.ex._save_position()
@@ -490,7 +490,7 @@ class LiveTrader:
                f"x{p.leverage} (손절 {'없음' if np.isnan(p.stop_price) else f'{p.stop_price:.2f}'})")
         if not same:
             msg += " ⚠️ 로컬 기록 불일치 — 손절/익절가를 못 살렸습니다. 대시보드에서 확인하세요."
-        notify(msg)
+        notify(msg, category="trade")
         print(f"  [동기화] {msg}", flush=True)
 
     def _reconcile_live_position(self, base):
@@ -528,14 +528,14 @@ class LiveTrader:
         # ③ 둘 다 보유하지만 방향/수량 불일치 → 거래소를 기준으로 맞춘다.
         if xpos is not None and local is not None:
             if xpos["side"] != local.side:
-                notify(f"⚠️ 포지션 방향 불일치(거래소 {xpos['side']} vs 로컬 {local.side}) — 거래소 기준 재인계")
+                notify(f"⚠️ 포지션 방향 불일치(거래소 {xpos['side']} vs 로컬 {local.side}) — 거래소 기준 재인계", category="trade")
                 self.ex.position = None            # 방향까지 다르면 통째로 재인계가 안전
                 self._sync_live_position(base, context="동기화")
             elif abs(xpos["qty"] - local.qty) > local.qty * 0.02:
                 old = local.qty
                 local.qty = float(xpos["qty"])     # 부분 축소/증가 반영(방향 동일 → 손절·익절 유지)
                 self.ex._save_position()
-                notify(f"⚠️ 포지션 수량 조정 {old} → {xpos['qty']} (거래소 기준)")
+                notify(f"⚠️ 포지션 수량 조정 {old} → {xpos['qty']} (거래소 기준)", category="trade")
                 print(f"  [동기화] 수량 조정 {old} → {xpos['qty']}", flush=True)
 
     def _external_close(self, pos, base):
@@ -556,7 +556,7 @@ class LiveTrader:
             print(f"  [원장기록 실패] {e}", flush=True)
         side_k = "롱" if pos.side > 0 else "숏"
         notify(f"⚠️ 봇 몰래 청산됨 — 외부 청산으로 기록 ({side_k} @{pos.entry_price:.2f} → ~{exit_price:.2f} "
-               f"pnl ~{trade.pnl:+.2f}). 강제청산/수동청산 의심 — 청산가는 근사치.")
+               f"pnl ~{trade.pnl:+.2f}). 강제청산/수동청산 의심 — 청산가는 근사치.", category="trade")
         print(f"  [동기화] 외부 청산 기록 pnl~{trade.pnl:+.2f} (청산가 근사 {exit_price:.2f})", flush=True)
 
     def run(self, interval: int = 60, once: bool = False):
@@ -566,7 +566,7 @@ class LiveTrader:
         # 모드를 알림에 그대로 — '페이퍼'로 고정돼 있으면 실돈 봇이 페이퍼처럼 보고된다.
         # 테스트넷/실돈까지 구분한다(둘 다 mode='live' 라 한 덩어리로 보면 제일 위험한 착각이 생긴다).
         tag = {"paper": "페이퍼", "testnet": "🧪 실거래(테스트넷)"}.get(self.mode, "🔴 실거래(실돈)")
-        notify(f"▶️ {tag} 시작 {self.preset.name} {self.preset.symbol} {self.preset.timeframe} 잔고 {self.ex.equity():.0f}")
+        notify(f"▶️ {tag} 시작 {self.preset.name} {self.preset.symbol} {self.preset.timeframe} 잔고 {self.ex.equity():.0f}", category="system")
         fails = 0
         while True:
             now = int(time.time() * 1000)
@@ -576,9 +576,9 @@ class LiveTrader:
                 for e in events:
                     print(f"  [{e['type']}] {e}", flush=True)
                     if e["type"] == "open":
-                        notify(f"🟢 진입 {'롱' if e['side']>0 else '숏'} @{e['price']:.2f} x{e['lev']} ({self.preset.symbol})")
+                        notify(f"🟢 진입 {'롱' if e['side']>0 else '숏'} @{e['price']:.2f} x{e['lev']} ({self.preset.symbol})", category="trade")
                     elif e["type"] == "close":
-                        notify(f"🔴 청산 {e['reason']} @{e['price']:.2f} pnl {e['pnl']:+.2f} 잔고 {self.ex.equity():.0f}")
+                        notify(f"🔴 청산 {e['reason']} @{e['price']:.2f} pnl {e['pnl']:+.2f} 잔고 {self.ex.equity():.0f}", category="trade")
                 st = f"잔고 {self.ex.equity():.2f}"
                 pos = self.ex.position
                 st += f" | 포지션 {'롱' if pos.side>0 else '숏'} @{pos.entry_price:.2f}" if pos else " | 무포지션"
@@ -588,7 +588,7 @@ class LiveTrader:
                 fails += 1
                 print(f"  [에러] {e}", flush=True)
                 if fails in (1, 5, 20):      # 반복 실패 시 알림(스팸 방지)
-                    notify(f"⚠️ 에러({fails}회): {e}")
+                    notify(f"⚠️ 에러({fails}회): {e}", category="system")
             if once:
                 break
             time.sleep(interval)

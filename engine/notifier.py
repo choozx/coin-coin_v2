@@ -12,16 +12,35 @@ import json
 import os
 import urllib.request
 
+# 메시지 카테고리 → 전용 채널 환경변수. 미설정이면 기본 채널(DISCORD_CHANNEL_ID)로 폴백.
+_CATEGORY_ENV = {"trade": "DISCORD_CHANNEL_TRADES",     # 진입/청산/포지션/멈춤·재개/가드레일
+                 "system": "DISCORD_CHANNEL_SYSTEM",    # 기동/배포/워치독/에러/네트워크/전략·설정
+                 "digest": "DISCORD_CHANNEL_DIGEST"}    # 정기 요약
 
-def notify(msg: str) -> None:
+
+def channel_for(category: str = None) -> str:
+    """카테고리 전용 채널 ID(있으면) → 없으면 기본 채널. 채널 라우팅 단일 지점.
+
+    새 채널 변수를 안 넣으면 전부 기본 채널로 가서 동작이 하나도 안 바뀐다(하위호환).
+    """
+    if category:
+        env = _CATEGORY_ENV.get(category)
+        cid = os.environ.get(env) if env else None
+        if cid:
+            return cid
+    return os.environ.get("DISCORD_CHANNEL_ID")
+
+
+def notify(msg: str, category: str = None) -> None:
     """선택적 알림 — 봇 토큰이 있으면 봇으로, 없으면 웹훅으로 POST. 없으면 무시.
 
+    category(trade/system/digest)에 따라 채널을 가른다(전용 채널 미설정 시 기본 채널 폴백).
     봇으로 보내면 발신자가 내 봇으로 통일되고 메시지에 버튼을 붙일 수 있다(웹훅은 불가). 봇 전송도
     상주 Gateway 가 아니라 REST POST 한 방이라 discord.py 는 필요 없다. 웹훅은 Slack 도 지원
-    (payload 키가 다름: Slack=text, Discord=content)하므로 폴백으로 남긴다.
+    (payload 키가 다름: Slack=text, Discord=content)하므로 폴백으로 남긴다(웹훅은 채널 분리 없음).
     """
     token = os.environ.get("DISCORD_BOT_TOKEN")
-    channel = os.environ.get("DISCORD_CHANNEL_ID")
+    channel = channel_for(category)
     if token and channel:
         url = f"https://discord.com/api/v10/channels/{channel}/messages"
         payload, extra = {"content": msg}, {"Authorization": f"Bot {token}"}

@@ -80,7 +80,7 @@ def run() -> None:
     print(f"[워치독] 시작 — {state_path} 를 {interval}초마다 확인, {stale_sec // 60}분 무갱신 시 경고", flush=True)
     # 기동 즉시 현재 상태를 한 번 보고(배포 확인 + 지금 봇이 살았는지). 이후엔 '전이'에만 알림.
     status, age = evaluate(read_updated_ms(state_path), int(time.time() * 1000), stale_sec)
-    notify(startup_text(status, age, stale_sec))
+    notify(startup_text(status, age, stale_sec), category="system")
     print(f"[워치독] 기동 보고: {status} (age={age})", flush=True)
     prev = status
     while True:
@@ -88,7 +88,7 @@ def run() -> None:
         status, age = evaluate(read_updated_ms(state_path), int(time.time() * 1000), stale_sec)
         msg = alert_for(prev, status, age)
         if msg:
-            notify(msg)
+            notify(msg, category="system")
             print(f"[워치독] {status}: {msg}", flush=True)
         prev = status
 

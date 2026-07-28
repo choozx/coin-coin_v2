@@ -378,7 +378,7 @@ def test_reconcile_adjusts_qty_on_partial_change():
     ex = _RecEx(xpos=_xp(1, 1.5), local=local)
     rec = _RecTrader(ex)
     orig, sent = live.notify, []
-    live.notify = lambda m: sent.append(m)
+    live.notify = lambda m, category=None: sent.append(m)
     try:
         _reconcile(rec)
     finally:
@@ -401,7 +401,7 @@ def test_reconcile_reinherits_on_side_flip():
     ex = _RecEx(xpos=_xp(-1, 1.0), local=_LP(1, 1.0))
     rec = _RecTrader(ex)
     orig = live.notify
-    live.notify = lambda m: None
+    live.notify = lambda m, category=None: None
     try:
         _reconcile(rec)
     finally:
@@ -449,7 +449,7 @@ def test_external_close_records_ledger_and_clears_position():
     t.ledger_path = os.path.join(tempfile.mkdtemp(prefix="ledger-"), "t.db")
     base = _FakeBase([1_000, 2_000])
     orig, sent = live.notify, []
-    live.notify = lambda m: sent.append(m)
+    live.notify = lambda m, category=None: sent.append(m)
     try:
         LiveTrader._external_close(t, ex.position, base)
     finally:
@@ -623,6 +623,42 @@ def test_notify_silent_when_nothing_configured():
     assert sent == []
 
 
+def test_channel_for_routes_by_category_with_fallback():
+    """카테고리 전용 채널이 있으면 그리로, 없으면 기본 채널로 폴백."""
+    import engine.notifier as notifier
+    with _with_env(DISCORD_CHANNEL_ID="base", DISCORD_CHANNEL_TRADES="tr",
+                   DISCORD_CHANNEL_SYSTEM=None, DISCORD_CHANNEL_DIGEST=None):
+        assert notifier.channel_for("trade") == "tr"       # 전용 있음
+        assert notifier.channel_for("system") == "base"    # 전용 없음 → 폴백
+        assert notifier.channel_for("digest") == "base"    # 전용 없음 → 폴백
+        assert notifier.channel_for(None) == "base"        # 카테고리 없음 → 기본
+    with _with_env(DISCORD_CHANNEL_ID=None, DISCORD_CHANNEL_TRADES="tr"):
+        assert notifier.channel_for("trade") == "tr"
+        assert notifier.channel_for("system") is None      # 기본도 없으면 None
+
+
+def test_notify_posts_to_category_channel():
+    """봇 발신 시 category 에 따라 채널 엔드포인트가 갈린다(미설정 카테고리는 기본 채널)."""
+    import engine.notifier as notifier
+    sent = []
+
+    class FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    orig = notifier.urllib.request.urlopen
+    notifier.urllib.request.urlopen = lambda req, timeout=None: sent.append(req.full_url) or FakeResp()
+    try:
+        with _with_env(DISCORD_BOT_TOKEN="t", DISCORD_CHANNEL_ID="1",
+                       DISCORD_CHANNEL_TRADES="222", DISCORD_CHANNEL_SYSTEM=None):
+            notifier.notify("a", category="trade")      # → 222
+            notifier.notify("b", category="system")     # system 미설정 → 기본 1
+    finally:
+        notifier.urllib.request.urlopen = orig
+    assert sent == ["https://discord.com/api/v10/channels/222/messages",
+                    "https://discord.com/api/v10/channels/1/messages"]
+
+
 def test_notify_failure_is_logged_not_swallowed(capsys=None):
     """웹훅이 죽어도 매매는 계속돼야 하지만, 로그에는 남아야 한다(조용한 실패 방지)."""
     import io, contextlib
@@ -654,7 +690,7 @@ def test_pause_resume_notifies_only_on_change():
 
     sent, state = [], {"v": "paused"}
     orig_notify, orig_svc = live.notify, live.control.service_state
-    live.notify = lambda m: sent.append(m)
+    live.notify = lambda m, category=None: sent.append(m)
     live.control.service_state = lambda *a, **k: state["v"]
     try:
         s = Stub()

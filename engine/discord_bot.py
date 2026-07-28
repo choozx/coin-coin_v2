@@ -280,12 +280,15 @@ def run() -> None:
     except ValueError:
         digest_hour = 8
 
+    # 요약은 전용 채널(DISCORD_CHANNEL_DIGEST)로, 없으면 기본 채널로 폴백.
+    digest_channel = os.environ.get("DISCORD_CHANNEL_DIGEST") or channel_id
+
     @tasks.loop(time=_dt.time(hour=digest_hour, minute=0, tzinfo=digest_tz))
     async def daily_digest():
-        if not channel_id:
+        if not digest_channel:
             return
         try:
-            ch = client.get_channel(int(channel_id)) or await client.fetch_channel(int(channel_id))
+            ch = client.get_channel(int(digest_channel)) or await client.fetch_channel(int(digest_channel))
             start = int(time.time() * 1000) - 24 * 3600 * 1000
             rows = ledger.load(ledger_path, start_ms=start)
             st = ledger.stats(ledger_path, start_ms=start)
@@ -302,10 +305,10 @@ def run() -> None:
                 await tree.sync(guild=g)
             else:
                 await tree.sync()
-            if channel_id and not daily_digest.is_running():
+            if digest_channel and not daily_digest.is_running():
                 daily_digest.start()                  # 매일 digest_hour 시(digest_tz)에 요약 push
             print(f"[디스코드봇] 로그인 {client.user} · 명령 동기화 완료 · "
-                  f"일일요약 {digest_hour}시({digest_tz}) {'ON' if channel_id else 'OFF(채널 미설정)'}", flush=True)
+                  f"일일요약 {digest_hour}시({digest_tz}) {'ON' if digest_channel else 'OFF(채널 미설정)'}", flush=True)
         except Exception as e:
             print(f"[디스코드봇] 명령 동기화 실패: {e}", flush=True)
 
