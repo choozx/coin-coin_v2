@@ -73,6 +73,7 @@ main() {
     fi
 
     if [ -n "${targets// /}" ]; then
+        dnotify "🚀 배포 ${applied:0:7}→${remote:0:7} 시작 · 대상: ${targets}${deferred:+ (트레이더 연기)}"
         echo "배포 → ${remote:0:7} | 대상: ${targets}"
         # shellcheck disable=SC2086
         docker compose up -d --no-build $targets
@@ -81,22 +82,30 @@ main() {
 
     if [ -n "$deferred" ]; then
         echo "트레이더 미반영 → .deploy-applied 갱신 안 함(다음 주기 재시도)"
+        dnotify "⏸ 트레이더 교체 연기(포지션 보유) → ${remote:0:7}. 무포지션 되면 자동 반영. 반영됨: ${targets:-없음}"
     else
         echo "$remote" > "$state_file"
         echo "배포 완료 ${remote:0:7}"
+        dnotify "✅ 배포 완료 → ${remote:0:7} · 대상: ${targets:-없음}"
     fi
     docker compose ps --format 'table {{.Service}}\t{{.Status}}'
+}
+
+# service-deps.conf 의 <svc>_mods 키에서 서비스 이름을 뽑는다(하드코딩 대신 동적 → 새 서비스
+# 추가 시 여기 안 고쳐도 자동 포함. 테스트 test_deploy_paths 가 conf↔import 일치를 지킨다).
+all_services() {
+    sed -n 's/^\([a-z][a-z0-9]*\)_mods=.*/\1/p' deploy/service-deps.conf | tr '\n' ' ' | sed 's/ *$//'
 }
 
 # 바뀐 경로 목록을 받아 재생성이 필요한 서비스 이름을 공백 구분으로 출력.
 affected_services() {
     local changed="$1" conf="deploy/service-deps.conf" out=""
-    [ "$changed" = "__ALL__" ] && { echo "trader collector dashboard"; return; }
+    [ "$changed" = "__ALL__" ] && { all_services; return; }
     [ -z "$changed" ] && { echo ""; return; }
 
     local all_extra svc mods extra pattern
     all_extra=$(conf_get "$conf" all_extra)
-    for svc in trader collector dashboard; do
+    for svc in $(all_services); do
         mods=$(conf_get "$conf" "${svc}_mods")
         extra=$(conf_get "$conf" "${svc}_extra")
         # 모듈 목록 → ^engine/(a|b|c)\.py$
@@ -112,6 +121,24 @@ affected_services() {
 
 conf_get() {                                    # conf 파일에서 key= 값 읽기
     sed -n "s/^$2=//p" "$1" | head -1
+}
+
+# 배포 상황을 디스코드로 알린다. .env 에서 값만 뽑아 curl(호스트에 파이썬/의존성 불필요).
+# 알림 실패가 배포를 막으면 안 되므로 전부 '|| true'. 메시지엔 큰따옴표를 넣지 말 것(JSON 깨짐).
+dnotify() {
+    local msg="$1" hook token channel payload
+    hook=$(sed -n 's/^NOTIFY_WEBHOOK=//p' .env 2>/dev/null | head -1)
+    token=$(sed -n 's/^DISCORD_BOT_TOKEN=//p' .env 2>/dev/null | head -1)
+    channel=$(sed -n 's/^DISCORD_CHANNEL_ID=//p' .env 2>/dev/null | head -1)
+    payload=$(printf '{"content":"%s"}' "$msg")
+    if [ -n "$token" ] && [ -n "$channel" ]; then
+        curl -sf -m 5 -X POST "https://discord.com/api/v10/channels/${channel}/messages" \
+            -H "Authorization: Bot ${token}" -H "Content-Type: application/json" \
+            -H "User-Agent: coin-coin-bot/1.0" -d "$payload" >/dev/null 2>&1 || true
+    elif [ -n "$hook" ]; then
+        curl -sf -m 5 -X POST "$hook" -H "Content-Type: application/json" \
+            -H "User-Agent: coin-coin-bot/1.0" -d "$payload" >/dev/null 2>&1 || true
+    fi
 }
 
 # 트레이더가 포지션을 들고 있는가. state.json은 트레이더가 매 루프(기본 60초) 갱신한다.

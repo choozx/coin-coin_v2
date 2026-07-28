@@ -315,6 +315,12 @@ def run() -> None:
 def main() -> None:
     from .env import load_dotenv
     load_dotenv()
+    # 토큰이 없으면 크래시 루프(restart:unless-stopped) 대신 조용히 유휴 대기 —
+    # 배포 폴러가 이 서비스를 띄워도, 아직 설정 전이면 로그를 어지럽히지 않는다.
+    if not os.environ.get("DISCORD_BOT_TOKEN"):
+        print("[디스코드봇] DISCORD_BOT_TOKEN 미설정 — 유휴 대기(토큰 설정 후 재시작하면 활성).", flush=True)
+        while True:
+            time.sleep(3600)
     run()
 
 
