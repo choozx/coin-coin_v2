@@ -17,7 +17,7 @@ ENGINE = ROOT / "engine"
 CONF = ROOT / "deploy" / "service-deps.conf"
 
 ENTRY = {"trader": "live", "collector": "collector", "dashboard": "dashboard",
-         "discordbot": "discord_bot"}
+         "discordbot": "discord_bot", "watchdog": "watchdog"}
 
 # 프로덕션 대시보드(engine.dashboard)가 서빙하는 페이지들 — 새 페이지를 추가하면 여기에도 넣을 것.
 PROD_PAGES = ("dashboard.html", "collector.html", "settings.html")

@@ -552,25 +552,25 @@ def test_notify_sets_user_agent_and_right_payload_key():
     헤더 하나가 빠져서 알림이 통째로 안 왔는데, notify 가 예외를 삼켜 실패한 줄도 몰랐다.
     UA 를 붙이는 것과, 웹훅 종류별 payload 키(Slack=text / Discord=content)를 함께 못박는다.
     """
-    import engine.live as live
+    import engine.notifier as notifier          # notify 는 이제 engine.notifier 에 있다
     sent = []
 
     class FakeResp:
         def __enter__(self): return self
         def __exit__(self, *a): return False
 
-    orig = live.urllib.request.urlopen
-    live.urllib.request.urlopen = lambda req, timeout=None: sent.append(req) or FakeResp()
+    orig = notifier.urllib.request.urlopen
+    notifier.urllib.request.urlopen = lambda req, timeout=None: sent.append(req) or FakeResp()
     try:
         # 봇 토큰이 없어야 웹훅 경로를 탄다 — 환경에 새어 있을 수 있으니 명시적으로 끈다.
         with _with_env(DISCORD_BOT_TOKEN=None, DISCORD_CHANNEL_ID=None,
                        NOTIFY_WEBHOOK="https://discord.com/api/webhooks/1/abc"):
-            live.notify("hi")
+            notifier.notify("hi")
         with _with_env(DISCORD_BOT_TOKEN=None, DISCORD_CHANNEL_ID=None,
                        NOTIFY_WEBHOOK="https://hooks.slack.com/services/x"):
-            live.notify("hi")
+            notifier.notify("hi")
     finally:
-        live.urllib.request.urlopen = orig
+        notifier.urllib.request.urlopen = orig
 
     assert len(sent) == 2
     for req in sent:
@@ -584,7 +584,7 @@ def test_notify_sets_user_agent_and_right_payload_key():
 
 def test_notify_prefers_bot_token_over_webhook():
     """봇 토큰+채널이 있으면 웹훅 대신 봇 채널 REST 로 보낸다(Authorization: Bot, 채널 엔드포인트)."""
-    import engine.live as live
+    import engine.notifier as notifier
     import json as _j
     sent = []
 
@@ -592,14 +592,14 @@ def test_notify_prefers_bot_token_over_webhook():
         def __enter__(self): return self
         def __exit__(self, *a): return False
 
-    orig = live.urllib.request.urlopen
-    live.urllib.request.urlopen = lambda req, timeout=None: sent.append(req) or FakeResp()
+    orig = notifier.urllib.request.urlopen
+    notifier.urllib.request.urlopen = lambda req, timeout=None: sent.append(req) or FakeResp()
     try:
         with _with_env(DISCORD_BOT_TOKEN="tok123", DISCORD_CHANNEL_ID="999",
                        NOTIFY_WEBHOOK="https://discord.com/api/webhooks/1/abc"):  # 있어도 봇이 이긴다
-            live.notify("hi")
+            notifier.notify("hi")
     finally:
-        live.urllib.request.urlopen = orig
+        notifier.urllib.request.urlopen = orig
 
     assert len(sent) == 1
     req = sent[0]
@@ -611,35 +611,36 @@ def test_notify_prefers_bot_token_over_webhook():
 
 def test_notify_silent_when_nothing_configured():
     """봇도 웹훅도 없으면 조용히 아무것도 안 보낸다(설정 안 했으면 무동작)."""
-    import engine.live as live
+    import engine.notifier as notifier
     sent = []
-    orig = live.urllib.request.urlopen
-    live.urllib.request.urlopen = lambda req, timeout=None: sent.append(req)
+    orig = notifier.urllib.request.urlopen
+    notifier.urllib.request.urlopen = lambda req, timeout=None: sent.append(req)
     try:
         with _with_env(DISCORD_BOT_TOKEN=None, DISCORD_CHANNEL_ID=None, NOTIFY_WEBHOOK=None):
-            live.notify("hi")
+            notifier.notify("hi")
     finally:
-        live.urllib.request.urlopen = orig
+        notifier.urllib.request.urlopen = orig
     assert sent == []
 
 
 def test_notify_failure_is_logged_not_swallowed(capsys=None):
     """웹훅이 죽어도 매매는 계속돼야 하지만, 로그에는 남아야 한다(조용한 실패 방지)."""
-    import engine.live as live, io, contextlib
-    orig = live.urllib.request.urlopen
+    import io, contextlib
+    import engine.notifier as notifier
+    orig = notifier.urllib.request.urlopen
 
     def boom(req, timeout=None):
         raise OSError("network down")
 
-    live.urllib.request.urlopen = boom
+    notifier.urllib.request.urlopen = boom
     buf = io.StringIO()
     try:
         with _with_env(DISCORD_BOT_TOKEN=None, DISCORD_CHANNEL_ID=None,
                        NOTIFY_WEBHOOK="https://discord.com/api/webhooks/1/abc"):
             with contextlib.redirect_stdout(buf):
-                live.notify("hi")            # 예외가 밖으로 나가면 안 됨
+                notifier.notify("hi")            # 예외가 밖으로 나가면 안 됨
     finally:
-        live.urllib.request.urlopen = orig
+        notifier.urllib.request.urlopen = orig
     assert "알림 실패" in buf.getvalue()
 
 
