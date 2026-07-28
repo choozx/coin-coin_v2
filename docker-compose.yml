@@ -64,7 +64,11 @@ services:
       PYTHONUNBUFFERED: 1
       TZ: UTC
     ports:
-      - "${DASH_PORT:-8080}:8080"           # 대시보드만 노출(내 IP 제한 권장)
+      # ★ 보안: 대시보드는 인증이 없다(멈춤/재개·레버리지·가드레일을 그냥 POST). 그래서 기본은
+      #   호스트 loopback 에만 바인드 → 인터넷에서 안 보이고 SSH 터널로만 접근한다.
+      #     ssh -N -L 8080:localhost:8080 <EC2>  후  http://localhost:8080
+      #   정말 공개로 열어야 하면 .env 에서 DASH_BIND=0.0.0.0 (+ 보안그룹으로 내 IP 만 허용).
+      - "${DASH_BIND:-127.0.0.1}:${DASH_PORT:-8080}:8080"
     volumes:
       - ./data:/app/data                    # state 읽기 + control 쓰기(멈춤/재개)
     logging: { driver: json-file, options: { max-size: "10m", max-file: "3" } }
