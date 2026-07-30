@@ -65,7 +65,7 @@ def test_leverage_tiers_also_clamped():
 def test_guardrail_sizing_caps_default():
     p = os.path.join(tempfile.mkdtemp(), "none.json")           # 파일 없음 → 기본값
     g = settings.get_guardrails(path=p)
-    assert g["maxLeverage"] == 25 and g["maxAccountFractionPct"] == 90.0
+    assert g["maxLeverage"] == 50 and g["maxAccountFractionPct"] == 90.0
 
 
 def test_guardrail_sizing_caps_override_and_validate():
@@ -76,7 +76,7 @@ def test_guardrail_sizing_caps_override_and_validate():
     # 잘못된 값은 무시하고 기본 유지
     settings.set_guardrails({"maxLeverage": "abc", "maxAccountFractionPct": 999}, path=p)
     g2 = settings.get_guardrails(path=p)
-    assert g2["maxLeverage"] == 25                             # 파싱 실패 → 기본
+    assert g2["maxLeverage"] == 50                             # 파싱 실패 → 기본
     assert g2["maxAccountFractionPct"] == 100.0                # 100 초과는 100으로 클램프
 
 
