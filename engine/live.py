@@ -143,6 +143,11 @@ class LiveTrader:
             print(f"  [봇설정 무효 → 프리셋 값 사용] {e}", flush=True)
             self.preset = Preset(copy.deepcopy(self._base_data))
         self._apply_derived(self.preset)
+        # 사이징 하드 상한(글로벌 가드레일) 주입 — 오설정으로 한 방에 계좌 날리는 걸 막는 천장.
+        # 어떤 프리셋/봇설정 값이 와도 레버리지·증거금비율이 이 이상 못 나간다(_open_position·_leverage_for).
+        gr = settings.get_guardrails()
+        self.cfg.max_leverage = int(gr.get("maxLeverage") or self.cfg.max_leverage)
+        self.cfg.max_account_fraction = float(gr.get("maxAccountFractionPct", 100.0)) / 100.0
         mk, tk = bm.fees_for_symbol(self.preset.symbol)      # 심볼 바뀌면 수수료 갱신
         self.cfg.maker_fee, self.cfg.taker_fee = mk, tk
         if hasattr(self.ex, "maker_fee"):

@@ -63,6 +63,10 @@ DEFAULT_GUARDRAILS = {
     "dailyLossLimit": {"enabled": False, "pct": 10.0},      # 오늘 실현손실이 잔고의 pct% 넘으면 정지
     "maxConsecutiveLosses": {"enabled": False, "count": 5},  # N연속 손절 시 정지
     "killSwitch": False,                                     # 즉시 정지(마스터)
+    # 사이징 하드 상한(항상 적용, off 없음): 오설정·침입으로 한 방에 계좌 날리는 걸 막는 천장.
+    # 정상 매매(예: 10배·10%)엔 여유. 초과 설정은 거부가 아니라 이 값으로 클램프한다.
+    "maxLeverage": 25,                                      # 레버리지 상한(초과 시 클램프)
+    "maxAccountFractionPct": 90.0,                          # 한 진입 증거금 ≤ 잔고의 이 %(펀딩·수수료 여유)
 }
 
 
@@ -76,6 +80,16 @@ def get_guardrails(path: str = SETTINGS_PATH) -> dict:
         g["maxConsecutiveLosses"].update({k: v["maxConsecutiveLosses"][k] for k in ("enabled", "count") if k in v["maxConsecutiveLosses"]})
     if "killSwitch" in v:
         g["killSwitch"] = bool(v["killSwitch"])
+    if "maxLeverage" in v:
+        try:
+            g["maxLeverage"] = max(1, int(v["maxLeverage"]))
+        except (TypeError, ValueError):
+            pass
+    if "maxAccountFractionPct" in v:
+        try:
+            g["maxAccountFractionPct"] = min(100.0, max(1.0, float(v["maxAccountFractionPct"])))
+        except (TypeError, ValueError):
+            pass
     return g
 
 

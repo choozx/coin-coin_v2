@@ -36,7 +36,8 @@ class BacktestConfig:
     taker_fee: float = bm.DEFAULT_TAKER_FEE
     maker_fee: float = bm.DEFAULT_MAKER_FEE
     bracket: bm.MarginBracket = None
-    max_leverage: int = 125           # 계정 정책 상한 (가드레일)
+    max_leverage: int = 125           # 레버리지 하드 상한 (초과 설정은 이 값으로 클램프)
+    max_account_fraction: float = 1.0  # 한 진입 증거금이 잔고의 이 비율을 못 넘음(1.0=100%, 현행)
 
     def __post_init__(self):
         if self.bracket is None:
@@ -462,8 +463,9 @@ def _open_position(preset, sizing, ex, price, ot, sb, side, lev, equity, cfg, at
     qty, margin = _size_position(sizing, equity, price, lev, stop_price)
     if qty is None or qty <= 0 or margin is None or margin <= 0:
         return None
-    if margin > equity:                     # 리스크 사이징이 자본 초과 요구 → 자본 상한으로 캡
-        margin = equity
+    cap = equity * cfg.max_account_fraction  # 사이징 상한: 한 진입 증거금이 잔고의 이 비율 이내
+    if margin > cap:                         # 초과분은 상한으로 클램프(수수료·펀딩 여유 확보)
+        margin = cap
         qty = margin * lev / price
 
     liq = bm.liquidation_price(price, qty, lev, side, cfg.bracket, wallet_balance=margin)
