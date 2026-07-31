@@ -741,6 +741,44 @@ def test_notify_silent_when_nothing_configured():
     assert sent == []
 
 
+def test_build_components_maps_buttons():
+    """friendly key → 디스코드 components(액션 로우, custom_id 는 discord_bot 과 일치)."""
+    import engine.notifier as notifier
+    comps = notifier.build_components(["pause", "flatten"])
+    assert len(comps) == 1 and comps[0]["type"] == 1                 # 액션 로우 1개
+    ids = [b["custom_id"] for b in comps[0]["components"]]
+    assert ids == [notifier.CID_PAUSE, notifier.CID_FLATTEN]
+    assert notifier.build_components(None) == []                     # 없으면 빈 리스트
+    assert notifier.build_components(["bogus"]) == []                # 모르는 키는 무시
+
+
+def test_notify_attaches_buttons_in_bot_mode():
+    """봇 모드에선 buttons 가 메시지 components 로 붙는다. 웹훅 모드에선 무시."""
+    import engine.notifier as notifier
+    import json as _j
+    sent = []
+
+    class FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    orig = notifier.urllib.request.urlopen
+    notifier.urllib.request.urlopen = lambda req, timeout=None: sent.append(req) or FakeResp()
+    try:
+        with _with_env(DISCORD_BOT_TOKEN="t", DISCORD_CHANNEL_ID="1"):
+            notifier.notify("hi", buttons=["pause", "flatten"])       # 봇 → 버튼 붙음
+        with _with_env(DISCORD_BOT_TOKEN=None, DISCORD_CHANNEL_ID=None,
+                       NOTIFY_WEBHOOK="https://discord.com/api/webhooks/1/a"):
+            notifier.notify("hi", buttons=["pause"])                  # 웹훅 → 버튼 무시
+    finally:
+        notifier.urllib.request.urlopen = orig
+
+    bot_payload = _j.loads(sent[0].data)
+    assert "components" in bot_payload and bot_payload["components"][0]["type"] == 1
+    hook_payload = _j.loads(sent[1].data)
+    assert "components" not in hook_payload                          # 웹훅엔 안 붙음
+
+
 def test_channel_for_routes_by_category_with_fallback():
     """카테고리 전용 채널이 있으면 그리로, 없으면 기본 채널로 폴백."""
     import engine.notifier as notifier

@@ -616,7 +616,8 @@ class LiveTrader:
                 for e in events:
                     print(f"  [{e['type']}] {e}", flush=True)
                     if e["type"] == "open":
-                        notify(f"🟢 진입 {'롱' if e['side']>0 else '숏'} @{e['price']:.2f} x{e['lev']} ({self.preset.symbol})", category="trade")
+                        notify(f"🟢 진입 {'롱' if e['side']>0 else '숏'} @{e['price']:.2f} x{e['lev']} ({self.preset.symbol})",
+                               category="trade", buttons=["pause", "flatten"])
                     elif e["type"] == "close":
                         notify(f"🔴 청산 {e['reason']} @{e['price']:.2f} pnl {e['pnl']:+.2f} 잔고 {self.ex.equity():.0f}", category="trade")
                 st = f"잔고 {self.ex.equity():.2f}"
@@ -628,7 +629,7 @@ class LiveTrader:
                 fails += 1
                 print(f"  [에러] {e}", flush=True)
                 if fails in (1, 5, 20):      # 반복 실패 시 알림(스팸 방지)
-                    notify(f"⚠️ 에러({fails}회): {e}", category="system")
+                    notify(f"⚠️ 에러({fails}회): {e}", category="system", buttons=["status"])
             if once:
                 break
             time.sleep(interval)

@@ -88,7 +88,9 @@ def run() -> None:
         status, age = evaluate(read_updated_ms(state_path), int(time.time() * 1000), stale_sec)
         msg = alert_for(prev, status, age)
         if msg:
-            notify(msg, category="system")
+            # 응답없음/파일없음 경고엔 [상태] 버튼(회복 알림엔 불필요)
+            btns = ["status"] if status in ("stale", "missing") else None
+            notify(msg, category="system", buttons=btns)
             print(f"[워치독] {status}: {msg}", flush=True)
         prev = status
 

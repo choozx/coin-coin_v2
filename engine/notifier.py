@@ -18,6 +18,28 @@ _CATEGORY_ENV = {"trade": "DISCORD_CHANNEL_TRADES",     # 진입/청산/포지�
                  "digest": "DISCORD_CHANNEL_DIGEST"}    # 정기 요약
 
 
+# 알림 버튼(components). custom_id 는 discord_bot 의 persistent view 와 일치해야 클릭이 라우팅된다.
+# 웹훅 모드에선 버튼이 무시된다(웹훅 메시지엔 인터랙티브 컴포넌트를 못 붙임).
+CID_PAUSE, CID_RESUME, CID_FLATTEN, CID_STATUS = "act_pause", "act_resume", "act_flatten", "act_status"
+_BUTTON_SPEC = {                                   # friendly key → 디스코드 버튼 스펙(style: 2=회색,3=초록,4=빨강,1=파랑)
+    "pause":   {"cid": CID_PAUSE,   "label": "정지",     "emoji": "⏸", "style": 2},
+    "resume":  {"cid": CID_RESUME,  "label": "재개",     "emoji": "▶️", "style": 3},
+    "flatten": {"cid": CID_FLATTEN, "label": "즉시청산", "emoji": "🛑", "style": 4},
+    "status":  {"cid": CID_STATUS,  "label": "상태",     "emoji": "📊", "style": 1},
+}
+
+
+def build_components(buttons) -> list:
+    """friendly key 리스트(['pause','flatten']) → 디스코드 메시지 components(액션 로우). 없으면 []."""
+    row = []
+    for key in (buttons or [])[:5]:                # 한 로우 최대 5개
+        s = _BUTTON_SPEC.get(key)
+        if s:
+            row.append({"type": 2, "style": s["style"], "label": s["label"],
+                        "emoji": {"name": s["emoji"]}, "custom_id": s["cid"]})
+    return [{"type": 1, "components": row}] if row else []
+
+
 def channel_for(category: str = None) -> str:
     """카테고리 전용 채널 ID(있으면) → 없으면 기본 채널. 채널 라우팅 단일 지점.
 
@@ -31,19 +53,22 @@ def channel_for(category: str = None) -> str:
     return os.environ.get("DISCORD_CHANNEL_ID")
 
 
-def notify(msg: str, category: str = None) -> None:
+def notify(msg: str, category: str = None, buttons=None) -> None:
     """선택적 알림 — 봇 토큰이 있으면 봇으로, 없으면 웹훅으로 POST. 없으면 무시.
 
     category(trade/system/digest)에 따라 채널을 가른다(전용 채널 미설정 시 기본 채널 폴백).
-    봇으로 보내면 발신자가 내 봇으로 통일되고 메시지에 버튼을 붙일 수 있다(웹훅은 불가). 봇 전송도
-    상주 Gateway 가 아니라 REST POST 한 방이라 discord.py 는 필요 없다. 웹훅은 Slack 도 지원
-    (payload 키가 다름: Slack=text, Discord=content)하므로 폴백으로 남긴다(웹훅은 채널 분리 없음).
+    buttons(friendly key 리스트)는 봇 모드에서만 메시지에 붙는다 — 클릭은 discordbot 의 persistent
+    view 가 처리(트레이더가 죽어도 discordbot 이 살아 있으면 동작). 웹훅 모드에선 버튼은 무시된다.
+    봇 전송도 상주 Gateway 가 아니라 REST POST 한 방이라 여기(trader)에 discord.py 는 필요 없다.
     """
     token = os.environ.get("DISCORD_BOT_TOKEN")
     channel = channel_for(category)
     if token and channel:
         url = f"https://discord.com/api/v10/channels/{channel}/messages"
         payload, extra = {"content": msg}, {"Authorization": f"Bot {token}"}
+        comps = build_components(buttons)
+        if comps:
+            payload["components"] = comps
     else:
         url = os.environ.get("NOTIFY_WEBHOOK")
         if not url:

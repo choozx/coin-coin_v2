@@ -15,6 +15,8 @@
     STATE_PATH / LEDGER_PATH / CONTROL_PATH 대시보드와 동일(data/state.json·trades.db·control.json)
 
 명령: /status /position /stats /info (조회) · /control (시작/정지) · /flat (즉시청산) · /strategy /config (변경).
+알림 버튼: 트레이더가 보낸 알림(진입·에러·워치독)의 [정지]/[즉시청산]/[상태] 버튼을 여기서 처리
+(persistent view, custom_id 는 engine.notifier 와 일치 → 재시작·프로세스 경계 넘어 동작).
 보안: 모든 응답 ephemeral(요청자만) + 유저 화이트리스트(버튼·선택·모달 모두 재검문).
 변경(/strategy·/config)은 확인 버튼을 한 번 더 거치고, 무포지션일 때만 적용된다(보유 중이면
 청산 후 대기 — live.py 의 pendingStrategy/봇설정 반영과 같은 규칙). 강제청산·주문은 없다.
@@ -28,6 +30,7 @@ import time
 from . import control
 from . import discord_views as views
 from . import ledger
+from . import notifier
 from . import preset
 
 
@@ -140,6 +143,45 @@ def run() -> None:
             for c in self.children:
                 c.disabled = True
             await interaction.response.edit_message(content="취소됨.", view=self)
+
+    class AlertActionView(discord.ui.View):
+        """알림 메시지에 붙는 버튼들의 처리기(persistent). 트레이더가 보낸 알림의 버튼을 눌러도
+        여기(discordbot)가 custom_id 로 라우팅해 처리한다. timeout=None + 고정 custom_id 라
+        재시작·프로세스 경계를 넘어 동작한다."""
+
+        def __init__(self):
+            super().__init__(timeout=None)
+
+        async def interaction_check(self, interaction) -> bool:
+            if interaction.user.id in allowed:
+                return True
+            await interaction.response.send_message("⛔ 권한 없음", ephemeral=True)
+            return False
+
+        @discord.ui.button(label="상태", emoji="📊", style=discord.ButtonStyle.primary,
+                           custom_id=notifier.CID_STATUS)
+        async def status_btn(self, interaction, button):
+            await interaction.response.send_message(views.status_text(load_state(state_path)), ephemeral=True)
+
+        @discord.ui.button(label="정지", emoji="⏸", style=discord.ButtonStyle.secondary,
+                           custom_id=notifier.CID_PAUSE)
+        async def pause_btn(self, interaction, button):
+            control.set_service("trader", "paused", path=control_path)
+            await interaction.response.send_message("⏸ 정지 요청됨 — 새 진입 차단(보유 포지션은 관리).", ephemeral=True)
+
+        @discord.ui.button(label="재개", emoji="▶️", style=discord.ButtonStyle.success,
+                           custom_id=notifier.CID_RESUME)
+        async def resume_btn(self, interaction, button):
+            control.set_service("trader", "running", path=control_path)
+            await interaction.response.send_message("▶️ 재개 요청됨 — 새 진입 시작.", ephemeral=True)
+
+        @discord.ui.button(label="즉시청산", emoji="🛑", style=discord.ButtonStyle.danger,
+                           custom_id=notifier.CID_FLATTEN)
+        async def flatten_btn(self, interaction, button):
+            await interaction.response.send_message(       # 파괴적 → 확인 한 번 더
+                "**즉시청산 확인** — 지금 포지션을 시장가로 닫고 정지합니다.",
+                view=ConfirmView(lambda: control.request_flatten(control_path), "즉시청산 요청됨 — 다음 폴에 청산"),
+                ephemeral=True)
 
     class StrategySelect(discord.ui.Select):
         """전략 선택 드롭다운 → 고르면 확인 단계로. Discord 옵션 상한 25개."""
@@ -319,6 +361,9 @@ def run() -> None:
                 await tree.sync(guild=g)
             else:
                 await tree.sync()
+            if not getattr(client, "_alert_view_added", False):
+                client.add_view(AlertActionView())    # persistent — 알림 버튼 클릭 처리(재시작 후에도)
+                client._alert_view_added = True
             if digest_channel and not daily_digest.is_running():
                 daily_digest.start()                  # 매일 digest_hour 시(digest_tz)에 요약 push
             print(f"[디스코드봇] 로그인 {client.user} · 명령 동기화 완료 · "
