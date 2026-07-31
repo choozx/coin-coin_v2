@@ -370,7 +370,14 @@ class LiveExecutor(Executor):
             is_maker = False
 
         side = "sell" if pos.side == 1 else "buy"
-        qty = self._broker.round_qty(pos.qty)
+        try:
+            qty = self._broker.round_qty(pos.qty)
+        except OrderError:
+            qty = 0.0
+        if qty <= 0:
+            # 스텝 미만 잔량 = 거래소엔 사실상 없는 dust(부분체결 회계로 로컬에만 남은 것).
+            # 주문을 낼 수 없으니 flat 으로 보고 기록한다 — 안 그러면 매 폴 재시도로 갇힌다.
+            return self._record(pos, exit_price, 0.0, reason, exit_time)
         fill = (self._broker.limit_then_market(side, qty, self.fill_timeout_s, reduce_only=True,
                                                max_attempts=self.maker_max_attempts)
                 if is_maker else self._broker.market_order(side, qty, reduce_only=True))

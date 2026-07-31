@@ -265,7 +265,10 @@ class BinanceBroker:
             remaining = self.round_qty(max(0.0, qty - filled.qty))
         if remaining <= 0:
             return filled
-        if filled is not None:                                    # 잔량이 최소주문 미만이면 그대로 둔다
+        # 청산(reduce_only)이면 잔량 크기 무관 무조건 시장가로 마무리한다 — reduceOnly 는 MIN_NOTIONAL
+        # 이 면제라 dust 도 닫히고, 안 그러면 최소주문 미만 잔량에 포지션이 갇힌다(데드락).
+        # 진입(reduce_only=False)일 때만 최소주문 미만 잔량은 굳이 taker 로 사지 않고 그대로 둔다.
+        if not reduce_only and filled is not None:
             try:
                 self.check_order_size(remaining, limit)
             except OrderError:

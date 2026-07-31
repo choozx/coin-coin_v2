@@ -155,6 +155,22 @@ def test_sell_side_attaches_to_ask():
     assert _near(fill.price, 101.0) and _near(fill.maker_qty, 1.0)
 
 
+def test_reduce_only_markets_dust_remainder():
+    """청산(reduce_only)이면 최소주문 미만 잔량(dust)도 시장가로 마무리 → 포지션이 안 갇힌다."""
+    fake = FakeCCXT(books=(100.0, 101.0), limit_fills=[0.001], market_px=101.0)
+    fill = _Broker(fake).limit_then_market("sell", 0.0015, TIMEOUT, reduce_only=True, max_attempts=1)
+    assert _near(fill.qty, 0.0015)                       # 0.001 maker + 0.0005 dust taker = 전량
+    assert [c[0] for c in fake.created] == ["limit", "market"]   # dust 도 시장가로 나감
+
+
+def test_entry_keeps_min_guard_on_dust():
+    """진입(reduce_only=False)이면 최소주문 미만 잔량은 굳이 사지 않고 그대로 둔다(기존 동작)."""
+    fake = FakeCCXT(books=(100.0, 101.0), limit_fills=[0.001], market_px=101.0)
+    fill = _Broker(fake).limit_then_market("buy", 0.0015, TIMEOUT, reduce_only=False, max_attempts=1)
+    assert _near(fill.qty, 0.001)                        # dust 는 스킵
+    assert [c[0] for c in fake.created] == ["limit"]     # 시장가 없음
+
+
 def test_attempts_one_is_legacy_behavior():
     """max_attempts=1 이면 '한 번 걸고 안 되면 taker'(구 동작)와 동일해야 한다."""
     fake = FakeCCXT(books=(100.0, 101.0), limit_fills=[0.0], market_px=101.0)

@@ -229,6 +229,20 @@ def test_partial_close_keeps_remainder_and_raises():
     assert ex.trades == []
 
 
+def test_close_dust_below_step_records_flat():
+    """스텝 미만 잔량(부분체결 회계로 로컬에만 남은 dust)은 주문 없이 flat 으로 기록 —
+    안 그러면 매 폴 청산 재시도가 실패하며 포지션이 영영 안 닫히는 데드락."""
+    broker = FakeBroker()                              # step=0.001
+    ex = _ex(broker)
+    ex.open(_pos(qty=1.0))
+    ex.position.qty = 0.0005                           # 스텝 미만 dust 를 강제로
+    n = len(broker.orders)
+    tr = ex.close(100.0, "signal", 5_000)
+    assert tr is not None and ex.position is None      # flat 도달
+    assert tr.exit_reason == "signal"
+    assert len(broker.orders) == n                     # 추가 주문 없음(주문 못 내는 크기)
+
+
 def test_position_sidecar_roundtrip():
     """재시작 복원용 사이드카: 진입 때 쓰고 청산 때 지운다."""
     broker = FakeBroker()
