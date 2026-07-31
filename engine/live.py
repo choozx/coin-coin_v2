@@ -514,11 +514,19 @@ class LiveTrader:
             return
         local = self.ex.position
 
-        # ① 거래소 무포지션 + 로컬 보유 → 봇 모르게 청산됨. 파괴적(원장 기록)이라 2폴 연속 확인 후 조치.
+        # ① 거래소 무포지션 + 로컬 보유 → 봇 모르게 청산됨. 파괴적(원장 기록 + 사이드카 삭제 →
+        #    손절 유실)이라 순간 빈 조회에 속지 않게 3폴(≈3분) 연속 + 조치 직전 최종 확인까지 한다.
         if xpos is None and local is not None:
             self._flat_divergence += 1
-            if self._flat_divergence < 2:
-                print("  [동기화] 거래소 무포지션인데 로컬 보유 — 1회차, 다음 폴 재확인", flush=True)
+            if self._flat_divergence < 3:
+                print("  [동기화] 거래소 무포지션인데 로컬 보유 — 재확인 대기", flush=True)
+                return
+            try:
+                confirm = self.ex.sync_position()      # 파괴적 조치 직전 최종 확인
+            except Exception:
+                return                                  # 조회 실패 → 보류(모르는 채 안 지운다)
+            if confirm is not None:                     # 되살아남 = 순간 빈 조회였음 → 오판 방지
+                self._flat_divergence = 0
                 return
             self._flat_divergence = 0
             self._external_close(local, base)

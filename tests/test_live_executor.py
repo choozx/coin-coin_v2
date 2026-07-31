@@ -170,6 +170,23 @@ def test_maker_max_attempts_env_override():
         assert broker.maker_attempts == 1
 
 
+def test_open_saves_sidecar_before_liq_fetch():
+    """진입 사이드카(손절/익절)는 거래소 청산가 조회 '전'에 저장돼야 한다 — 그 조회 중 프로세스가
+    죽어도 재시작 때 손절을 복원할 수 있게(손절 없는 레버리지 포지션 방지)."""
+    broker = FakeBroker(position={"side": 1, "qty": 1.0, "entry_price": 100.0, "leverage": 5,
+                                  "liq_price": 80.0, "margin": 20.0})
+    ex = _ex(broker)
+    saw = {}
+    orig = broker.position
+
+    def spy():                                     # _adopt_exchange_liq 가 이걸 부를 때
+        saw.setdefault("sidecar", bool(ex.load_saved_position()))   # 사이드카가 이미 있어야 한다
+        return orig()
+    broker.position = spy
+    ex.open(_pos(qty=1.0))
+    assert saw.get("sidecar") is True
+
+
 def test_open_rejected_below_min_notional_leaves_no_position():
     """최소주문 미달이면 포지션이 생기면 안 된다(주문도 안 나가야 한다)."""
     ex = _ex(FakeBroker(min_cost=100.0))
@@ -359,13 +376,30 @@ def _xp(side=1, qty=1.0, price=100.0):
             "liq_price": 80.0, "margin": 20.0}
 
 
-def test_reconcile_flat_divergence_needs_two_polls():
-    """거래소 무포지션인데 로컬 보유 — 1폴은 관망, 2폴 연속이어야 외부청산 기록(순간 조회오류 방어)."""
+def test_reconcile_flat_divergence_needs_three_polls():
+    """거래소 무포지션인데 로컬 보유 — 3폴 연속 + 최종 확인까지 통과해야 외부청산(손절 유실 방지)."""
     rec = _RecTrader(_RecEx(xpos=None, local=_LP(1, 1.0)))
     _reconcile(rec)
     assert rec._flat_divergence == 1 and rec.calls == []      # 1회차: 관망
     _reconcile(rec)
+    assert rec._flat_divergence == 2 and rec.calls == []      # 2회차: 관망
+    _reconcile(rec)                                           # 3회차 + 확인(여전히 None) → 조치
     assert rec.calls == ["external_close"] and rec._flat_divergence == 0
+
+
+def test_reconcile_confirm_reappear_aborts():
+    """3폴을 채워도 조치 직전 최종 확인에서 포지션이 되살아나면 외부청산하지 않는다."""
+    class Ex:
+        def __init__(self):
+            self.position, self.n = _LP(1, 1.0), 0
+
+        def sync_position(self):
+            self.n += 1
+            return None if self.n <= 3 else _xp(1, 1.0)       # 3폴은 None, 확인 호출에서 복귀
+    rec = _RecTrader(Ex())
+    for _ in range(3):
+        _reconcile(rec)
+    assert rec.calls == [] and rec._flat_divergence == 0      # 확인에서 되살아나 외부청산 안 함
 
 
 def test_reconcile_transient_flat_does_not_close():

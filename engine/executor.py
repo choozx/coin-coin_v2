@@ -329,8 +329,12 @@ class LiveExecutor(Executor):
         pos.margin = fill.price * fill.qty / max(1, pos.leverage)
         self.position = pos
         self._equity_cache = (0.0, 0.0)
-        self._adopt_exchange_liq(pos)
+        # ★ 사이드카(손절/익절)를 '네트워크 조회 전에' 먼저 저장한다 — 아래 _adopt_exchange_liq 가
+        #   거래소를 부르는데, 그 사이 프로세스가 죽으면(OOM 등) 거래소엔 포지션이 있는데 사이드카는
+        #   안 써져 재시작 때 손절을 못 살린다(레버리지 포지션이 손절 없이 도는 사고).
+        #   청산가·마진은 사이드카에 안 들어가므로 adopt 를 뒤에 둬도 손절 복원엔 영향 없다.
         self._save_position()
+        self._adopt_exchange_liq(pos)
 
     def _adopt_exchange_liq(self, pos) -> None:
         """청산가를 거래소가 계산한 값으로 교체. 우리 근사식(단일 tier)보다 이게 진짜다."""
