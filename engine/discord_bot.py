@@ -14,7 +14,7 @@
     DIGEST_HOUR / DIGEST_TZ  정기 요약 시각(기본 8시 / Asia/Seoul — 컨테이너 TZ=UTC 라 명시).
     STATE_PATH / LEDGER_PATH / CONTROL_PATH 대시보드와 동일(data/state.json·trades.db·control.json)
 
-명령: /status /position /stats /info (조회) · /control (시작/정지) · /strategy /config (변경).
+명령: /status /position /stats /info (조회) · /control (시작/정지) · /flat (즉시청산) · /strategy /config (변경).
 보안: 모든 응답 ephemeral(요청자만) + 유저 화이트리스트(버튼·선택·모달 모두 재검문).
 변경(/strategy·/config)은 확인 버튼을 한 번 더 거치고, 무포지션일 때만 적용된다(보유 중이면
 청산 후 대기 — live.py 의 pendingStrategy/봇설정 반영과 같은 규칙). 강제청산·주문은 없다.
@@ -240,6 +240,20 @@ def run() -> None:
         if not await guard(interaction):
             return
         await interaction.response.send_message(control_panel(), view=ControlView(), ephemeral=True)
+
+    @tree.command(name="flat", description="즉시청산 — 지금 포지션을 시장가로 닫고 자동 정지(긴급 탈출)")
+    async def flat_cmd(interaction: "discord.Interaction"):
+        if not await guard(interaction):
+            return
+        st = load_state(state_path)
+        pos = st.get("position")
+        head = ("현재 무포지션 — 청산할 게 없습니다." if not pos
+                else f"**즉시청산 확인** — {('롱' if pos.get('side', 0) > 0 else '숏')} @{pos.get('entryPrice')} "
+                     f"를 **시장가로 지금 청산**하고 새 진입을 정지합니다.")
+        await interaction.response.send_message(
+            head,
+            view=ConfirmView(lambda: control.request_flatten(control_path), "즉시청산 요청됨 — 봇이 다음 폴에 청산"),
+            ephemeral=True)
 
     @tree.command(name="info", description="지금 돌고 있는 봇의 설정(전략·레버리지·사이징·실행)")
     async def info_cmd(interaction: "discord.Interaction"):

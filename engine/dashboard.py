@@ -132,6 +132,8 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length))
             if self.path == "/api/control":       # {"service":"trader"|"collector","state":...}
                 ctrl = control.set_service(body["service"], body["state"])
+            elif self.path == "/api/flatten":     # 즉시청산 요청 — 트레이더가 다음 폴에 시장가 청산+정지
+                ctrl = control.request_flatten()
             elif self.path == "/api/strategy":     # {"path": "presets/..."} 봇 전략 선택
                 ctrl = select_strategy(body["path"])
             elif self.path == "/api/network":      # {"network":"testnet"|"mainnet"} 거래소 전환(무포지션 시)

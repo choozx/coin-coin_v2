@@ -45,6 +45,29 @@ def set_service(service: str, state: str, path: str = DEFAULT_PATH) -> dict:
     return _write(ctrl, path)
 
 
+def request_flatten(path: str = DEFAULT_PATH) -> dict:
+    """즉시청산 요청 플래그를 세운다(대시보드/디스코드 → 트레이더). 트레이더가 다음 폴에서 소비.
+
+    한 번만 실행되는 '요청'이라 상태(pause)가 아니라 소비형 플래그다 — 트레이더가 읽고 지운다.
+    """
+    ctrl = read_control(path)
+    ctrl["flatten"] = True
+    return _write(ctrl, path)
+
+
+def get_flatten(path: str = DEFAULT_PATH) -> bool:
+    """즉시청산 요청이 있는가."""
+    return bool(read_control(path).get("flatten"))
+
+
+def clear_flatten(path: str = DEFAULT_PATH) -> dict:
+    """즉시청산 요청 소비(실행 후 트레이더가 지운다)."""
+    ctrl = read_control(path)
+    if ctrl.pop("flatten", None) is not None:
+        _write(ctrl, path)
+    return ctrl
+
+
 def get_strategy(path: str = DEFAULT_PATH):
     """대시보드가 선택한 '원하는 전략' 프리셋 경로(없으면 None → 봇은 실행 시 프리셋 유지)."""
     return read_control(path).get("strategy")

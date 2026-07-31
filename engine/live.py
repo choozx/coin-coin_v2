@@ -386,6 +386,7 @@ class LiveTrader:
         resolver = SeriesResolver(signal)
 
         self._events = []                # hook(_on_open/_on_close)이 여기에 쌓는다
+        self._maybe_flatten(now_ms)      # 사용자 즉시청산 요청 처리(있으면 시장가 청산 + 자동 정지)
         self._reconcile_live_position(base)   # 유령 포지션 위에서 판정하지 않게 스텝 전에 거래소와 맞춘다
         # 아직 처리 안 한 1분봉만 (갭이 있어도 순서대로 따라잡음)
         start = 0
@@ -497,6 +498,32 @@ class LiveTrader:
             msg += " ⚠️ 로컬 기록 불일치 — 손절/익절가를 못 살렸습니다. 대시보드에서 확인하세요."
         notify(msg, category="trade")
         print(f"  [동기화] {msg}", flush=True)
+
+    def _maybe_flatten(self, now_ms):
+        """사용자 즉시청산 요청(control.flatten) 처리 — 전략과 무관하게 지금 포지션을 시장가로 닫는다.
+
+        대시보드/디스코드는 별개 프로세스라 청산을 직접 못 부른다 → control.json 플래그로 요청하고
+        트레이더가 여기서 소비. 긴급 탈출이므로 청산 후 '자동 정지'(즉시 재진입 방지). 재개는 수동.
+        """
+        if not control.get_flatten():
+            return
+        control.clear_flatten()                      # 소비(한 번만 실행)
+        pos = self.ex.position
+        if pos is None:
+            notify("🛑 즉시청산 요청 — 이미 무포지션(할 일 없음)", category="trade")
+            return
+        from .binance_broker import OrderError
+        px = self._last_price or pos.entry_price
+        ts = int(now_ms or time.time() * 1000)
+        try:
+            trade = self.ex.close(float(px), "manual", ts, is_maker=False)   # 시장가 reduceOnly
+        except OrderError as e:
+            notify(f"⚠️ 즉시청산 실패: {e} — 포지션 유지, 수동 확인 요망", category="trade")
+            return
+        self._on_close(trade)                        # 원장 기록 + close 이벤트(run 루프가 🔴 알림)
+        control.set_service("trader", "paused")      # 긴급 탈출 → 자동 정지(재개는 대시보드/디스코드)
+        self._paused = True
+        notify("🛑 즉시청산 완료 — 새 진입 자동 정지(재개는 수동)", category="trade")
 
     def _reconcile_live_position(self, base):
         """폴 루프 중 거래소 실제 포지션과 로컬 상태를 대조해 어긋나면 맞춘다(live 전용).

@@ -480,6 +480,76 @@ def test_reconcile_skips_paper_mode():
     assert rec.calls == [] and rec._flat_divergence == 0      # sync_position 도 안 부름
 
 
+def test_control_flatten_request_and_consume():
+    """즉시청산 플래그: 요청 → 세워짐, 소비 → 지워짐(소비형 플래그)."""
+    import engine.control as control
+    p = os.path.join(tempfile.mkdtemp(), "c.json")
+    assert control.get_flatten(p) is False
+    control.request_flatten(p)
+    assert control.get_flatten(p) is True
+    control.clear_flatten(p)
+    assert control.get_flatten(p) is False
+
+
+def test_maybe_flatten_closes_and_pauses():
+    """즉시청산 요청 있으면 시장가 청산 + 원장 기록 + 자동 정지 + 플래그 소비."""
+    import engine.live as live
+    import engine.control as control
+    broker = FakeBroker()
+    ex = _ex(broker)
+    ex.open(_pos(qty=1.0))                          # 포지션 보유
+
+    class T:
+        pass
+    t = T()
+    t.ex, t._last_price, t._paused, t._events = ex, 100.0, False, []
+    t.preset = type("P", (), {"name": "슈퍼", "symbol": "BTCUSDT", "timeframe": "15m"})()
+    t.strategy_path, t.mode = None, "testnet"
+    t.ledger_path = os.path.join(tempfile.mkdtemp(prefix="ledger-"), "t.db")
+    t._on_close = lambda trade: LiveTrader._on_close(t, trade)   # 실제 훅(원장 기록 + 이벤트)
+
+    calls = {"cleared": 0, "paused": None}
+    o_get, o_clr, o_set, o_ntf = control.get_flatten, control.clear_flatten, control.set_service, live.notify
+    control.get_flatten = lambda *a, **k: True
+    control.clear_flatten = lambda *a, **k: calls.__setitem__("cleared", calls["cleared"] + 1)
+    control.set_service = lambda svc, state, *a, **k: calls.__setitem__("paused", (svc, state))
+    live.notify = lambda m, category=None: None
+    try:
+        LiveTrader._maybe_flatten(t, 5_000)
+    finally:
+        control.get_flatten, control.clear_flatten, control.set_service, live.notify = o_get, o_clr, o_set, o_ntf
+
+    assert ex.position is None                      # 시장가 청산됨
+    assert t._paused is True and calls["paused"] == ("trader", "paused")   # 자동 정지
+    assert calls["cleared"] == 1                    # 플래그 소비
+    assert len(ex.trades) == 1 and ex.trades[-1].exit_reason == "manual"
+    from engine import ledger
+    assert len(ledger.load(t.ledger_path)) == 1     # 원장 기록됨
+
+
+def test_maybe_flatten_noop_when_flat():
+    """무포지션이면 청산·정지 없이 플래그만 소비."""
+    import engine.live as live
+    import engine.control as control
+    ex = _ex(FakeBroker())                          # 무포지션
+
+    class T:
+        pass
+    t = T()
+    t.ex, t._last_price, t._paused = ex, 100.0, False
+    calls = {"cleared": 0, "paused": None}
+    o_get, o_clr, o_set, o_ntf = control.get_flatten, control.clear_flatten, control.set_service, live.notify
+    control.get_flatten = lambda *a, **k: True
+    control.clear_flatten = lambda *a, **k: calls.__setitem__("cleared", calls["cleared"] + 1)
+    control.set_service = lambda *a, **k: calls.__setitem__("paused", True)
+    live.notify = lambda m, category=None: None
+    try:
+        LiveTrader._maybe_flatten(t, 5_000)
+    finally:
+        control.get_flatten, control.clear_flatten, control.set_service, live.notify = o_get, o_clr, o_set, o_ntf
+    assert calls["cleared"] == 1 and calls["paused"] is None and t._paused is False
+
+
 def test_external_close_records_ledger_and_clears_position():
     """봇 몰래 사라진 포지션 → 마지막 종가로 external 청산 기록 + 로컬 정리 + 알림."""
     import engine.live as live
