@@ -111,6 +111,8 @@ services:
       STATE_PATH: /app/data/state.json      # trader 가 기록한 상태(대시보드와 동일)
       LEDGER_PATH: /app/data/trades.db      # 매매 원장(성과 집계)
       CONTROL_PATH: /app/data/control.json  # /control 버튼이 쓰는 멈춤/재개 신호(대시보드와 공용)
+      CANDLE_DB_PATH: /app/data/candles.db  # /collect 가 읽는 캔들 캐시(collector 가 쓰는 것)
+      COLLECT_STALE_MIN: ${COLLECT_STALE_MIN:-10}   # 마지막 봉이 이 분을 넘으면 /collect 에 ⚠️
       PYTHONUNBUFFERED: 1
       TZ: UTC
     volumes:
@@ -128,6 +130,11 @@ services:
       STATE_PATH: /app/data/state.json      # trader 가 남기는 상태 — 이 updatedAt 을 감시
       WATCHDOG_STALE_SEC: ${WATCHDOG_STALE_SEC:-600}       # 무갱신 몇 초면 '멈춤'(기본 10분)
       WATCHDOG_INTERVAL_SEC: ${WATCHDOG_INTERVAL_SEC:-120} # 확인 주기
+      # 수집 감시 — collector 는 상태 파일을 안 남기므로 캐시의 마지막 봉으로 생사를 본다.
+      CANDLE_DB_PATH: /app/data/candles.db                 # collector 가 쓰는 캔들 캐시
+      COLLECT_STALE_MIN: ${COLLECT_STALE_MIN:-10}          # 마지막 봉이 이 분을 넘으면 '수집 멈춤'
+      WATCH_COLLECTOR: ${WATCH_COLLECTOR:-1}               # 0 이면 수집 감시 끔
+      CONTROL_PATH: /app/data/control.json                 # collector=paused 면 경고 안 함
       # 알림 경로는 트레이더와 동일(engine.notifier): 봇 토큰 있으면 봇, 없으면 웹훅. 워치독=시스템 카테고리.
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
       DISCORD_CHANNEL_ID: ${DISCORD_CHANNEL_ID:-}          # 기본 채널(시스템 채널 미설정 시 폴백)

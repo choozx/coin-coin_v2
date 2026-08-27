@@ -12,10 +12,12 @@
     DISCORD_ALLOWED_USER_IDS 콤마구분 유저ID 화이트리스트 — 이들만 응답(실돈 정보 보호)
     DISCORD_CHANNEL_ID       기본 채널(카테고리 전용 채널 미설정 시 폴백). 비면 요약 OFF.
     DISCORD_CHANNEL_DIGEST   정기 요약 전용 채널(#일일일지). 비면 DISCORD_CHANNEL_ID 로 폴백.
+    CANDLE_DB_PATH           /collect 가 읽을 캔들 캐시(기본 data/candles.db)
+    COLLECT_STALE_MIN        마지막 봉이 이 분을 넘게 뒤처지면 /collect 에 ⚠️ (기본 10)
     DIGEST_HOUR / DIGEST_TZ  정기 요약 시각(기본 8시 / Asia/Seoul — 컨테이너 TZ=UTC 라 명시).
     STATE_PATH / LEDGER_PATH / CONTROL_PATH 대시보드와 동일(data/state.json·trades.db·control.json)
 
-명령: /status /position /stats /info (조회) · /control (시작/정지) · /flat (즉시청산) · /strategy /config (변경).
+명령: /status /position /stats /info /collect (조회) · /control (시작/정지) · /flat (즉시청산) · /strategy /config (변경).
 알림 버튼: 트레이더가 보낸 알림(진입·에러·워치독)의 [정지]/[즉시청산]/[상태] 버튼을 여기서 처리
 (persistent view, custom_id 는 engine.notifier 와 일치 → 재시작·프로세스 경계 넘어 동작).
 보안: 모든 응답 ephemeral(요청자만) + 유저 화이트리스트(버튼·선택·모달 모두 재검문).
@@ -28,6 +30,7 @@ import json
 import os
 import time
 
+from . import candle_health
 from . import control
 from . import discord_views as views
 from . import ledger
@@ -66,6 +69,8 @@ def run() -> None:
     ledger_path = os.environ.get("LEDGER_PATH", ledger.LEDGER_PATH)
     control_path = os.environ.get("CONTROL_PATH", control.DEFAULT_PATH)
     guild_id = os.environ.get("DISCORD_GUILD_ID")
+    candle_db = os.environ.get("CANDLE_DB_PATH", candle_health.DEFAULT_DB)
+    collect_stale_min = float(os.environ.get("COLLECT_STALE_MIN", "10"))
     allowed = allowed_ids()
     if not allowed:
         # 화이트리스트가 비면 아무도 못 쓴다 — 실돈 정보를 실수로 전체공개하지 않기 위한 안전기본값.
@@ -303,6 +308,17 @@ def run() -> None:
             return
         await interaction.response.send_message(
             views.info_text(load_state(state_path), preset.bot_config_info()), ephemeral=True)
+
+    @tree.command(name="collect", description="캔들 수집 상태 — 심볼별 마지막 봉·캐시 현황")
+    async def collect_cmd(interaction: "discord.Interaction"):
+        if not await guard(interaction):
+            return
+        # 수집기는 상태 파일을 안 남긴다 → 캐시의 마지막 봉으로 생사를 본다(candle_health).
+        size = os.path.getsize(candle_db) if os.path.exists(candle_db) else None
+        await interaction.response.send_message(
+            views.collect_text(candle_health.symbol_rows(candle_db),
+                               control.service_state("collector", control_path) == "paused",
+                               size, collect_stale_min), ephemeral=True)
 
     @tree.command(name="strategy", description="전략 전환 — 프리셋 목록에서 선택(무포지션 시 적용)")
     async def strategy_cmd(interaction: "discord.Interaction"):

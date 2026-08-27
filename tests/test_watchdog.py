@@ -59,6 +59,19 @@ def test_startup_text_reports_current_state():
     assert "10분 이상" in w.startup_text("ok", 0, 600)      # stale_sec 600 → 10분
 
 
+def test_collect_status_silent_when_collector_paused():
+    """수집기를 일부러 멈춰뒀으면 'paused' — 내가 멈춘 걸 경고받을 이유가 없다."""
+    d = tempfile.mkdtemp()
+    ctrl = os.path.join(d, "control.json")
+    with open(ctrl, "w", encoding="utf-8") as f:
+        json.dump({"collector": "paused"}, f)
+    assert w.collect_status("/nope/none.db", 10, ctrl) == ("paused", None)
+    # 멈춤이 아니면 실제 판정으로 넘어간다(캐시 없음 → empty)
+    with open(ctrl, "w", encoding="utf-8") as f:
+        json.dump({"collector": "running"}, f)
+    assert w.collect_status("/nope/none.db", 10, ctrl)[0] == "empty"
+
+
 def test_read_updated_ms():
     d = tempfile.mkdtemp()
     p = os.path.join(d, "state.json")

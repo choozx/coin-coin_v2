@@ -1,4 +1,4 @@
-"""워치독(데드맨 스위치) — 트레이더가 조용히 멈추면 알려준다.
+"""워치독(데드맨 스위치) — 트레이더·수집기가 조용히 멈추면 알려준다.
 
 트레이더가 죽으면 알림도 같이 죽어서 '침묵 = 정상'처럼 보인다(실제로 이 사각지대로 며칠을
 모르고 지나갔다). 이 프로세스는 **트레이더와 별개**로 돌면서 trader 가 남기는 state.json 의
@@ -6,10 +6,18 @@ updatedAt 이 오래 안 갱신되면 웹훅으로 경고한다 — 트레이더
 
     python3 -m engine.watchdog
 
+수집기도 같은 이유로 감시한다: 수집기는 state.json 을 안 남기고 프로세스가 떠 있어도 봉이
+안 쌓이면 죽은 것과 같다 — 캐시의 마지막 봉이 얼마나 뒤처졌는지로 판정한다(candle_health).
+일부러 멈춰둔 경우(control.json 의 collector=paused)는 경고하지 않는다.
+
 환경변수:
     STATE_PATH            감시할 상태 파일(기본 data/state.json)
     WATCHDOG_STALE_SEC    이 초 이상 무갱신이면 '멈춤'으로 판정(기본 600 = 10분, 폴 60초의 10배)
     WATCHDOG_INTERVAL_SEC 확인 주기(기본 120초)
+    CANDLE_DB_PATH        감시할 캔들 캐시(기본 data/candles.db)
+    COLLECT_STALE_MIN     마지막 봉이 이 분을 넘게 뒤처지면 '수집 멈춤'(기본 10)
+    WATCH_COLLECTOR       0 이면 수집 감시 끔(기본 켬)
+    CONTROL_PATH          수집기 멈춤 여부를 읽을 제어 파일
     NOTIFY_WEBHOOK / DISCORD_BOT_TOKEN+CHANNEL  알림 경로(engine.notifier 와 동일)
 
 가볍게(표준 라이브러리만) 유지한다 — 트레이더가 OOM 나는 저사양 인스턴스에 얹으므로.
@@ -20,6 +28,8 @@ import json
 import os
 import time
 
+from . import candle_health
+from . import control
 from .notifier import notify, routing_summary
 
 
@@ -73,16 +83,39 @@ def startup_text(status, age_sec, stale_sec: int) -> str:
     return f"🐕 워치독 시작 — 현재 트레이더 {cur}. {stale_sec // 60}분 이상 무갱신이면 경고합니다."
 
 
+def collect_status(candle_db: str, stale_min: float, control_path: str):
+    """수집 상태 한 번 판정 → (status, worst_row).
+
+    수집기를 일부러 멈춰뒀으면 'paused' — 이 상태는 alert_for 의 어느 분기에도 안 걸려
+    조용히 지나간다(내가 멈춘 걸 경고받을 이유가 없다).
+    """
+    if control.service_state("collector", control_path) == "paused":
+        return "paused", None
+    return candle_health.evaluate(candle_health.symbol_rows(candle_db), stale_min)
+
+
 def run() -> None:
     state_path = os.environ.get("STATE_PATH", "data/state.json")
     stale_sec = int(os.environ.get("WATCHDOG_STALE_SEC", "600"))
     interval = int(os.environ.get("WATCHDOG_INTERVAL_SEC", "120"))
+    candle_db = os.environ.get("CANDLE_DB_PATH", candle_health.DEFAULT_DB)
+    collect_stale_min = float(os.environ.get("COLLECT_STALE_MIN", "10"))
+    control_path = os.environ.get("CONTROL_PATH", control.DEFAULT_PATH)
+    watch_collect = os.environ.get("WATCH_COLLECTOR", "1") != "0"
     print(f"[워치독] 시작 — {state_path} 를 {interval}초마다 확인, {stale_sec // 60}분 무갱신 시 경고", flush=True)
+    if watch_collect:
+        print(f"[워치독] 수집 감시 — {candle_db}, 마지막 봉 {collect_stale_min:g}분 초과 시 경고", flush=True)
     print(f"[워치독] 알림 라우팅 — {routing_summary(('system',))}", flush=True)   # 워치독은 시스템 알림만 보낸다
+
     # 기동 즉시 현재 상태를 한 번 보고(배포 확인 + 지금 봇이 살았는지). 이후엔 '전이'에만 알림.
     status, age = evaluate(read_updated_ms(state_path), int(time.time() * 1000), stale_sec)
-    notify(startup_text(status, age, stale_sec), category="system")
-    print(f"[워치독] 기동 보고: {status} (age={age})", flush=True)
+    lines, prev_collect = [startup_text(status, age, stale_sec)], None
+    if watch_collect:
+        prev_collect, cworst = collect_status(candle_db, collect_stale_min, control_path)
+        lines.append(candle_health.startup_text(prev_collect, cworst, collect_stale_min))
+    notify("\n".join(lines), category="system")
+    print(f"[워치독] 기동 보고: 트레이더={status}(age={age}) 수집={prev_collect}", flush=True)
+
     prev = status
     while True:
         time.sleep(interval)
@@ -94,6 +127,14 @@ def run() -> None:
             notify(msg, category="system", buttons=btns)
             print(f"[워치독] {status}: {msg}", flush=True)
         prev = status
+
+        if watch_collect:
+            cstatus, cworst = collect_status(candle_db, collect_stale_min, control_path)
+            cmsg = candle_health.alert_for(prev_collect, cstatus, cworst, collect_stale_min)
+            if cmsg:
+                notify(cmsg, category="system")
+                print(f"[워치독] 수집 {cstatus}: {cmsg}", flush=True)
+            prev_collect = cstatus
 
 
 def main() -> None:

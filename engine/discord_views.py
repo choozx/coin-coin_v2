@@ -311,6 +311,26 @@ def daily_digest_text(rows: list, stats: dict, state: dict, hours: int = 24) -> 
     return "\n".join(lines)
 
 
+def collect_text(rows: list, paused: bool = False, db_bytes=None, stale_min: float = 10) -> str:
+    """/collect — 수집기 상태 + 심볼별 캐시 현황.
+
+    '마지막 봉이 몇 분 전이냐'가 핵심이다. 프로세스가 떠 있어도 봉이 안 쌓이면 죽은 것과
+    같으므로, 임계를 넘긴 심볼엔 ⚠️ 를 붙여 한눈에 보이게 한다.
+    """
+    head = f"📊 **캔들 수집** · {'⏸ 멈춤' if paused else '▶️ 수집중'}"
+    if db_bytes:
+        head += f" · 캐시 {db_bytes / 1e6:.1f} MB"
+    if not rows:
+        return head + "\n캐시가 비어 있습니다 — 수집기가 아직 안 돌았거나 candles.db 유실."
+    lines = [head]
+    for r in rows:
+        gap = r.get("gap_min")
+        mark = "⚠️ " if (gap is not None and gap > stale_min) else ""
+        lines.append(f"{mark}`{r['symbol']}` 마지막 봉 {_ago(r['last_ms'])} · {r['count']:,}개 · "
+                     f"{_fmt_time(r['first_ms'])} ~ {_fmt_time(r['last_ms'])}")
+    return "\n".join(lines)
+
+
 def control_text(paused: bool, has_position: bool) -> str:
     """/control — 봇 시작/정지 패널. 버튼 아래 붙는 안내 텍스트.
 

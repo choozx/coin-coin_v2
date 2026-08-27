@@ -108,6 +108,11 @@ docker compose down
 | `DISCORD_CHANNEL_SYSTEM` | `#모니터링` | 봇 기동, 배포(`pull-deploy.sh`), 워치독 응답없음·복구, 루프 에러, 네트워크·전략·설정 전환 |
 | `DISCORD_CHANNEL_DIGEST` | `#일일일지` | 매일 `DIGEST_HOUR`시(`DIGEST_TZ`)의 지난 24시간 요약 |
 
+**수집 감시.** 수집기(collector)는 트레이더의 `state.json` 같은 상태 파일을 남기지 않아
+프로세스가 떠 있어도 봉이 안 쌓이면 알 길이 없었다. 워치독이 캔들 캐시의 마지막 봉을 보고
+`COLLECT_STALE_MIN`(기본 10분)을 넘게 뒤처지면 `#모니터링`에 경고한다. 일부러 멈춰둔
+동안(`collector=paused`)은 조용하다. 디스코드 `/collect` 로 심볼별 현황을 직접 볼 수도 있다.
+
 세 방 모두 봇에게 *채널 보기 + 메시지 보내기* 권한이 필요하다. 배선이 맞는지는 재배포 후
 `docker compose logs trader | grep '알림 라우팅'` 로 확인 — 카테고리별 실제 채널 ID가 찍힌다
 (오타 낸 채널 ID는 디스코드가 404만 돌려주고 방엔 아무것도 안 떠서 조용히 새기 쉽다).
