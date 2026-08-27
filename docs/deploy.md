@@ -98,6 +98,20 @@ docker compose down
 ## 알림 (선택)
 `NOTIFY_WEBHOOK`에 Discord/Slack 웹훅 URL을 넣으면 시작·진입·청산·에러를 받는다(stdlib만 사용).
 
+**책임별 채널 분리(디스코드 봇 모드).** `DISCORD_BOT_TOKEN` + 아래 채널 ID를 채우면 메시지가
+종류별로 다른 방에 꽂힌다. 안 채운 카테고리는 `DISCORD_CHANNEL_ID`(기본 채널)로 폴백하므로
+하나씩 옮겨도 된다. 채널 ID는 디스코드 개발자 모드를 켜고 채널 우클릭 → *ID 복사*.
+
+| .env | 방 | 들어가는 것 |
+|---|---|---|
+| `DISCORD_CHANNEL_TRADES` | `#매매` | 진입·청산, 포지션 동기화/불일치, 멈춤·재개, 즉시청산, 리스크 가드레일 |
+| `DISCORD_CHANNEL_SYSTEM` | `#모니터링` | 봇 기동, 배포(`pull-deploy.sh`), 워치독 응답없음·복구, 루프 에러, 네트워크·전략·설정 전환 |
+| `DISCORD_CHANNEL_DIGEST` | `#일일일지` | 매일 `DIGEST_HOUR`시(`DIGEST_TZ`)의 지난 24시간 요약 |
+
+세 방 모두 봇에게 *채널 보기 + 메시지 보내기* 권한이 필요하다. 배선이 맞는지는 재배포 후
+`docker compose logs trader | grep '알림 라우팅'` 로 확인 — 카테고리별 실제 채널 ID가 찍힌다
+(오타 낸 채널 ID는 디스코드가 404만 돌려주고 방엔 아무것도 안 떠서 조용히 새기 쉽다).
+
 ## 자동 배포 (prod 브랜치 push → EC2가 스스로 가져감)
 `.github/workflows/deploy.yml` — **`main`=개발, `prod`=배포**. `prod`에 push하면
 ① **GitHub Actions가 이미지 빌드(TA-Lib 컴파일) → ghcr.io에 push.** 여기까지가 CI.

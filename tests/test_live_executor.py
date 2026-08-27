@@ -793,6 +793,20 @@ def test_channel_for_routes_by_category_with_fallback():
         assert notifier.channel_for("system") is None      # 기본도 없으면 None
 
 
+def test_routing_summary_shows_wiring_and_fallback():
+    """기동 로그용 한 줄 — 전용 채널은 ID를, 미설정 카테고리는 기본채널+'(폴백)'을 보여준다."""
+    import engine.notifier as notifier
+    with _with_env(DISCORD_BOT_TOKEN="t", DISCORD_CHANNEL_ID="base",
+                   DISCORD_CHANNEL_TRADES="111", DISCORD_CHANNEL_SYSTEM="222",
+                   DISCORD_CHANNEL_DIGEST=None):
+        line = notifier.routing_summary()
+    assert "매매→111" in line and "모니터링→222" in line and "일일일지→base(폴백)" in line
+    with _with_env(DISCORD_BOT_TOKEN=None, NOTIFY_WEBHOOK="https://discord.com/api/webhooks/1/a"):
+        assert "웹훅" in notifier.routing_summary()
+    with _with_env(DISCORD_BOT_TOKEN=None, NOTIFY_WEBHOOK=None):
+        assert "알림 OFF" in notifier.routing_summary()
+
+
 def test_notify_posts_to_category_channel():
     """봇 발신 시 category 에 따라 채널 엔드포인트가 갈린다(미설정 카테고리는 기본 채널)."""
     import engine.notifier as notifier

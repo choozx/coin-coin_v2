@@ -26,8 +26,8 @@ services:
       # 알림: 봇 토큰+채널이 있으면 봇으로(버튼 준비), 없으면 웹훅으로 폴백.
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
       DISCORD_CHANNEL_ID: ${DISCORD_CHANNEL_ID:-}   # 기본 채널(카테고리별 채널 미설정 시 폴백)
-      DISCORD_CHANNEL_TRADES: ${DISCORD_CHANNEL_TRADES:-}   # 진입/청산/포지션 알림
-      DISCORD_CHANNEL_SYSTEM: ${DISCORD_CHANNEL_SYSTEM:-}   # 기동/에러/네트워크/전략·설정 알림
+      DISCORD_CHANNEL_TRADES: ${DISCORD_CHANNEL_TRADES:-}   # → #매매: 진입/청산/포지션/멈춤·재개/즉시청산
+      DISCORD_CHANNEL_SYSTEM: ${DISCORD_CHANNEL_SYSTEM:-}   # → #모니터링: 기동/에러/네트워크/전략·설정
       NOTIFY_WEBHOOK: ${NOTIFY_WEBHOOK:-}
       CONTROL_PATH: /app/data/control.json  # 대시보드의 멈춤/재개 신호를 읽음
       LEDGER_PATH: /app/data/trades.db      # 매매 원장(대시보드가 읽음)
@@ -105,7 +105,7 @@ services:
       DISCORD_GUILD_ID: ${DISCORD_GUILD_ID:-}            # 이 서버에만 명령 등록 → 즉시 반영
       DISCORD_ALLOWED_USER_IDS: ${DISCORD_ALLOWED_USER_IDS:-}   # 콤마구분 유저ID(비면 전원 거부)
       DISCORD_CHANNEL_ID: ${DISCORD_CHANNEL_ID:-}        # 기본 채널(요약 채널 미설정 시 폴백)
-      DISCORD_CHANNEL_DIGEST: ${DISCORD_CHANNEL_DIGEST:-}   # 정기 요약 전용 채널(비면 기본 채널)
+      DISCORD_CHANNEL_DIGEST: ${DISCORD_CHANNEL_DIGEST:-}   # → #일일일지: 매일 요약(비면 기본 채널)
       DIGEST_HOUR: ${DIGEST_HOUR:-8}                     # 정기 요약 시각(시)
       DIGEST_TZ: ${DIGEST_TZ:-Asia/Seoul}                # 그 시각의 타임존(컨테이너 TZ=UTC 라 명시)
       STATE_PATH: /app/data/state.json      # trader 가 기록한 상태(대시보드와 동일)
@@ -131,7 +131,7 @@ services:
       # 알림 경로는 트레이더와 동일(engine.notifier): 봇 토큰 있으면 봇, 없으면 웹훅. 워치독=시스템 카테고리.
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
       DISCORD_CHANNEL_ID: ${DISCORD_CHANNEL_ID:-}          # 기본 채널(시스템 채널 미설정 시 폴백)
-      DISCORD_CHANNEL_SYSTEM: ${DISCORD_CHANNEL_SYSTEM:-}  # 시스템 알림 채널
+      DISCORD_CHANNEL_SYSTEM: ${DISCORD_CHANNEL_SYSTEM:-}  # → #모니터링: 응답없음/복구 경고
       NOTIFY_WEBHOOK: ${NOTIFY_WEBHOOK:-}
       PYTHONUNBUFFERED: 1
       TZ: UTC

@@ -13,9 +13,11 @@ import os
 import urllib.request
 
 # 메시지 카테고리 → 전용 채널 환경변수. 미설정이면 기본 채널(DISCORD_CHANNEL_ID)로 폴백.
+# 라벨은 실제 방 이름(#매매/#모니터링/#일일일지) — 기동 로그에 배선을 그대로 찍기 위함.
 _CATEGORY_ENV = {"trade": "DISCORD_CHANNEL_TRADES",     # 진입/청산/포지션/멈춤·재개/가드레일
                  "system": "DISCORD_CHANNEL_SYSTEM",    # 기동/배포/워치독/에러/네트워크/전략·설정
                  "digest": "DISCORD_CHANNEL_DIGEST"}    # 정기 요약
+_CATEGORY_LABEL = {"trade": "매매", "system": "모니터링", "digest": "일일일지"}
 
 
 # 알림 버튼(components). custom_id 는 discord_bot 의 persistent view 와 일치해야 클릭이 라우팅된다.
@@ -51,6 +53,22 @@ def channel_for(category: str = None) -> str:
         if cid:
             return cid
     return os.environ.get("DISCORD_CHANNEL_ID")
+
+
+def routing_summary() -> str:
+    """카테고리별 실제 발신 채널 한 줄 — 기동 로그에 찍어 '어느 방으로 가는지'를 눈으로 확인한다.
+
+    채널 ID를 오타 내면 디스코드는 404 를 돌려줄 뿐 방엔 아무것도 안 뜬다(= 조용한 오배선).
+    배포 직후 이 줄과 실제 방을 대조하면 몇 초 만에 잡힌다.
+    """
+    if not os.environ.get("DISCORD_BOT_TOKEN"):
+        return "웹훅(카테고리 분리 없음)" if os.environ.get("NOTIFY_WEBHOOK") else "없음 — 알림 OFF"
+    base = os.environ.get("DISCORD_CHANNEL_ID")
+    parts = []
+    for cat, label in _CATEGORY_LABEL.items():
+        cid = os.environ.get(_CATEGORY_ENV[cat])
+        parts.append(f"{label}→{cid}" if cid else f"{label}→{base or '없음'}(폴백)")
+    return " · ".join(parts)
 
 
 def notify(msg: str, category: str = None, buttons=None) -> None:

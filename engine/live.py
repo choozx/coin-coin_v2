@@ -24,7 +24,7 @@ import time
 import numpy as np
 
 
-from .notifier import notify   # 알림 전송은 engine.notifier(트레이더·워치독 공용). 이름은 유지(하위호환).
+from .notifier import notify, routing_summary   # 알림 전송은 engine.notifier(트레이더·워치독 공용).
 
 from . import binance_math as bm
 from . import candle_store
@@ -606,6 +606,7 @@ class LiveTrader:
         # 모드를 알림에 그대로 — '페이퍼'로 고정돼 있으면 실돈 봇이 페이퍼처럼 보고된다.
         # 테스트넷/실돈까지 구분한다(둘 다 mode='live' 라 한 덩어리로 보면 제일 위험한 착각이 생긴다).
         tag = {"paper": "페이퍼", "testnet": "🧪 실거래(테스트넷)"}.get(self.mode, "🔴 실거래(실돈)")
+        print(f"  [알림 라우팅] {routing_summary()}", flush=True)   # 오배선(오타 채널ID)을 기동 즉시 눈으로 확인
         notify(f"▶️ {tag} 시작 {self.preset.name} {self.preset.symbol} {self.preset.timeframe} 잔고 {self.ex.equity():.0f}", category="system")
         fails = 0
         while True:
