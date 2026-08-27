@@ -801,6 +801,13 @@ def test_routing_summary_shows_wiring_and_fallback():
                    DISCORD_CHANNEL_DIGEST=None):
         line = notifier.routing_summary()
     assert "매매→111" in line and "모니터링→222" in line and "일일일지→base(폴백)" in line
+    with _with_env(DISCORD_BOT_TOKEN="t", DISCORD_CHANNEL_ID="base",
+                   DISCORD_CHANNEL_TRADES="111", DISCORD_CHANNEL_SYSTEM="222",
+                   DISCORD_CHANNEL_DIGEST=None):
+        # 프로세스가 실제로 보내는 카테고리만 — 트레이더 로그에 안 쓰는 '일일일지' 가 끼면
+        # 폴백 표기가 오배선처럼 보인다(실제로 그렇게 헷갈렸다).
+        assert notifier.routing_summary(("trade", "system")) == "매매→111 · 모니터링→222"
+        assert notifier.routing_summary(("system",)) == "모니터링→222"
     with _with_env(DISCORD_BOT_TOKEN=None, NOTIFY_WEBHOOK="https://discord.com/api/webhooks/1/a"):
         assert "웹훅" in notifier.routing_summary()
     with _with_env(DISCORD_BOT_TOKEN=None, NOTIFY_WEBHOOK=None):

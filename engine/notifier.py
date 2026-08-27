@@ -55,18 +55,23 @@ def channel_for(category: str = None) -> str:
     return os.environ.get("DISCORD_CHANNEL_ID")
 
 
-def routing_summary() -> str:
+def routing_summary(categories=None) -> str:
     """카테고리별 실제 발신 채널 한 줄 — 기동 로그에 찍어 '어느 방으로 가는지'를 눈으로 확인한다.
 
     채널 ID를 오타 내면 디스코드는 404 를 돌려줄 뿐 방엔 아무것도 안 뜬다(= 조용한 오배선).
     배포 직후 이 줄과 실제 방을 대조하면 몇 초 만에 잡힌다.
+
+    categories 는 이 프로세스가 실제로 보내는 카테고리만 추린다(트레이더는 매매·모니터링,
+    워치독은 모니터링뿐). 안 쓰는 카테고리까지 찍으면 '일일일지→…(폴백)' 같은 줄이 나와
+    오배선처럼 보이는데, 정작 그 경로로 나가는 메시지는 없어서 헷갈린다.
     """
     if not os.environ.get("DISCORD_BOT_TOKEN"):
         return "웹훅(카테고리 분리 없음)" if os.environ.get("NOTIFY_WEBHOOK") else "없음 — 알림 OFF"
     base = os.environ.get("DISCORD_CHANNEL_ID")
     parts = []
-    for cat, label in _CATEGORY_LABEL.items():
-        cid = os.environ.get(_CATEGORY_ENV[cat])
+    for cat in (categories or tuple(_CATEGORY_LABEL)):
+        label = _CATEGORY_LABEL.get(cat, cat)
+        cid = os.environ.get(_CATEGORY_ENV.get(cat, ""))
         parts.append(f"{label}→{cid}" if cid else f"{label}→{base or '없음'}(폴백)")
     return " · ".join(parts)
 

@@ -78,7 +78,7 @@ def run() -> None:
     stale_sec = int(os.environ.get("WATCHDOG_STALE_SEC", "600"))
     interval = int(os.environ.get("WATCHDOG_INTERVAL_SEC", "120"))
     print(f"[워치독] 시작 — {state_path} 를 {interval}초마다 확인, {stale_sec // 60}분 무갱신 시 경고", flush=True)
-    print(f"[워치독] 알림 라우팅 — {routing_summary()}", flush=True)
+    print(f"[워치독] 알림 라우팅 — {routing_summary(('system',))}", flush=True)   # 워치독은 시스템 알림만 보낸다
     # 기동 즉시 현재 상태를 한 번 보고(배포 확인 + 지금 봇이 살았는지). 이후엔 '전이'에만 알림.
     status, age = evaluate(read_updated_ms(state_path), int(time.time() * 1000), stale_sec)
     notify(startup_text(status, age, stale_sec), category="system")

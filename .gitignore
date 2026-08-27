@@ -18,5 +18,6 @@ presets/saved/
 .env.*
 !.env.example
 
-# 배포 폴러가 기록하는 '완전히 반영된 커밋' (서버 로컬 상태)
+# 배포 폴러가 기록하는 서버 로컬 상태 (반영된 커밋 · 이미지 pull 연속 실패 횟수)
 .deploy-applied
+.deploy-pull-fails

@@ -13,7 +13,10 @@
 #      급하면: FORCE_TRADER=1 sudo -E systemctl start deploy-poll  (또는 아래 수동 명령)
 #
 # 상태: .deploy-applied 에 '완전히 반영된 커밋'을 기록. 트레이더가 미뤄지면 기록하지 않아
-#   다음 주기에 다시 시도한다.
+#   다음 주기에 다시 시도한다. .deploy-pull-fails 는 이미지 pull 연속 실패 횟수(둘 다 서버 로컬).
+#
+# PULL_FAIL_ALERT (기본 5 = 약 10분): 이미지를 이 횟수만큼 연속으로 못 받으면 디스코드로 알린다.
+#   빌드는 보통 몇 분이면 끝나므로 그보다 길게 실패하면 정상 대기가 아니라 고장이다.
 #
 # 설치: deploy/install-poll-timer.sh (systemd 타이머, 2분 주기)
 # 로그: journalctl -u deploy-poll -f
@@ -24,7 +27,7 @@ set -euo pipefail
 # (bash는 함수 정의를 통째로 파싱한 뒤 실행 → 중간에 파일이 바뀌어도 영향 없음).
 main() {
     cd "${REPO_DIR:-$HOME/auto_trading}"
-    local state_file=".deploy-applied"
+    local state_file=".deploy-applied" fail_file=".deploy-pull-fails"
 
     git fetch -q origin prod
     local remote applied image
@@ -59,11 +62,31 @@ main() {
         echo "IMAGE=${image}" >> .env
     fi
 
-    # 아직 빌드 중이면 여기서 실패 → 조용히 다음 주기로. 기존 컨테이너는 계속 돈다.
-    if ! docker compose pull -q 2>/dev/null; then
-        echo "이미지 미준비(빌드 중?) ${image} — 다음 주기 재시도"
+    # 아직 빌드 중이면 여기서 실패 → 다음 주기로. 기존 컨테이너는 계속 돈다.
+    # ★ stderr 를 절대 버리지 않는다. 예전엔 `2>/dev/null` 로 삼키고 "빌드 중?" 이라고만 찍었는데,
+    #   실제 사유는 compose 파일 파싱 오류(.env 의 DASH_BIND 오타)였고 그 한 줄이 안 보여서
+    #   30일 동안 2분마다 실패하는 걸 아무도 몰랐다. 사유를 로그와 알림 양쪽에 그대로 싣는다.
+    local fails pull_err pull_rc=0
+    pull_err=$(docker compose pull -q 2>&1) || pull_rc=$?
+    if [ "$pull_rc" -ne 0 ]; then
+        fails=$(( $(read_count "$fail_file") + 1 ))
+        echo "$fails" > "$fail_file"
+        echo "이미지 pull 실패 ${image} — 다음 주기 재시도 (연속 ${fails}회)"
+        echo "  사유: ${pull_err}"
+        # -eq 로 임계값에 '도달한 그 주기'에만 발송 → 2분마다 같은 경고가 쌓이지 않는다.
+        if [ "$fails" -eq "${PULL_FAIL_ALERT:-5}" ]; then
+            # dnotify 는 큰따옴표·개행이 들어가면 JSON 이 깨진다 → 한 줄로 눌러 앞부분만 싣는다.
+            local why; why=$(echo "$pull_err" | tr -d '"\\' | tr '\n' ' ' | cut -c1-160)
+            dnotify "⚠️ 배포 정체 — ${remote:0:7} 를 ${fails}회(약 $((fails * 2))분) 못 받았습니다. 사유: ${why}"
+        fi
         exit 0
     fi
+    # 성공 — 정체를 알린 뒤였다면 회복도 알린다(워치독과 같은 '상태 전이에만 알림' 규칙).
+    fails=$(read_count "$fail_file")
+    if [ "$fails" -ge "${PULL_FAIL_ALERT:-5}" ]; then
+        dnotify "✅ 이미지 수신 재개 — ${remote:0:7} pull 성공(${fails}회 실패 후). 배포를 계속합니다."
+    fi
+    rm -f "$fail_file"
 
     # ② 포지션 가드 — 돈이 걸려 있으면 트레이더만 빼고 배포한다.
     if [[ " $targets " == *" trader "* ]] && [ "${FORCE_TRADER:-0}" != "1" ] && has_open_position; then
@@ -73,7 +96,8 @@ main() {
     fi
 
     if [ -n "${targets// /}" ]; then
-        dnotify "🚀 배포 ${applied:0:7}→${remote:0:7} 시작 · 대상: ${targets}${deferred:+ (트레이더 연기)}"
+        local from="${applied:0:7}"; [ -n "$from" ] || from="최초"   # 첫 배포면 앞이 비어 '배포 →abc' 로 보인다
+        dnotify "🚀 배포 ${from}→${remote:0:7} 시작 · 대상: ${targets}${deferred:+ (트레이더 연기)}"
         echo "배포 → ${remote:0:7} | 대상: ${targets}"
         # shellcheck disable=SC2086
         docker compose up -d --no-build $targets
@@ -117,6 +141,14 @@ affected_services() {
         fi
     done
     echo "${out% }"
+}
+
+# 카운터 파일 읽기 → 항상 숫자. 파일이 없거나 비었거나 깨졌으면 0.
+# ★ set -e 아래에선 `[ "$x" -eq 1 ]` 에 숫자 아닌 값이 오면 스크립트가 통째로 죽는다.
+read_count() {
+    local n
+    n=$(cat "$1" 2>/dev/null || true)
+    if [[ "$n" =~ ^[0-9]+$ ]]; then echo "$n"; else echo 0; fi
 }
 
 conf_get() {                                    # conf 파일에서 key= 값 읽기
