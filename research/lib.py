@@ -48,11 +48,18 @@ def load(symbol: str, days: float = None, start_ms: int = None, end_ms: int = No
 
 # ── 백테스트 (엔진 그대로) ──────────────────────────────────────────────────
 def backtest(base, preset_dict: dict, symbol: str, equity: float = 10000.0,
-             funding_schedule: dict = None):
-    """프리셋 dict → Metrics. 실수수료(심볼별)·실펀딩 반영. server._run_backtest 와 동일 경로."""
+             funding_schedule: dict = None, maker_fee: float = None, taker_fee: float = None):
+    """프리셋 dict → Metrics. 실수수료(심볼별)·실펀딩 반영. server._run_backtest 와 동일 경로.
+
+    maker_fee/taker_fee 를 주면 심볼 기본값을 덮는다 — 'maker 로 다 체결된다면?' 같은
+    상한 탐색용(taker_fee 를 maker 수준으로 낮춰 쓴다). ★ 이때 null_model 에도 같은
+    수수료를 넘겨야 공정하다. 전략만 싸게 하면 귀무를 부당하게 이긴다.
+    """
     preset = Preset.from_dict(preset_dict, validate=True)
-    maker_fee, taker_fee = bm.fees_for_symbol(symbol)
-    cfg = BacktestConfig(initial_equity=equity, maker_fee=maker_fee, taker_fee=taker_fee,
+    mk, tk = bm.fees_for_symbol(symbol)
+    cfg = BacktestConfig(initial_equity=equity,
+                         maker_fee=mk if maker_fee is None else maker_fee,
+                         taker_fee=tk if taker_fee is None else taker_fee,
                          funding_schedule=funding_schedule)
     return run(base, preset, cfg)
 
@@ -83,8 +90,8 @@ def show(tag: str, m):
 # ── 귀무모델 (핵심 판정도구) ─────────────────────────────────────────────────
 def null_model(base, timeframe: str, n_trades: int, hold_bars: int, side: str,
                leverage: int = 1, size_fraction: float = 0.10,
-               samples: int = 2000, seed: int = 0):
-    """랜덤 진입 몬테카를로 → 총수익률(%) 분포.
+               samples: int = 2000, seed: int = 0, fee: float = None):
+    """랜덤 진입 몬테카를로 → 총수익률(%) 분포. fee=편도 수수료(기본 taker).
 
     전략과 '같은 조건'(트레이드수·보유봉수·방향·레버리지·명목비율)의 아무 근거 없는
     진입이 우연히 내는 수익 분포. 전략의 실제 수익률이 이 분포 대비 어디인지가 판정.
@@ -98,8 +105,9 @@ def null_model(base, timeframe: str, n_trades: int, hold_bars: int, side: str,
     n = len(c)
     if n <= hold_bars + 1 or n_trades <= 0:
         return np.zeros(1)
-    _, taker = _taker_placeholder()
-    rt_fee = 2 * taker * leverage * size_fraction        # 왕복 taker (진입+청산)
+    # fee 를 주면 그걸 쓴다 — 전략 쪽 수수료를 바꿔 돌릴 땐 귀무도 같은 값이어야 공정하다.
+    taker = _taker_placeholder()[1] if fee is None else fee
+    rt_fee = 2 * taker * leverage * size_fraction        # 왕복 (진입+청산)
     sgn = 1.0 if side == "long" else -1.0
     rng = np.random.default_rng(seed)
     hi = n - hold_bars - 1
