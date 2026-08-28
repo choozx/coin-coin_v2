@@ -119,7 +119,10 @@ docker compose down
 
 ## 자동 배포 (prod 브랜치 push → EC2가 스스로 가져감)
 `.github/workflows/deploy.yml` — **`main`=개발, `prod`=배포**. `prod`에 push하면
+⓪ **테스트 136개를 먼저 돌리고**(실패하면 여기서 멈춘다 — 이미지가 안 만들어지고 EC2는
+옛 이미지로 계속 돈다), 통과하면
 ① **GitHub Actions가 이미지 빌드(TA-Lib 컴파일) → ghcr.io에 push.** 여기까지가 CI.
+`main`에 push하면 테스트만 돌아서 배포 전에 미리 걸러진다.
 ② **EC2가 2분마다 `prod`를 폴링**(`deploy/pull-deploy.sh` + systemd 타이머)해서 새 커밋이면
 그 커밋 SHA 이미지로 `.env`의 `IMAGE`를 고정하고 `pull` → `up -d`.
 무거운 빌드는 Actions 러너가 하고 **EC2는 완성 이미지만 받는다**.

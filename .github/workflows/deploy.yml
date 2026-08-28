@@ -1,5 +1,6 @@
-# prod 브랜치 push → 이미지 빌드 → ghcr.io push. **여기까지가 CI의 역할.**
-#   main = 개발, prod = 배포. `git push origin main:prod` 하면 아래가 돈다.
+# push → 테스트 → (prod 면) 이미지 빌드 → ghcr.io push. **여기까지가 CI의 역할.**
+#   main = 개발(테스트만 돈다), prod = 배포. `git push origin main:prod` 하면 아래가 다 돈다.
+#   테스트가 깨지면 이미지가 안 만들어지고, EC2 는 옛 이미지로 계속 돈다(안전한 실패).
 #
 # 배포(EC2 반영)는 CI가 하지 않는다 — EC2가 스스로 prod를 폴링해 가져간다(풀 방식).
 #   서버측: deploy/pull-deploy.sh + systemd 타이머(2분). 설치는 deploy/install-poll-timer.sh.
@@ -17,18 +18,52 @@
 #
 # VPS 1회 준비: Docker 설치 + `git clone <repo>` + `.env` 작성 + 스왑 2GB
 #   + deploy/install-poll-timer.sh 실행 (docs/deploy-checklist.md 단계 4~7)
-name: Build & push image
+name: Test & push image
 
 on:
   push:
-    branches: [prod]
+    branches: [main, prod]      # main=개발(테스트만), prod=배포(테스트 통과 시 빌드·push)
   workflow_dispatch:            # 수동 실행도 허용
 
 env:
   IMAGE: ghcr.io/${{ github.repository }}   # ghcr.io/choozx/coin-coin_v2 (자동 소문자화)
 
 jobs:
+  test:                         # ⓪ 테스트 게이트 — 여기서 막히면 이미지가 아예 안 나간다
+    # 이게 없던 동안엔 prod push 가 테스트를 한 번도 안 돌리고 실돈 봇으로 직행했다.
+    # 매매 로직이 깨져도 조용히 배포됐을 것이므로, 빌드보다 앞에 세운다.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      # 배포는 arm64 지만 테스트는 amd64 네이티브로 돈다 — QEMU 에뮬레이션(수 배 느림)을
+      # 피하려는 것. Dockerfile 이 같아 TA-Lib·의존성 버전은 동일하고, 검증 대상은
+      # 아키텍처가 아니라 파이썬 로직이다.
+      - name: 테스트용 이미지 빌드 (amd64, TA-Lib 포함)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: coin-coin-test:ci
+          cache-from: type=gha,scope=test-amd64
+          cache-to: type=gha,mode=max,scope=test-amd64
+      # 이미지엔 tests/ 도 pytest 도 없다(트레이더 런타임만 담는다). 그래서 이미지는
+      # 의존성 제공자로만 쓰고 소스는 통째로 마운트해 각 테스트의 자체 러너로 돌린다
+      # — 모든 tests/*.py 가 __main__ 러너를 갖고 있고 합계가 pytest 와 일치한다.
+      - name: 테스트 (136개)
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src coin-coin-test:ci sh -c '
+            fail=0
+            for f in tests/test_*.py; do
+              echo "── $f"
+              python "$f" || fail=1
+            done
+            exit $fail'
+
   build-push:                   # ① Actions 러너에서 빌드 → ghcr에 push (EC2는 컴파일 안 함)
+    needs: test                 # ★ 테스트가 통과해야만 이미지가 만들어진다
+    if: github.ref == 'refs/heads/prod'   # main push 는 테스트까지만(배포는 prod 로)
     runs-on: ubuntu-latest
     permissions:
       contents: read
