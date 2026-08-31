@@ -272,11 +272,18 @@ BINANCE_TESTNET=0 python3 -m engine.live presets/saved/내전략.json --live --r
       백테스트 가정에 반영한 뒤에야 실돈.
 - [ ] **실돈 전환 안전장치** — GitHub Environment 승인 규칙/테스트 게이트로 나쁜 push 가
       실매매 봇을 갈아치우지 못하게. API 키는 출금권한 OFF + EIP 화이트리스트.
-- [ ] **backtest/live 오케스트레이션 통합** — `backtest.run()`의 per-bar 로직을 `step()`으로
-      추출해 `live.py`가 문자 그대로 공유 (지금은 같은 순서로 재구현 — `engine/live.py` 상단 주석)
-- [ ] ADX/DMI 레짐 게이트를 실제 프리셋에 적용해 재백테스트 (지표·조건은 이미 있고 쓰는 프리셋이 없음)
+- [x] **backtest/live 오케스트레이션 통합** — 판정(펀딩→청산→손절/익절→신호→진입)은 이제
+      `backtest.Stepper` 한 곳에만 있고 `backtest.run()`과 `live.LiveTrader` 가 같은 `step()` 을
+      부른다. 호출자는 결과를 어떻게 기록할지(Metrics 집계 / 이벤트·원장)만 hook 으로 다르게 한다.
+      `tests/test_backtest_live_parity.py` 가 두 경로가 다시 갈라지는 걸 막는다.
 - [ ] CLI 백테스트(`run.py`)도 실제 펀딩 히스토리 사용 — 지금은 상수 근사 (GUI/`backtest.py`는 실히스토리)
 - [ ] direction "both" 롱·숏 동시 (스키마 v2: entryLong/entryShort 분리)
+      — 지금은 `entryRules`(그룹별 side)로 롱·숏 동시가 이미 되므로 우선순위 낮음
+
+> **연구가 닫은 항목** — 'ADX/DMI 레짐 게이트를 프리셋에 적용해 재백테스트'는 여기 있었으나
+> `research/BACKLOG.md` 의 **A2 가 정확히 그걸 검증하고 기각**했다(강한 상승 3구간에서 0/3,
+> 게이트를 조일수록 귀무에 가까워지지만 끝내 못 넘음). 지표·조건은 엔진에 그대로 있으니
+> 다시 쓸 수는 있지만, '레짐을 좁히면 살아난다'는 가설은 반증됐다. 다시 올리기 전에 A2 를 읽을 것.
 - [x] **maker 진입 passive-then-aggressive** (백테스트/페이퍼) — `execution.makerTimeoutSeconds`
       를 주면 post-only 지정가를 걸어두고(passive) 그 안에 가격이 지정가를 터치하면 maker 체결,
       아니면 시장가로 추격(aggressive). Stepper의 대기 지정가(pending) 상태머신, 룩어헤드 없이

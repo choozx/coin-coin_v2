@@ -6,7 +6,8 @@
 흐름:
   1) 1분봉을 주기 폴링(candle_store) → 최신 '닫힌' 봉까지 확보
   2) 상위 TF 리샘플 → 봉마다 backtest.Stepper.step() 호출
-  3) 결정은 Executor로 실행 (PaperExecutor=시뮬 / LiveExecutor=ccxt, 주문은 미구현)
+  3) 결정은 Executor로 실행 (PaperExecutor=시뮬 / LiveExecutor=ccxt 실주문 —
+     binance_broker 가 post-only 지정가 → N초 → 시장가로 체결하고 실체결가·수수료를 되받는다)
 
 판정 로직(펀딩→청산→손절/익절→신호→진입)은 **여기 없다**. backtest.Stepper 한 곳에만 있고
 백테스트와 문자 그대로 같은 코드를 탄다. 이 파일이 담당하는 건 라이브 고유의 것들:

@@ -3,7 +3,10 @@
     python3 -m engine.run presets/examples/rsi-oversold-long.json
     python3 -m engine.run <preset.json> [--minutes N] [--equity E] [--seed S]
 
-데이터 소스: 현재는 합성 1분봉. 실데이터는 추후 어댑터로 교체(docs/data-source.md).
+데이터 소스: 기본은 합성 1분봉, `--real N` 이면 로컬 캐시의 실데이터 N일치
+(`candle_store`, 없는 구간만 증분 수집 — docs/data-source.md).
+단 펀딩은 아직 실히스토리의 **평균을 상수로** 넣는다. 구간별(funding_schedule) 반영은
+GUI·backtest.py 만 하고 있고 이 CLI 는 아직이다 — README '다음 할 일' 참고.
 """
 from __future__ import annotations
 
