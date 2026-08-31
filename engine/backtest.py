@@ -187,15 +187,20 @@ class Stepper:
       entry_gate() -> bool   진입 허용 여부. 라이브의 멈춤·리스크 가드레일용(백테스트는 항상 True).
       on_open(pos, lev)      진입 직후.
       on_close(trade)        청산 직후(Trade).
+      diagnose(resolver, sb, fill_time, side, block)
+                             신호봉마다 진입 판정 결과. side=진입 방향(None=진입 안 함),
+                             block=막힌 사유(None=진입함). 라이브의 '왜 안 샀나' 로그용이며
+                             백테스트는 달지 않는다(수백만 봉을 도는 경로라 훅이 None 이면 비용 0).
     """
 
     def __init__(self, preset: Preset, cfg: BacktestConfig, executor,
-                 entry_gate=None, on_open=None, on_close=None):
+                 entry_gate=None, on_open=None, on_close=None, diagnose=None):
         self.cfg = cfg
         self.ex = executor
         self.entry_gate = entry_gate
         self.on_open = on_open
         self.on_close = on_close
+        self.diagnose = diagnose
         self.last_exit_sb = -10 ** 9          # 쿨다운 기준: 마지막 청산이 일어난 신호봉
         self.apply_preset(preset)
 
@@ -269,6 +274,32 @@ class Stepper:
             elif not np.isnan(pos.tp_price) and lo <= pos.tp_price:
                 self._close(pos.tp_price, "take_profit", ot, sb, is_maker=True)
 
+    def entry_block(self, resolver, sb, fill_time):
+        """(진입 방향 or None, 막힌 사유 or None) — 진입 판정을 한 곳에 모은 것.
+
+        순서는 예전 signal_step 과 글자 그대로 같다(포지션 → 대기주문 → 게이트 → 필터 → 조건).
+        달라진 건 각 단계가 '막았다'는 bool 대신 **사유**를 돌려준다는 것뿐이다.
+
+        라이브의 폴링 미리보기도 이 메서드를 쓴다 — 진짜 판정과 로그가 다른 코드로 갈라지면
+        로그가 거짓말을 하게 된다. 그래서 판정은 여기 하나뿐이다.
+        """
+        if self.ex.position is not None:
+            return None, "포지션 보유 중"
+        if self.pending is not None:
+            return None, "지정가 진입 대기 중"
+        if self.entry_gate is not None and not self.entry_gate():
+            return None, "진입 게이트 닫힘"        # 라이브가 멈춤/가드레일 사유로 덮어쓴다
+        reason = _entry_block_reason(sb, fill_time, self.preset.filter, self.last_exit_sb, self.cfg)
+        if reason:
+            return None, reason
+        if self.entry_rules:
+            for rule in self.entry_rules:          # 순서대로 평가, 먼저 참인 규칙의 방향
+                if evaluate(rule["when"], resolver, sb):
+                    return (1 if rule["side"] == "long" else -1), None
+        elif evaluate(self.preset.entry, resolver, sb):
+            return self.entry_side, None
+        return None, "진입 조건 미충족"
+
     def signal_step(self, signal, atr_series, resolver, ot, sb):
         """신호봉 마감 시점: 신호 기반 청산 → 진입."""
         ex, cfg, preset = self.ex, self.cfg, self.preset
@@ -297,20 +328,9 @@ class Stepper:
                 self._close(sig_close, "time", fill_time, sb)
 
         # 진입 신호. 펀딩 임박·거래시간 필터는 '체결 순간' 기준이어야 하므로 fill_time 으로 판정.
-        if ex.position is not None or self.pending is not None:   # 지정가 대기 중이면 새 진입 안 냄
-            return
-        if self.entry_gate is not None and not self.entry_gate():
-            return
-        if not _entry_allowed(sb, fill_time, preset.filter, self.last_exit_sb, cfg):
-            return
-        side = None
-        if self.entry_rules:
-            for rule in self.entry_rules:          # 순서대로 평가, 먼저 참인 규칙의 방향
-                if evaluate(rule["when"], resolver, sb):
-                    side = 1 if rule["side"] == "long" else -1
-                    break
-        elif evaluate(preset.entry, resolver, sb):
-            side = self.entry_side
+        side, block = self.entry_block(resolver, sb, fill_time)
+        if self.diagnose is not None:              # 라이브 전용(백테스트는 None → 비용 0)
+            self.diagnose(resolver, sb, fill_time, side, block)
         if side is None:
             return
         # passive-then-aggressive: 지정가(신호봉 종가)를 걸어두고 다음 봉들에서 체결/추격.
@@ -429,19 +449,30 @@ def _supertrend_flip_exit(resolver, st_exit: dict, side: int, sb: int) -> bool:
     return bool((d0 > 0 and d1 < 0) if side == 1 else (d0 < 0 and d1 > 0))
 
 
-def _entry_allowed(sb, ot, filt, last_exit_idx, cfg) -> bool:
+def _entry_block_reason(sb, ot, filt, last_exit_idx, cfg):
+    """진입 필터가 막는 사유(str) 또는 None(통과).
+
+    bool 이 아니라 사유를 돌려주는 이유: '왜 진입을 안 했나' 로그가 필터 단계를
+    '차단됨' 한 마디로 뭉개면 쿨다운인지 거래시간인지 펀딩인지 알 수 없다.
+    """
     if filt.get("cooldownBars"):
-        if sb - last_exit_idx < filt["cooldownBars"]:
-            return False
+        waited = sb - last_exit_idx
+        if waited < filt["cooldownBars"]:
+            return f"청산 쿨다운 ({waited}/{filt['cooldownBars']}봉 경과)"
     if filt.get("avoidFundingWindowMinutes"):
-        if _minutes_to_next_funding(ot) <= filt["avoidFundingWindowMinutes"]:
-            return False
+        mins = _minutes_to_next_funding(ot)
+        if mins <= filt["avoidFundingWindowMinutes"]:
+            return f"펀딩 임박 (다음 정산까지 {mins}분 ≤ {filt['avoidFundingWindowMinutes']}분)"
     if filt.get("maxFundingRate") is not None:
         if abs(cfg.funding_rate) > filt["maxFundingRate"]:
-            return False
+            return f"펀딩률 과다 (|{cfg.funding_rate:.4%}| > {filt['maxFundingRate']:.4%})"
     if not _in_trading_hours(ot, filt.get("tradingHoursUTC")):
-        return False
-    return True
+        return "거래 시간대 아님 (filter.tradingHoursUTC)"
+    return None
+
+
+def _entry_allowed(sb, ot, filt, last_exit_idx, cfg) -> bool:
+    return _entry_block_reason(sb, ot, filt, last_exit_idx, cfg) is None
 
 
 def _open_position(preset, sizing, ex, price, ot, sb, side, lev, equity, cfg, atr_series, signal,

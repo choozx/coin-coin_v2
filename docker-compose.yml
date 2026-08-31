@@ -31,6 +31,10 @@ services:
       NOTIFY_WEBHOOK: ${NOTIFY_WEBHOOK:-}
       CONTROL_PATH: /app/data/control.json  # 대시보드의 멈춤/재개 신호를 읽음
       LEDGER_PATH: /app/data/trades.db      # 매매 원장(대시보드가 읽음)
+      # 진입 판정 로그 — 폴링마다 '왜 안 샀나'(조건 참/거짓·지표 현재값·차단 사유)를 한 줄씩.
+      # 봇이 조용할 때 그게 조건 미충족인지 멈춤인지 쿨다운인지 밖에서 구별하려면 이게 필요하다.
+      ENTRY_LOG_PATH: /app/data/entry_log.jsonl
+      ENTRY_LOG_KEEP: ${ENTRY_LOG_KEEP:-3000}   # 보관 줄 수(폴링 1분이면 ≈이틀). 0 이면 기록 끔
       # 실거래 키 — .env(gitignore)에서 주입. 트레이더만 필요(collector·dashboard엔 X).
       # 출금권한 OFF·IP 화이트리스트 필수. 미설정이면 페이퍼(--paper)로만 동작.
       BINANCE_API_KEY: ${BINANCE_API_KEY:-}

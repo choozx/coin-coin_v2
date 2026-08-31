@@ -29,6 +29,7 @@ from .notifier import notify, routing_summary   # 알림 전송은 engine.notifi
 from . import binance_math as bm
 from . import candle_store
 from . import control
+from . import entry_log
 from . import settings
 from . import ledger
 from . import indicators as ind
@@ -74,6 +75,10 @@ class LiveTrader:
         self._events = []                    # 이번 폴링에서 발생한 이벤트(hook이 채움)
         self._guardrail_reason = None        # 리스크 가드레일 발동 사유(없으면 None)
         self._guardrail_note = None          # 해제 알림에 덧붙일 한 줄(예: 쿨다운 종료 사유)
+        self.entry_log_path = os.environ.get("ENTRY_LOG_PATH", entry_log.DEFAULT_PATH)
+        self._signal = None                  # 마지막 폴의 신호봉(로그가 봉 시각을 적을 때 참조)
+        self._last_entry_check = None        # 마지막 진입 판정 기록(대시보드·로그 요약)
+        self._diagnosed_ot = None            # 이번 폴에서 '진짜 판정'을 기록한 신호봉(중복 방지)
         self._restore_from_ledger()          # 원장에서 잔고·이력 복원(재시작해도 안 사라짐)
 
     def _ledger_mode(self) -> str:
@@ -123,7 +128,8 @@ class LiveTrader:
         if getattr(self, "stepper", None) is None:
             self.stepper = Stepper(preset, self.cfg, self.ex,
                                    entry_gate=self._entry_gate,
-                                   on_open=self._on_open, on_close=self._on_close)
+                                   on_open=self._on_open, on_close=self._on_close,
+                                   diagnose=self._on_entry_check)
         else:
             self.stepper.apply_preset(preset)      # 쿨다운(last_exit_sb)은 유지
 
@@ -327,6 +333,7 @@ class LiveTrader:
             "startedAt": self._started_at, "updatedAt": int(time.time() * 1000),
             "paused": self._paused,
             "guardrail": self._guardrail_reason,         # 가드레일 발동 사유(대시보드 표시), 없으면 null
+            "entryCheck": self._last_entry_check,        # 마지막 진입 판정(왜 안 샀나) — entry_log 와 같은 형식
             "mode": self.mode,                           # paper | testnet | live (원장 조회용 = 버킷)
             # 네트워크 스위치용. canMainnet=이 프로세스가 실돈 권한(--real-money)을 받았는가.
             "network": getattr(ex, "network", None) if self.is_live else None,
@@ -387,7 +394,9 @@ class LiveTrader:
             return []
         self._last_price = float(base.close[len(base) - 1])   # 현재가 = 마지막 닫힌 1분봉 종가
         self._sync_paused()              # 멈춤이면 새 진입 차단 + 바뀐 순간엔 알림
+        self._diagnosed_ot = None        # 이번 폴의 '진짜 판정' 기록 여부(미리보기 중복 방지)
         signal = resample(base, self.tf_min)
+        self._signal = signal
         bar_of, is_close = signal_close_index(base, self.tf_min)
         atr_series = ind.atr(signal.high, signal.low, signal.close, 14)
         resolver = SeriesResolver(signal)
@@ -403,6 +412,9 @@ class LiveTrader:
         for t in range(start, len(base)):
             self.stepper.step(base, signal, bar_of, is_close, atr_series, resolver, t)
             self._last_ot = int(base.open_time[t])
+        # 신호봉이 안 닫힌 폴에서도 '지금 왜 안 사는가'를 남긴다 — 15m 프리셋이면 진짜 판정은
+        # 15분에 한 번뿐이라, 그것만 남기면 그 사이 지표가 어디쯤인지 볼 수 없다.
+        self._preview_entry_check(signal, resolver, int(now_ms or time.time() * 1000))
         return self._events
 
     # ---- per-bar 처리 ----
@@ -429,6 +441,72 @@ class LiveTrader:
     def _entry_gate(self) -> bool:
         """새 진입 허용 여부. 멈춤·리스크 가드레일은 진입만 막고 기존 포지션 관리는 계속."""
         return not self._paused and self._check_guardrail() is None
+
+    def _on_entry_check(self, resolver, sb, fill_time, side, block):
+        """Stepper 가 신호봉을 닫으며 부르는 훅 = **진짜 판정**.
+
+        단, 재시작 직후 첫 폴은 받아온 캔들 전체를 처음부터 다시 훑는다(_last_ot 가 없어서).
+        그 replay 의 신호봉마다 기록하면 기동할 때마다 수백 줄이 쏟아져 정작 '지금'이 파묻힌다.
+        지금 것만 남긴다 — 과거 판정은 이미 원장(체결)이나 백테스트로 볼 수 있다.
+        """
+        bar_ms = self._signal_open_time(sb)
+        if self._is_replay(bar_ms):
+            return
+        self._record_entry_check(resolver, sb, bar_ms, side, block, decided=True)
+        self._diagnosed_ot = bar_ms
+
+    def _is_replay(self, bar_ms: int) -> bool:
+        """이 신호봉이 '지금'이 아니라 따라잡기 중인 과거 봉인가(신호봉 2개보다 오래됐는가)."""
+        if not bar_ms:
+            return False
+        return (time.time() * 1000 - bar_ms) > 2 * self.tf_min * 60_000
+
+    def _record_entry_check(self, resolver, sb, bar_ms, side, block, decided: bool):
+        """판정 하나를 entry_log 에 남기고 상태 파일용으로도 들고 있는다.
+
+        관찰용이므로 어떤 실패도 매매를 막지 않는다 — 여기서 예외가 올라가면 폴 루프가
+        에러로 처리돼 '로그를 못 써서 봇이 선다'가 된다. 그건 본말전도다.
+        """
+        try:
+            rec = entry_log.build(self.preset, self.stepper.entry_rules, resolver, sb,
+                                  bar_ms, int(time.time() * 1000), side, block,
+                                  self._last_price, decided)
+        except Exception as e:
+            print(f"  [진입로그 실패] {e}", flush=True)
+            return
+        self._last_entry_check = rec
+        entry_log.append(rec, self.entry_log_path)
+        if decided:                          # 진짜 판정일 때만 조건 트리를 통째로 찍는다
+            print(f"  [진입판정] {entry_log.summary(rec)}", flush=True)
+            for r in rec["rules"]:
+                print(f"    ({r['side']})", flush=True)
+                for ln in r["lines"]:
+                    print(f"      {ln}", flush=True)
+
+    def _signal_open_time(self, sb) -> int:
+        """신호봉 인덱스 → open_time(ms). 로그의 'bar' 필드가 어느 봉인지 가리키게."""
+        try:
+            return int(self._signal.open_time[sb])
+        except Exception:
+            return 0
+
+    def _preview_entry_check(self, signal, resolver, now_ms):
+        """폴링마다 남기는 미리보기 — 아직 안 닫힌 신호봉 위에서 '지금이라면' 을 본다.
+
+        진짜 판정과 **같은 Stepper.entry_block** 을 쓴다. 로그가 판정과 다른 코드로 갈라지면
+        로그가 거짓말을 하게 되고, 그러면 없느니만 못하다.
+        """
+        sb = len(signal) - 1
+        if sb < 0:
+            return
+        if self._diagnosed_ot is not None and self._diagnosed_ot == int(signal.open_time[sb]):
+            return                            # 이 봉은 이번 폴에서 진짜 판정으로 이미 남겼다
+        try:
+            side, block = self.stepper.entry_block(resolver, sb, now_ms)
+        except Exception as e:
+            print(f"  [진입로그 실패] {e}", flush=True)
+            return
+        self._record_entry_check(resolver, sb, int(signal.open_time[sb]), side, block, decided=False)
 
     def _on_open(self, pos, lev):
         self._events.append({"type": "open", "side": pos.side, "price": pos.entry_price,
@@ -632,6 +710,8 @@ class LiveTrader:
                 st = f"잔고 {self.ex.equity():.2f}"
                 pos = self.ex.position
                 st += f" | 포지션 {'롱' if pos.side>0 else '숏'} @{pos.entry_price:.2f}" if pos else " | 무포지션"
+                if self._last_entry_check:
+                    st += f" | {entry_log.summary(self._last_entry_check)}"
                 print(f"{time.strftime('%H:%M:%S')}  {st}", flush=True)
                 fails = 0
             except Exception as e:
