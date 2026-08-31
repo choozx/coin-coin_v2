@@ -22,7 +22,13 @@
 | 배포 (도커 멀티서비스 + EC2 풀 배포) | ✅ `docker-compose.yml` + [`docs/deploy.md`](docs/deploy.md) |
 | 실거래 어댑터 (ccxt) | ✅ 주문·체결·동기화 (`engine/binance_broker.py` + `LiveExecutor`) — 테스트넷부터 |
 | 지정가 체결 모델 (미체결·슬리피지) | 🟡 진입은 passive-then-aggressive. **백테스트의 청산**은 아직 종가 체결 가정 — 아래 [다음 할 일](#다음-할-일) |
+| **전략 엣지 (실돈을 걸 근거)** | ❌ **미발견 — 방향성 6연속 기각** ([`research/BACKLOG.md`](research/BACKLOG.md)). 실돈 보류 |
 | 블록 빌더 UI | ⬜ 예정 |
+
+> **읽는 순서 주의.** 위 표의 ✅ 는 **배선이 동작한다**는 뜻이지 **돈을 번다**는 뜻이 아니다.
+> 엣지 연구는 여섯 번 기각으로 **종결**됐고(마지막 K 는 실제로 돌리던 라이브 프리셋이었다),
+> **실돈 전환은 보류 상태**다. 테스트넷 배선 검증은 계속 굴린다 — 어떤 전략을 쓰든 필요한
+> 인프라라서다. 재개 조건은 `research/BACKLOG.md` 의 '현재 상태' 참고.
 
 ## 문서
 
@@ -267,11 +273,15 @@ BINANCE_TESTNET=0 python3 -m engine.live presets/saved/내전략.json --live --r
       (손절/익절가는 `data/live_position.json` 사이드카에서 복원). 시작 전 preflight 로
       헤지모드 거부·격리마진 설정·잔고 확인. 실돈은 `BINANCE_TESTNET=0` + `--real-money` 이중 잠금.
       (남은 것: ⓐ 테스트넷 실전 검증, ⓑ 자동배포 승인 게이트 — 아래 두 항목)
-- [ ] **테스트넷 실전 검증** — `TRADE_MODE=--live` + `BINANCE_TESTNET=1` 로 며칠 돌려
-      백테스트 가정 vs 실제 체결(슬리피지·maker 비율·펀딩) 비교. 여기서 나온 차이를
-      백테스트 가정에 반영한 뒤에야 실돈.
-- [ ] **실돈 전환 안전장치** — GitHub Environment 승인 규칙/테스트 게이트로 나쁜 push 가
+- [ ] **테스트넷 실전 검증** (진행 중) — `TRADE_MODE=--live` + `BINANCE_TESTNET=1` 로 며칠 돌려
+      백테스트 가정 vs 실제 체결(슬리피지·maker 비율·펀딩) 비교. 체결 실측은 `data/fill_log.jsonl`
+      (`engine/fill_log.py`) 에 쌓이고 `python3 tools/report.py` 로 본다.
+      ⚠ 테스트넷은 호가가 얇아 **슬리피지 절대값은 못 믿는다** — 여기서 검증되는 건 배선
+      (주문 경로·부분체결·거부·재시작 인계·펀딩 정산)이다. 수치 교정은 메인넷 소액에서.
+- [ ] ⏸ **실돈 전환 안전장치** (보류) — GitHub Environment 승인 규칙/테스트 게이트로 나쁜 push 가
       실매매 봇을 갈아치우지 못하게. API 키는 출금권한 OFF + EIP 화이트리스트.
+      **엣지가 확인되기 전에는 착수하지 않는다** — 걸 만한 전략이 없는데 실돈 배선을 다듬는 건
+      순서가 거꾸로다(`research/BACKLOG.md` 현재 상태 참고).
 - [x] **backtest/live 오케스트레이션 통합** — 판정(펀딩→청산→손절/익절→신호→진입)은 이제
       `backtest.Stepper` 한 곳에만 있고 `backtest.run()`과 `live.LiveTrader` 가 같은 `step()` 을
       부른다. 호출자는 결과를 어떻게 기록할지(Metrics 집계 / 이벤트·원장)만 hook 으로 다르게 한다.
