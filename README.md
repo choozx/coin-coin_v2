@@ -276,7 +276,10 @@ BINANCE_TESTNET=0 python3 -m engine.live presets/saved/내전략.json --live --r
       `backtest.Stepper` 한 곳에만 있고 `backtest.run()`과 `live.LiveTrader` 가 같은 `step()` 을
       부른다. 호출자는 결과를 어떻게 기록할지(Metrics 집계 / 이벤트·원장)만 hook 으로 다르게 한다.
       `tests/test_backtest_live_parity.py` 가 두 경로가 다시 갈라지는 걸 막는다.
-- [ ] CLI 백테스트(`run.py`)도 실제 펀딩 히스토리 사용 — 지금은 상수 근사 (GUI/`backtest.py`는 실히스토리)
+- [x] **CLI 백테스트(`run.py`)도 실펀딩을 구간별로** — 실히스토리를 평균 하나로 뭉개던 걸
+      `cfg.funding_schedule` 로 그대로 넘긴다. CLI 와 GUI 가 세 프리셋 모두 소수점까지 일치.
+      같이 고침: `filter.maxFundingRate` 가 상수 하나만 보고 있어(항상 통과/항상 차단) 사실상
+      죽어 있던 것 → 그 시각에 **알려진**(직전 정산) 실제 펀딩률과 비교. 룩어헤드 없이.
 - [ ] direction "both" 롱·숏 동시 (스키마 v2: entryLong/entryShort 분리)
       — 지금은 `entryRules`(그룹별 side)로 롱·숏 동시가 이미 되므로 우선순위 낮음
 
