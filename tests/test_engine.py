@@ -474,3 +474,44 @@ if __name__ == "__main__":
             traceback.print_exc()
     print(f"\n{passed}/{len(fns)} passed")
     sys.exit(0 if passed == len(fns) else 1)
+
+
+def test_funding_schedule_is_used_per_interval_not_averaged():
+    """펀딩은 8h 마다 값이 다르다 — 스케줄이 있으면 시각별 실제 값을 쓰고, 없는 시각만 상수 폴백.
+
+    왜 고정하나: run.py 가 실히스토리를 받아놓고 **평균 하나로 뭉개서** 넣고 있었다. 그러면
+    같은 프리셋이 CLI 와 GUI 에서 다른 답을 낸다 — 이 프로젝트 대전제는 '세 실행 경로가 같은
+    엔진을 공유한다'인데 거기서만 샜다. 되돌아가면 여기서 깨진다.
+    """
+    n = 60 * 26                                    # 26시간 → 8h 정산을 여러 번 지난다
+    rows = [[i * MIN, 100, 100.1, 99.9, 100, 10] for i in range(n)]
+    base = _candles(rows, tf=1)
+    preset = Preset.from_dict({
+        "schemaVersion": "1.0", "name": "funding-test",
+        "market": {"symbol": "BTCUSDT", "timeframe": "1m", "direction": "long"},
+        "entry": {"left": {"source": "close"}, "cmp": ">", "right": 0},   # 첫 봉 진입 후 계속 보유
+        "exit": {"stopLoss": {"type": "percent", "value": 90.0}},         # 안 닿는 손절 → 끝까지 보유
+        "sizing": {"leverage": 1, "marginMode": "isolated",
+                   "size": {"type": "equityPercent", "value": 100}},
+    }, validate=False)
+
+    # t=0 은 진입 전(진입은 첫 봉이 닫힐 때)이라 정산 대상이 아니다 → 그 뒤 시각들만 쓴다.
+    times = [i * MIN for i in range(1, n) if bm.is_funding_time(i * MIN)]
+    assert len(times) >= 2, "테스트 구간에 8h 정산 시각이 둘 이상 있어야 한다"
+
+    def funding_of(schedule):
+        return run(base, preset, BacktestConfig(initial_equity=1000, funding_rate=0.0001,
+                                                funding_schedule=schedule)).total_funding
+
+    flat = {t: 0.0001 for t in times}
+    spiky = dict(flat); spiky[times[0]] = 0.001    # 첫 정산만 10배 (키가 int 라 ** 못 씀)
+    assert funding_of(spiky) < funding_of(flat), "시각별 값이 실제로 반영돼야 한다(롱이므로 더 많이 낸다)"
+
+    # 스케줄에 없는 시각은 funding_rate 로 폴백 — 스케줄을 부분만 줘도 나머지가 0 이 되면 안 된다
+    assert funding_of({times[0]: 0.0001}) == funding_of(flat)
+
+    # ※ 여기서 '평균으로 뭉개기'와 결과가 갈리는 걸 단언하지 않는 이유: 가격·수량이 일정하고
+    #   **모든 정산 시각을 보유한 채** 지났다면 합계는 수학적으로 같다(Σ rate × 명목).
+    #   실제 손해는 그 조건이 깨질 때 난다 — run.py 는 **포지션을 안 들고 있던 시간까지 포함한**
+    #   전체 히스토리의 평균을 썼다. 그러면 안 겪은 구간의 펀딩이 겪은 구간에 배분된다.
+    #   (실측: 120일 SuperTrend flip 에서 펀딩 합계가 -2.35 vs -9.61 로 4배 어긋났다.)

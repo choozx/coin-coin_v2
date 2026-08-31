@@ -5,8 +5,8 @@
 
 데이터 소스: 기본은 합성 1분봉, `--real N` 이면 로컬 캐시의 실데이터 N일치
 (`candle_store`, 없는 구간만 증분 수집 — docs/data-source.md).
-단 펀딩은 아직 실히스토리의 **평균을 상수로** 넣는다. 구간별(funding_schedule) 반영은
-GUI·backtest.py 만 하고 있고 이 CLI 는 아직이다 — README '다음 할 일' 참고.
+펀딩도 실히스토리를 **구간별 그대로** 쓴다(GUI·backtest.py 와 동일) — 8h 마다 값이 다르고
+14.5% 는 부호까지 반대라, 평균 하나로 뭉개면 같은 프리셋이 경로마다 다른 답을 낸다.
 """
 from __future__ import annotations
 
@@ -42,15 +42,21 @@ def main():
         print(f"바이낸스 {preset.symbol} 1분봉 {args.real}일치 (로컬 캐시 사용)...")
         base = candle_store.ensure_days(preset.symbol, args.real, verbose=True)
         src = f"바이낸스 실데이터 1분봉 {len(base)}개"
-        # 실제 펀딩비 평균을 상수 근사로 주입 (구간별 반영은 추후)
+        # 실제 펀딩을 **구간별 그대로** 주입한다. 평균 하나로 뭉개면 GUI·backtest.py 와 다른
+        # 답이 나오고(같은 엔진을 공유한다는 대전제가 여기서만 샜다), 오래 들고 가는 전략일수록
+        # 어긋난다 — 8h 마다 값이 다르고 14.5% 는 부호까지 반대다.
+        # funding_rate(상수)는 스케줄에 없는 시각의 폴백으로 남는다(backtest.Stepper 참고).
         try:
             fr = candle_store.ensure_funding(preset.symbol, days=args.real)
             if fr:
-                avg = sum(r for _, r in fr) / len(fr)
-                cfg.funding_rate = avg
-                print(f"펀딩비 실히스토리 {len(fr)}건, 평균 {avg*100:+.4f}%/8h 적용")
+                cfg.funding_schedule = {int(ts): float(r) for ts, r in fr}
+                rates = [r for _, r in fr]
+                avg = sum(rates) / len(rates)
+                cfg.funding_rate = avg              # 폴백도 0.01% 기본값보다 실측 평균이 낫다
+                print(f"펀딩비 실히스토리 {len(fr)}건 구간별 적용 (평균 {avg*100:+.4f}%/8h, "
+                      f"최소 {min(rates)*100:+.4f} 최대 {max(rates)*100:+.4f})")
         except Exception as e:
-            print(f"펀딩 히스토리 수집 실패({e}) → 상수 근사 사용")
+            print(f"펀딩 히스토리 수집 실패({e}) → 상수 근사({args.funding*100:+.4f}%/8h) 사용")
     else:
         base = synthetic.generate(args.minutes, vol_per_min=args.vol, seed=args.seed)
         src = f"합성 1분봉 {len(base)}개"
