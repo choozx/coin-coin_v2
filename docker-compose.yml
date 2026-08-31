@@ -134,11 +134,15 @@ services:
       CANDLE_DB_PATH: /app/data/candles.db                 # collector 가 쓰는 캔들 캐시
       COLLECT_STALE_MIN: ${COLLECT_STALE_MIN:-10}          # 마지막 봉이 이 분을 넘으면 '수집 멈춤'
       WATCH_COLLECTOR: ${WATCH_COLLECTOR:-1}               # 0 이면 수집 감시 끔
-      CONTROL_PATH: /app/data/control.json                 # collector=paused 면 경고 안 함
-      # 알림 경로는 트레이더와 동일(engine.notifier): 봇 토큰 있으면 봇, 없으면 웹훅. 워치독=시스템 카테고리.
+      CONTROL_PATH: /app/data/control.json                 # collector=paused 면 경고 안 함 + 트레이더 멈춤 감시
+      # 멈춘 봇은 살아 있어서(state.json 계속 갱신) 위의 무갱신 감시엔 안 걸린다. 재배포로 되돌려진
+      # 멈춤·즉시청산 자동정지·가드레일 래치가 전부 '조용한 무매매'로 남으므로 시간으로 잡는다.
+      WATCHDOG_PAUSED_ALERT_SEC: ${WATCHDOG_PAUSED_ALERT_SEC:-21600}   # 6시간 멈춤이면 1회 경고(0=끔)
+      # 알림 경로는 트레이더와 동일(engine.notifier): 봇 토큰 있으면 봇, 없으면 웹훅.
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
-      DISCORD_CHANNEL_ID: ${DISCORD_CHANNEL_ID:-}          # 기본 채널(시스템 채널 미설정 시 폴백)
+      DISCORD_CHANNEL_ID: ${DISCORD_CHANNEL_ID:-}          # 기본 채널(전용 채널 미설정 시 폴백)
       DISCORD_CHANNEL_SYSTEM: ${DISCORD_CHANNEL_SYSTEM:-}  # → #모니터링: 응답없음/복구 경고
+      DISCORD_CHANNEL_TRADES: ${DISCORD_CHANNEL_TRADES:-}  # → #매매: '오래 멈춤' 경고(재개 버튼이 붙는다)
       NOTIFY_WEBHOOK: ${NOTIFY_WEBHOOK:-}
       PYTHONUNBUFFERED: 1
       TZ: UTC

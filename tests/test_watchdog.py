@@ -98,3 +98,42 @@ if __name__ == "__main__":
             traceback.print_exc()
     print(f"\n{passed}/{len(fns)} passed")
     sys.exit(0 if passed == len(fns) else 1)
+
+
+# ---- 오래 멈춤 감시 (살아 있는데 매매를 안 하는 봇) ----
+
+HOUR = 3_600_000
+
+
+def test_paused_alert_silent_before_limit():
+    """멈춘 지 얼마 안 됐으면 조용 — 잠깐 멈추는 건 정상 운용이다."""
+    msg, since, alerted = w.paused_alert(True, "running", NOW - 2 * HOUR, NOW, 6 * 3600, False)
+    assert msg is None and since == NOW - 2 * HOUR and alerted is False
+
+
+def test_paused_alert_fires_once_after_limit():
+    """한도를 넘으면 알리고, 같은 멈춤에선 다시 알리지 않는다(스팸 방지)."""
+    msg, since, alerted = w.paused_alert(True, "running", NOW - 7 * HOUR, NOW, 6 * 3600, False)
+    assert msg and "7시간째" in msg and alerted is True
+    again, _, _ = w.paused_alert(True, "running", since, NOW + HOUR, 6 * 3600, alerted)
+    assert again is None
+
+
+def test_paused_alert_mentions_user_intent():
+    """사용자가 '재개'를 원했는데 멈춰 있으면 그 사실을 알린다 — 사고 신호다."""
+    msg, _, _ = w.paused_alert(True, "running", NOW - 7 * HOUR, NOW, 6 * 3600, False)
+    assert "재개'를 원한" in msg
+    msg2, _, _ = w.paused_alert(True, "paused", NOW - 7 * HOUR, NOW, 6 * 3600, False)
+    assert "의도한 정지가 아니라면" in msg2
+
+
+def test_paused_alert_resets_when_resumed():
+    """재개되면 타이머와 알림 이력이 리셋된다 → 다음 멈춤에 다시 잰다."""
+    msg, since, alerted = w.paused_alert(False, "running", NOW - 9 * HOUR, NOW, 6 * 3600, True)
+    assert msg is None and since is None and alerted is False
+
+
+def test_paused_alert_starts_clock_on_first_sight():
+    """처음 멈춤을 본 순간부터 잰다 — 워치독이 재시작해도 늦게 알릴 뿐 잘못 알리진 않는다."""
+    msg, since, alerted = w.paused_alert(True, "running", None, NOW, 6 * 3600, False)
+    assert msg is None and since == NOW and alerted is False

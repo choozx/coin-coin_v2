@@ -36,13 +36,31 @@ def _write(ctrl: dict, path: str) -> dict:
     return ctrl
 
 
-def set_service(service: str, state: str, path: str = DEFAULT_PATH) -> dict:
-    """control.json에 서비스 상태 기록(원자적). state = 'running' | 'paused'."""
+TRADER_INTENT = "trader_intent"      # 사용자가 마지막으로 '원한' 매매 상태(기동 시 되돌림과 구별)
+
+
+def set_service(service: str, state: str, path: str = DEFAULT_PATH,
+                record_intent: bool = True) -> dict:
+    """control.json에 서비스 상태 기록(원자적). state = 'running' | 'paused'.
+
+    trader 는 상태와 함께 **사용자 의도**(trader_intent)도 남긴다 — 대시보드·디스코드·즉시청산은
+    전부 '사용자가 그걸 원했다'는 뜻이라 그대로 기록된다. 오직 봇 기동 시의 안전 멈춤만
+    record_intent=False 로 의도를 건드리지 않는다: 그건 사용자의 뜻이 아니라 프로세스 사정이고,
+    그 둘을 구별해야 재배포 후 '원래 돌고 있었는가'를 알 수 있다.
+    """
     if state not in ("running", "paused"):
         raise ValueError("state는 running 또는 paused")
     ctrl = read_control(path)
     ctrl[service] = state
+    if service == "trader" and record_intent:
+        ctrl[TRADER_INTENT] = state
     return _write(ctrl, path)
+
+
+def trader_intent(path: str = DEFAULT_PATH) -> str:
+    """사용자가 마지막으로 원한 매매 상태. 기록이 없으면 'paused'(최초 기동은 자동 재개 안 함)."""
+    v = read_control(path).get(TRADER_INTENT)
+    return v if v in ("running", "paused") else "paused"
 
 
 def request_flatten(path: str = DEFAULT_PATH) -> dict:

@@ -637,6 +637,37 @@ class LiveTrader:
             time.sleep(interval)
 
 
+def safety_pause_on_start(start_running: bool, once: bool, live: bool, real_money: bool,
+                          path: str = control.DEFAULT_PATH) -> str:
+    """기동 시 매매 상태를 정한다. 반환: skip | resumed | kept | overwrote.
+
+    안전 기본값 — 봇은 '멈춤'으로 시작하고 대시보드에서 명시적으로 켜야 새 진입을 낸다.
+    (멈춤은 새 진입만 막음: 기존 포지션 관리·청산은 계속. --start-running 으로 즉시 활성.)
+    --once 는 테스트용이라 페이퍼에선 바로 돌게 두지만, 실거래는 예외 없이 '멈춤'으로 시작한다
+    (진짜 주문이 나가는 경로에서 '한 번만 돌려보려고' 가 제일 흔한 사고 시나리오).
+
+    ★ 단, 그 안전장치가 재배포·OOM·재부팅마다 사용자의 '재개'를 조용히 취소해 봇이 며칠간
+    매매를 안 하는 사고를 냈다. 그래서 **가짜돈(페이퍼·테스트넷)에 한해** 사용자 의도를
+    이어받아 자동 재개한다. 실돈을 만질 수 있는 프로세스(--real-money)는 예외 없이 멈춤이다 —
+    나쁜 배포가 즉시 실주문을 내는 것보다 수동 재개 한 번이 싸다.
+
+    가짜돈 판정은 `real_money` 로 한다(ex.testnet 이 아니라): 이 시점엔 executor 가 아직 없고,
+    --real-money 없이는 메인넷에 붙을 수 없으며 대시보드의 네트워크 스위치도 그 권한 안에서만
+    움직인다. 즉 real_money=False 는 '이 프로세스는 절대 실돈이 못 된다'는 뜻이라 안전하다.
+    """
+    if start_running or (once and not live):
+        return "skip"
+    if not real_money and control.trader_intent(path) == "running":
+        control.set_service("trader", "running", path, record_intent=False)
+        return "resumed"
+    # '덮어썼다'는 이번 기동이 실제로 running → paused 로 바꿨을 때만이다. service_state 는
+    # 기록이 없으면 running 을 기본값으로 주므로(최초 기동) 명시 기록만 본다 — 안 그러면
+    # 첫 기동마다 헛경고가 나가고, 크래시 루프에선 재시작마다 같은 경고가 반복된다.
+    was_running = control.read_control(path).get("trader") == "running"
+    control.set_service("trader", "paused", path, record_intent=False)
+    return "overwrote" if was_running else "kept"
+
+
 def main():
     from .env import load_dotenv
     load_dotenv()                            # .env → 환경변수(BINANCE_API_KEY 등)
@@ -655,13 +686,20 @@ def main():
                     help="시작 시 바로 매매 활성. 기본은 안전하게 '멈춤'으로 시작(대시보드에서 재개).")
     args = ap.parse_args()
 
-    # 안전 기본값: 봇은 '멈춤' 상태로 시작 → 대시보드에서 명시적으로 켜야 새 진입 시작.
-    # (멈춤은 새 진입만 막음 — 기존 포지션 관리·청산은 계속. --start-running 으로 즉시 활성.)
-    # --once 는 테스트용이라 페이퍼에선 바로 돌게 두지만, 실거래는 예외 없이 '멈춤'으로 시작한다
-    # (진짜 주문이 나가는 경로에서 '한 번만 돌려보려고' 가 제일 흔한 사고 시나리오).
-    if not args.start_running and (not args.once or args.live):
-        control.set_service("trader", "paused")
+    start = safety_pause_on_start(args.start_running, args.once, args.live, args.real_money)
+    if start in ("kept", "overwrote"):
         print("🔒 안전 시작: 매매 '멈춤' 상태 — 대시보드에서 봇을 '재개'해야 새 진입이 시작됩니다.", flush=True)
+    if start == "overwrote":
+        # 돌고 있던 봇이 다시 뜨면 여기서 사용자의 '재개'가 취소된다. 봇 입장에선 '처음부터 멈춤'이라
+        # _sync_paused 의 상태 전이가 없어 알림이 안 나가고, 워치독은 state.json 갱신만 보므로
+        # 살아있는 멈춤 봇을 정상으로 판정한다 — 삼중 침묵. 덮어쓸 때는 반드시 알린다.
+        notify("⚠️ 봇이 재시작되어 매매가 '멈춤'으로 되돌아갔습니다 "
+               "(재배포·재부팅 등). 실돈 봇은 자동 재개하지 않습니다 — 재개해 주세요.",
+               category="trade", buttons=["resume", "status"])
+    elif start == "resumed":
+        print("🔄 의도 보존: 재시작 전 '재개' 상태를 이어갑니다(가짜돈).", flush=True)
+        notify("🔄 재시작 후 매매 자동 재개 — 가짜돈(페이퍼·테스트넷)이라 이전 '재개' 상태를 이어갑니다.",
+               category="trade", buttons=["pause", "status"])
 
     preset = load_preset_file(args.preset, validate=True)
     mk, tk = bm.fees_for_symbol(preset.symbol)

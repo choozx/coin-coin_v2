@@ -17,6 +17,7 @@ updatedAt 이 오래 안 갱신되면 웹훅으로 경고한다 — 트레이더
     CANDLE_DB_PATH        감시할 캔들 캐시(기본 data/candles.db)
     COLLECT_STALE_MIN     마지막 봉이 이 분을 넘게 뒤처지면 '수집 멈춤'(기본 10)
     WATCH_COLLECTOR       0 이면 수집 감시 끔(기본 켬)
+    WATCHDOG_PAUSED_ALERT_SEC  트레이더가 이 초 이상 '멈춤'이면 1회 경고(기본 21600=6시간, 0=끔)
     CONTROL_PATH          수집기 멈춤 여부를 읽을 제어 파일
     NOTIFY_WEBHOOK / DISCORD_BOT_TOKEN+CHANNEL  알림 경로(engine.notifier 와 동일)
 
@@ -83,6 +84,29 @@ def startup_text(status, age_sec, stale_sec: int) -> str:
     return f"🐕 워치독 시작 — 현재 트레이더 {cur}. {stale_sec // 60}분 이상 무갱신이면 경고합니다."
 
 
+def paused_alert(paused: bool, intent: str, since_ms, now_ms: int, limit_sec: int, alerted: bool):
+    """트레이더가 너무 오래 멈춰 있는지 → (메시지|None, since_ms, alerted).
+
+    왜 필요한가: 멈춘 봇은 **살아 있다**. state.json 을 계속 갱신하므로 위의 stale 감시엔
+    안 걸린다(정상 판정). 그래서 재배포로 되돌려진 멈춤·즉시청산 후 자동 정지·연속손실
+    가드레일 래치·알림 유실이 전부 '조용한 무매매'로 남는다. 원인이 무엇이든 결과
+    ―― 새 진입이 없다 ―― 를 시간으로 잡는 마지막 그물이다.
+
+    한 번만 알린다(에피소드당 1회). 재개되면 리셋되고 다음 멈춤에 다시 잰다.
+    since 는 워치독 메모리에만 있어 워치독이 재시작하면 다시 0부터 잰다 — 그만큼 늦게 알리지만
+    잘못 알리지는 않는다(제어 파일엔 멈춘 시각이 없다).
+    """
+    if not paused:
+        return None, None, False
+    since = now_ms if since_ms is None else since_ms
+    if alerted or (now_ms - since) / 1000.0 < limit_sec:
+        return None, since, alerted
+    hours = (now_ms - since) / 3_600_000.0
+    why = ("사용자는 '재개'를 원한 상태입니다 — 재배포·즉시청산·가드레일로 되돌려졌을 수 있습니다."
+           if intent == "running" else "의도한 정지가 아니라면 재개해 주세요.")
+    return (f"⏸ 트레이더가 {hours:.0f}시간째 멈춤 — 새 진입이 없습니다. {why}"), since, True
+
+
 def collect_status(candle_db: str, stale_min: float, control_path: str):
     """수집 상태 한 번 판정 → (status, worst_row).
 
@@ -102,10 +126,14 @@ def run() -> None:
     collect_stale_min = float(os.environ.get("COLLECT_STALE_MIN", "10"))
     control_path = os.environ.get("CONTROL_PATH", control.DEFAULT_PATH)
     watch_collect = os.environ.get("WATCH_COLLECTOR", "1") != "0"
+    paused_limit = int(os.environ.get("WATCHDOG_PAUSED_ALERT_SEC", "21600"))   # 기본 6시간, 0이면 끔
     print(f"[워치독] 시작 — {state_path} 를 {interval}초마다 확인, {stale_sec // 60}분 무갱신 시 경고", flush=True)
     if watch_collect:
         print(f"[워치독] 수집 감시 — {candle_db}, 마지막 봉 {collect_stale_min:g}분 초과 시 경고", flush=True)
-    print(f"[워치독] 알림 라우팅 — {routing_summary(('system',))}", flush=True)   # 워치독은 시스템 알림만 보낸다
+    if paused_limit:
+        print(f"[워치독] 멈춤 감시 — 트레이더가 {paused_limit // 3600}시간 넘게 멈춰 있으면 경고", flush=True)
+    # 워치독은 시스템 알림을 보내되, '오래 멈춤'만은 #매매 로 보낸다(재개 버튼이 붙는 매매 상태 알림).
+    print(f"[워치독] 알림 라우팅 — {routing_summary(('system', 'trade'))}", flush=True)
 
     # 기동 즉시 현재 상태를 한 번 보고(배포 확인 + 지금 봇이 살았는지). 이후엔 '전이'에만 알림.
     status, age = evaluate(read_updated_ms(state_path), int(time.time() * 1000), stale_sec)
@@ -117,6 +145,7 @@ def run() -> None:
     print(f"[워치독] 기동 보고: 트레이더={status}(age={age}) 수집={prev_collect}", flush=True)
 
     prev = status
+    paused_since, paused_alerted = None, False
     while True:
         time.sleep(interval)
         status, age = evaluate(read_updated_ms(state_path), int(time.time() * 1000), stale_sec)
@@ -127,6 +156,16 @@ def run() -> None:
             notify(msg, category="system", buttons=btns)
             print(f"[워치독] {status}: {msg}", flush=True)
         prev = status
+
+        # 살아 있으면서 오래 멈춰 있는 봇 — stale 감시가 못 잡는 '조용한 무매매'.
+        if paused_limit and status == "ok":
+            pmsg, paused_since, paused_alerted = paused_alert(
+                control.service_state("trader", control_path) == "paused",
+                control.trader_intent(control_path),
+                paused_since, int(time.time() * 1000), paused_limit, paused_alerted)
+            if pmsg:
+                notify(pmsg, category="trade", buttons=["resume", "status"])
+                print(f"[워치독] 멈춤 지속: {pmsg}", flush=True)
 
         if watch_collect:
             cstatus, cworst = collect_status(candle_db, collect_stale_min, control_path)
