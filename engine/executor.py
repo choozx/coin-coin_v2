@@ -19,6 +19,7 @@ import os
 import time
 
 from . import binance_math as bm
+from . import fill_log
 from .metrics import Trade
 
 
@@ -320,6 +321,9 @@ class LiveExecutor(Executor):
                 else b.market_order(side, qty))
         if fill.qty <= 0:
             raise OrderError("진입 주문이 하나도 안 채워짐 — 이번 신호는 건너뜀")
+        # ★ 덮어쓰기 **직전**에 기대값을 남긴다. 아래 한 줄이 지나면 엔진이 기대했던 가격은
+        #   영영 사라져서, 나중에 "슬리피지가 얼마였나"에 답할 수 없다(원장에도 안 남는다).
+        self._log_fill("entry", pos, pos.entry_price, pos.qty, fill, is_maker=is_maker)
         # ★ 여기서부터는 실제 포지션이 존재한다. 예외로 빠져나가면 '관리되지 않는 포지션'이
         #   되므로, 상태 반영을 먼저 끝내고 부가정보(청산가·사이드카)는 나중에 채운다.
         pos.entry_price = fill.price
@@ -392,7 +396,25 @@ class LiveExecutor(Executor):
             self._save_position()
             raise OrderError(
                 f"부분청산({reason}): {fill.qty}/{qty} 체결, 잔량 {pos.qty} 유지 — 다음 봉에 재시도")
+        self._log_fill("exit", pos, exit_price, qty, fill, is_maker=is_maker, reason=reason)
         return self._record(pos, fill.price, self._fee_of(fill), reason, exit_time)
+
+    def _log_fill(self, kind: str, pos, expected_price, expected_qty, fill,
+                  is_maker: bool, reason: str = None) -> None:
+        """체결 실측을 남긴다(관찰용) — 기대 vs 실제, maker 비율, 실수수료.
+
+        실패해도 매매를 막지 않는다. 여기서 예외가 오르면 진입/청산 한복판에서 터지는 것이라
+        '관리되지 않는 포지션'을 만들 수 있다 — 로그 때문에 그런 일이 나면 본말전도다.
+        """
+        try:
+            rec = fill_log.record(kind=kind, symbol=self.symbol, side=pos.side,
+                                  expected_price=expected_price, expected_qty=expected_qty,
+                                  fill=fill, reason=reason, intended_maker=is_maker,
+                                  network=self.network, at_ms=int(time.time() * 1000))
+            if rec:
+                print(f"  [체결] {fill_log.summary(rec)}", flush=True)
+        except Exception as e:
+            print(f"  [체결로그 실패] {e}", flush=True)
 
     def _record(self, pos, exit_price: float, exit_fee: float, reason: str, exit_time: int):
         """청산 확정 → 손익 계산 + ClosedTrade 기록. 펀딩은 거래소 정산분을 조회해 반영."""

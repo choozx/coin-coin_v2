@@ -35,6 +35,10 @@ services:
       # 봇이 조용할 때 그게 조건 미충족인지 멈춤인지 쿨다운인지 밖에서 구별하려면 이게 필요하다.
       ENTRY_LOG_PATH: /app/data/entry_log.jsonl
       ENTRY_LOG_KEEP: ${ENTRY_LOG_KEEP:-3000}   # 보관 줄 수(폴링 1분이면 ≈이틀). 0 이면 기록 끔
+      # 체결 실측 — 엔진이 기대한 체결 vs 거래소가 준 실제 체결(슬리피지·maker 비율·실수수료).
+      # LiveExecutor 가 실제 체결로 포지션을 덮어쓰기 때문에, 여기 안 적으면 기대가가 사라진다.
+      FILL_LOG_PATH: /app/data/fill_log.jsonl
+      FILL_LOG_KEEP: ${FILL_LOG_KEEP:-5000}     # 체결은 폴링보다 훨씬 드물다 → 오래 남는다
       # 실거래 키 — .env(gitignore)에서 주입. 트레이더만 필요(collector·dashboard엔 X).
       # 출금권한 OFF·IP 화이트리스트 필수. 미설정이면 페이퍼(--paper)로만 동작.
       BINANCE_API_KEY: ${BINANCE_API_KEY:-}

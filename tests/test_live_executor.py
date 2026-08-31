@@ -899,3 +899,70 @@ if __name__ == "__main__":
             traceback.print_exc()
     print(f"\n{passed}/{len(fns)} passed")
     sys.exit(0 if passed == len(fns) else 1)
+
+
+# ---- 체결 실측 로그: 덮어쓰기 전에 기대값을 붙잡는가 ----
+
+def _capture_fills(fn):
+    """fill_log 기록을 가로채 리스트로 (파일 IO 없이)."""
+    from engine import fill_log
+    got, orig = [], fill_log.record
+
+    def spy(**kw):
+        rec = fill_log.build(**kw)
+        got.append(rec)
+        return rec
+    fill_log.record = spy
+    try:
+        fn()
+    finally:
+        fill_log.record = orig
+    return got
+
+
+def test_entry_fill_log_captures_expected_before_overwrite():
+    """★ pos.entry_price = fill.price 로 기대가가 사라지기 **전에** 잡아야 한다.
+
+    이 순서가 어긋나면 슬리피지가 항상 0 으로 기록된다 — 조용히 쓸모없는 로그가 된다.
+    """
+    broker = FakeBroker(fills=[Fill(price=100.4, qty=0.9, maker_qty=0.0, taker_qty=0.9, fee=0.45)])
+    ex = _ex(broker)
+    p = _pos(price=100.0, qty=1.0)
+    recs = _capture_fills(lambda: ex.open(p))
+    assert len(recs) == 1
+    r = recs[0]
+    assert r["kind"] == "entry"
+    assert r["expectedPrice"] == 100.0 and r["price"] == 100.4     # 기대가가 살아있다
+    assert r["slipPct"] > 0                                         # 롱을 비싸게 샀다 = 손해
+    assert r["expectedQty"] == 1.0 and r["qty"] == 0.9              # 부분체결도 보인다
+    assert r["makerRatio"] == 0.0                                   # 전부 taker
+    assert p.entry_price == 100.4                                   # 포지션은 여전히 실제 체결로
+
+
+def test_exit_fill_log_uses_engine_price_as_expected():
+    """청산은 엔진이 넘긴 exit_price 가 기대값이다(그 가격에 나갈 수 있다고 백테스트가 가정한 값)."""
+    broker = FakeBroker(fills=[Fill(price=94.5, qty=1.0, maker_qty=0.0, taker_qty=1.0, fee=0.47)],
+                        position={"side": 1, "qty": 1.0, "entry_price": 100.0, "leverage": 5,
+                                  "liq_price": 80.0, "margin": 20.0})
+    ex = _ex(broker)
+    ex.position = _pos(price=100.0, qty=1.0)
+    recs = _capture_fills(lambda: ex.close(95.0, "stop_loss", 1_700_000_000_000))
+    assert len(recs) == 1
+    r = recs[0]
+    assert r["kind"] == "exit" and r["reason"] == "stop_loss"
+    assert r["expectedPrice"] == 95.0 and r["price"] == 94.5
+    assert r["slipPct"] > 0            # 롱 청산(매도)을 기대보다 싸게 팔았다 = 손해
+
+
+def test_fill_log_failure_never_blocks_trading():
+    """로그가 터져도 진입은 끝나야 한다 — 여기서 예외가 오르면 관리되지 않는 포지션이 생긴다."""
+    from engine import fill_log
+    broker = FakeBroker()
+    ex = _ex(broker)
+    orig = fill_log.record
+    fill_log.record = lambda **kw: (_ for _ in ()).throw(RuntimeError("디스크 꽉 참"))
+    try:
+        ex.open(_pos(price=100.0, qty=1.0))
+    finally:
+        fill_log.record = orig
+    assert ex.position is not None                 # 진입은 정상적으로 완료됐다

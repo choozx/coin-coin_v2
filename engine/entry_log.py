@@ -16,9 +16,9 @@
 """
 from __future__ import annotations
 
-import json
 import os
 
+from . import jsonl_log
 from .conditions import explain, explain_lines, failed_leaves, indicator_snapshot
 
 DEFAULT_PATH = os.environ.get("ENTRY_LOG_PATH", "data/entry_log.jsonl")
@@ -84,71 +84,11 @@ def summary(rec: dict, max_fails: int = SUMMARY_FAILS) -> str:
 
 
 def append(rec: dict, path: str = None, keep: int = None) -> None:
-    """한 줄 추가. keep 를 넘으면 오래된 줄을 버린다(무한 증식 방지 — 저사양 EC2 다).
-
-    실패해도 절대 예외를 올리지 않는다 — 이건 관찰용이지 매매 경로가 아니다.
-    로그를 못 써서 봇이 서는 일은 없어야 한다.
-    """
-    path = DEFAULT_PATH if path is None else path
-    keep = DEFAULT_KEEP if keep is None else keep
-    if not path:
-        return
-    try:
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-        if keep and _due_for_trim(path, keep) and _too_long(path, keep):
-            _trim(path, keep)
-    except Exception:
-        pass
-
-
-_since_check: dict = {}          # path → 마지막 점검 이후 append 수
-
-
-def _due_for_trim(path: str, keep: int) -> bool:
-    """줄 수 세기는 파일 전체를 읽는 일이다 — 매 append 마다 하면 로그가 길수록 느려진다.
-
-    점검 주기를 keep 의 절반(최대 200)으로 잡는다: 그래야 다음 점검 전까지 늘어나는 양이
-    _too_long 의 여유(keep*0.5)를 넘지 않아 파일이 keep*1.5 안에 머문다.
-    폴링 1분·기본 keep=3000 이면 200분에 한 번 센다.
-    """
-    every = max(1, min(200, keep // 2))
-    n = _since_check.get(path, every) + 1        # 첫 호출은 바로 점검(재시작 직후 정리)
-    if n >= every:
-        _since_check[path] = 0
-        return True
-    _since_check[path] = n
-    return False
-
-
-def _too_long(path: str, keep: int) -> bool:
-    with open(path, "rb") as f:
-        n = sum(1 for _ in f)
-    return n > keep * 3 // 2
-
-
-def _trim(path: str, keep: int) -> None:
-    with open(path, encoding="utf-8") as f:
-        lines = f.readlines()
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.writelines(lines[-keep:])
-    os.replace(tmp, path)
+    """한 줄 추가(보관 한도 적용). 배관은 jsonl_log 공용 — 실패해도 매매를 막지 않는다."""
+    jsonl_log.append(rec, DEFAULT_PATH if path is None else path,
+                     DEFAULT_KEEP if keep is None else keep)
 
 
 def tail(path: str = None, n: int = 50) -> list:
     """최근 n 줄을 dict 로 (대시보드·디버깅용). 파일이 없으면 빈 리스트."""
-    path = DEFAULT_PATH if path is None else path
-    try:
-        with open(path, encoding="utf-8") as f:
-            lines = f.readlines()[-n:]
-    except OSError:
-        return []
-    out = []
-    for ln in lines:
-        try:
-            out.append(json.loads(ln))
-        except ValueError:
-            continue
-    return out
+    return jsonl_log.tail(DEFAULT_PATH if path is None else path, n)
