@@ -449,6 +449,21 @@ def _supertrend_flip_exit(resolver, st_exit: dict, side: int, sb: int) -> bool:
     return bool((d0 > 0 and d1 < 0) if side == 1 else (d0 < 0 and d1 > 0))
 
 
+def _known_funding_rate(ot: int, cfg) -> float:
+    """ot 시점에 **알려진** 펀딩률 — 직전 정산의 실제 값. 스케줄이 없으면 상수 근사.
+
+    왜 '직전'인가: 다음 정산의 펀딩률은 진입 시점에 아직 확정되지 않는다. 백테스트는 미래
+    값을 볼 수 있지만 그걸 쓰면 룩어헤드이고, 라이브는 애초에 못 본다 — 두 경로가 다른 값을
+    보게 된다. 직전 실측치를 다음 구간의 대리값으로 쓰면 양쪽이 같고 룩어헤드도 없다.
+
+    이 필터는 오래 상수만 보고 있었다(cfg.funding_rate). 스케줄을 줘도 고정값 하나와 비교하니
+    **항상 통과하거나 항상 차단**이라 사실상 죽어 있었다.
+    """
+    if not cfg.funding_schedule:
+        return cfg.funding_rate
+    return cfg.funding_schedule.get(bm.last_funding_time(ot), cfg.funding_rate)
+
+
 def _entry_block_reason(sb, ot, filt, last_exit_idx, cfg):
     """진입 필터가 막는 사유(str) 또는 None(통과).
 
@@ -464,8 +479,9 @@ def _entry_block_reason(sb, ot, filt, last_exit_idx, cfg):
         if mins <= filt["avoidFundingWindowMinutes"]:
             return f"펀딩 임박 (다음 정산까지 {mins}분 ≤ {filt['avoidFundingWindowMinutes']}분)"
     if filt.get("maxFundingRate") is not None:
-        if abs(cfg.funding_rate) > filt["maxFundingRate"]:
-            return f"펀딩률 과다 (|{cfg.funding_rate:.4%}| > {filt['maxFundingRate']:.4%})"
+        rate = _known_funding_rate(ot, cfg)
+        if abs(rate) > filt["maxFundingRate"]:
+            return f"펀딩률 과다 (|{rate:.4%}| > {filt['maxFundingRate']:.4%})"
     if not _in_trading_hours(ot, filt.get("tradingHoursUTC")):
         return "거래 시간대 아님 (filter.tradingHoursUTC)"
     return None

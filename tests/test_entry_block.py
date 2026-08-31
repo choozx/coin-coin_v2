@@ -107,3 +107,54 @@ def test_gate_not_consulted_while_holding():
     st.ex.position = object()
     st.entry_block(SeriesResolver(_candles()), 250, NOW)
     assert calls == []
+
+
+# ---- maxFundingRate 필터: 스케줄의 시각별 값을 봐야 한다 ----
+
+from datetime import datetime, timezone                    # noqa: E402
+from engine import binance_math as bm                      # noqa: E402
+
+
+def _at(h, m=30):
+    return int(datetime(2026, 3, 15, h, m, tzinfo=timezone.utc).timestamp() * 1000)
+
+
+def _st_funding(schedule=None, const=0.0001, limit=0.0005):
+    st = _stepper(ALWAYS, filt={"maxFundingRate": limit})
+    st.cfg.funding_rate = const
+    st.cfg.funding_schedule = schedule
+    return st
+
+
+def test_funding_filter_uses_the_rate_of_that_interval():
+    """08시 정산이 비쌌으면 그 뒤 진입만 막힌다 — 하루 종일 막히거나 하루 종일 통과가 아니다."""
+    sched = {bm.last_funding_time(_at(0)): 0.0001,      # 00시 구간: 싸다
+             bm.last_funding_time(_at(9)): 0.0020}      # 08시 구간: 비싸다(한도 0.05% 초과)
+    st = _st_funding(sched)
+    r = SeriesResolver(_candles())
+    assert st.entry_block(r, 250, _at(3))[1] is None                    # 00시 구간 → 통과
+    assert "펀딩률 과다" in st.entry_block(r, 250, _at(9))[1]           # 08시 구간 → 차단
+    assert st.entry_block(r, 250, _at(17))[1] is None                   # 16시 구간 → 스케줄 없음, 상수 폴백
+
+
+def test_funding_filter_never_looks_ahead():
+    """다음 정산의 펀딩률은 진입 시점에 확정되지 않았다 — 그걸 보면 룩어헤드고 라이브와 갈린다."""
+    future_spike = {bm.last_funding_time(_at(9)): 0.0020}     # 08시 값만 있다
+    st = _st_funding(future_spike)
+    # 07:30 은 아직 00시 구간이다. 08시의 비싼 값을 미리 보면 안 된다.
+    assert st.entry_block(SeriesResolver(_candles()), 250, _at(7))[1] is None
+
+
+def test_funding_filter_falls_back_to_constant_without_schedule():
+    """스케줄이 없으면(라이브 페이퍼 등) 예전처럼 상수를 본다 — 동작이 사라지진 않는다."""
+    assert _st_funding(None, const=0.0020).entry_block(
+        SeriesResolver(_candles()), 250, _at(9))[1].startswith("펀딩률 과다")
+    assert _st_funding(None, const=0.0001).entry_block(
+        SeriesResolver(_candles()), 250, _at(9))[1] is None
+
+
+def test_funding_filter_reason_names_the_actual_rate():
+    """사유에 상수가 아니라 그 구간의 실제 값이 찍혀야 디버깅이 된다."""
+    sched = {bm.last_funding_time(_at(9)): 0.0020}
+    reason = _st_funding(sched, const=0.0001).entry_block(SeriesResolver(_candles()), 250, _at(9))[1]
+    assert "0.2000%" in reason and "0.0100%" not in reason

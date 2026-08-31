@@ -85,6 +85,17 @@ def is_funding_time(open_time_ms: int) -> bool:
     return dt.minute == 0 and dt.hour in (0, 8, 16)
 
 
+FUNDING_INTERVAL_MS = 8 * 3600 * 1000      # 00/08/16 UTC — 에폭(1970-01-01 00:00 UTC)에 정렬돼 있다
+
+
+def last_funding_time(ms: int) -> int:
+    """ms 시점 기준 **이미 지난** 가장 최근 정산 시각(00/08/16 UTC). ms 가 정각이면 그 자신.
+
+    에폭이 00:00 UTC 라 8시간으로 내림하면 정확히 정산 경계가 나온다(윤초 없음).
+    """
+    return (int(ms) // FUNDING_INTERVAL_MS) * FUNDING_INTERVAL_MS
+
+
 def funding_fee(mark_price: float, qty: float, side: int, funding_rate: float) -> float:
     """펀딩료(계정 관점, 음수=지불, 양수=수취).
 
