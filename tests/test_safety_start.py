@@ -105,3 +105,24 @@ def test_once_paper_skips_but_once_live_does_not():
     assert _start(p, once=True, live=False) == "skip"
     assert _start(p, once=True, live=True) == "kept"
 
+
+# ---- 연속 손실 기준선 저장 (settings.json) ----
+
+def test_streak_reset_roundtrip():
+    """기준선은 설정(guardrails)이 아니라 상태라 키를 분리해 저장한다 — 서로 안 덮어쓴다."""
+    from engine import settings
+    sp = os.path.join(tempfile.mkdtemp(), "settings.json")
+    assert settings.get_streak_reset_ms(sp) == 0          # 없으면 0 = 전체 이력을 본다
+    settings.set_guardrails({"killSwitch": True}, sp)
+    settings.set_streak_reset_ms(1_700_000_000_000, sp)
+    assert settings.get_streak_reset_ms(sp) == 1_700_000_000_000
+    assert settings.get_guardrails(sp)["killSwitch"] is True
+    settings.set_guardrails({"killSwitch": False}, sp)    # 설정 저장이 기준선을 날리지 않는다
+    assert settings.get_streak_reset_ms(sp) == 1_700_000_000_000
+
+
+def test_cooldown_default_is_on():
+    """기본값이 자동 해제여야 한다 — 기본이 래치면 같은 사고가 반복된다."""
+    from engine import settings
+    sp = os.path.join(tempfile.mkdtemp(), "settings.json")
+    assert settings.get_guardrails(sp)["maxConsecutiveLosses"]["cooldownHours"] > 0

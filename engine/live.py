@@ -73,6 +73,7 @@ class LiveTrader:
         self._paused = control.service_state("trader") == "paused"
         self._events = []                    # 이번 폴링에서 발생한 이벤트(hook이 채움)
         self._guardrail_reason = None        # 리스크 가드레일 발동 사유(없으면 None)
+        self._guardrail_note = None          # 해제 알림에 덧붙일 한 줄(예: 쿨다운 종료 사유)
         self._restore_from_ledger()          # 원장에서 잔고·이력 복원(재시작해도 안 사라짐)
 
     def _ledger_mode(self) -> str:
@@ -219,14 +220,16 @@ class LiveTrader:
         trades = getattr(self.ex, "trades", []) or []
         mcl = g.get("maxConsecutiveLosses") or {}
         if mcl.get("enabled") and mcl.get("count"):
-            streak = 0
-            for tr in reversed(trades):
-                if tr.pnl < 0:
-                    streak += 1
-                else:
-                    break
-            if streak >= int(mcl["count"]):
-                return f"연속 손실 {streak}회"
+            reason, new_reset = loss_streak_block(
+                trades, mcl["count"], float(mcl.get("cooldownHours") or 0),
+                settings.get_streak_reset_ms(), int(time.time() * 1000))
+            if new_reset is not None:
+                settings.set_streak_reset_ms(new_reset)      # 쿨다운 만료 → 회로 재폐쇄
+                # 알림은 아래 _check_guardrail 의 '해제' 한 통에 합친다(같은 사건을 두 번 알리지 않는다).
+                self._guardrail_note = f"연속 손실 쿨다운 종료 — 여기서부터 다시 {int(mcl['count'])}회를 셉니다."
+                print("  [가드레일] 연속 손실 쿨다운 종료 → 기준선 리셋", flush=True)
+            if reason:
+                return reason
         dll = g.get("dailyLossLimit") or {}
         if dll.get("enabled") and dll.get("pct"):
             from datetime import datetime, timezone
@@ -249,7 +252,11 @@ class LiveTrader:
                 notify(f"🛡 리스크 가드레일 발동 — 새 진입 차단: {gr}", category="trade")
                 print(f"  [가드레일] {gr} → 새 진입 차단", flush=True)
             else:
+                # 해제도 알린다 — 예전엔 print 만이라 '왜 다시 도나'가 채널에 안 남았다.
+                tail = f" ({self._guardrail_note})" if self._guardrail_note else ""
+                notify(f"🛡 리스크 가드레일 해제 — 새 진입 재개{tail}", category="trade")
                 print("  [가드레일] 해제 → 진입 재개", flush=True)
+            self._guardrail_note = None
         return gr
 
     def _maybe_apply_bot_config(self):
@@ -635,6 +642,43 @@ class LiveTrader:
             if once:
                 break
             time.sleep(interval)
+
+
+def loss_streak_block(trades, count: int, cooldown_hours: float, reset_ms: int, now_ms: int):
+    """연속 손실 가드레일 판정 → (차단 사유|None, 새 기준선|None).
+
+    두 번째 값이 None 이 아니면 호출자가 그걸 저장해야 한다(쿨다운 만료 = 회로 재폐쇄).
+
+    ★ 왜 기준선이 필요한가: 이 가드레일은 원래 **자기 해제가 불가능한 래치**였다. 발동하면
+    새 진입이 막히고 → 새 트레이드가 안 생기고 → 연속 손실 기록이 영원히 그대로라 사람이
+    설정을 끄기 전까지 봇이 영구 정지했다. 기준선을 올려 '여기서부터 다시 센다'로 끊는다.
+
+    cooldown_hours=0 은 옛 동작(수동 해제 전까지 유지)이지만, 이제 사유에 그 사실이 적히고
+    설정 화면에 해제 버튼이 있다 — 모르는 채 갇히지는 않는다.
+    """
+    streak, last_loss_ms = 0, None
+    for tr in reversed(trades or []):
+        et = int(tr.exit_time or 0)
+        if et <= reset_ms:               # 기준선 이전(또는 청산시각 불명) → 여기서 끊는다
+            break
+        if tr.pnl < 0:
+            streak += 1
+            if last_loss_ms is None:
+                last_loss_ms = et        # reversed 이므로 첫 손실 = 가장 최근 손실
+        else:
+            break
+    if streak < int(count):
+        return None, None
+    if cooldown_hours and last_loss_ms:
+        end_ms = last_loss_ms + float(cooldown_hours) * 3_600_000.0
+        if now_ms >= end_ms:
+            return None, now_ms          # 쿨다운 끝 → 기준선을 지금으로(다시 count 번 져야 발동)
+        # ★ 남은 시간이 아니라 '해제 시각'으로 적는다: 사유 문자열이 폴링마다 바뀌면
+        #   _check_guardrail 이 매번 상태 변화로 보고 60초마다 알림을 쏜다.
+        from datetime import datetime, timezone
+        until = datetime.fromtimestamp(end_ms / 1000, timezone.utc).strftime("%m-%d %H:%M UTC")
+        return f"연속 손실 {streak}회 (쿨다운 해제 {until})", None
+    return f"연속 손실 {streak}회 (자동 해제 없음 — 설정에서 해제)", None
 
 
 def safety_pause_on_start(start_running: bool, once: bool, live: bool, real_money: bool,

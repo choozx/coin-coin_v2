@@ -722,6 +722,8 @@ class Handler(BaseHTTPRequestHandler):
                     settings.set_leverage_tiers(body.get("leverageTiers") or [])
                 if "guardrails" in body:
                     settings.set_guardrails(body.get("guardrails") or {})
+                if body.get("resetLossStreak"):      # 연속 손실 기준선을 지금으로 — 래치 수동 해제
+                    settings.set_streak_reset_ms(int(time.time() * 1000))
                 self._send(200, json.dumps({"ok": True, "leverageTiers": settings.get_leverage_tiers(),
                                             "guardrails": settings.get_guardrails()}))
             except Exception as e:

@@ -61,7 +61,10 @@ def set_leverage_tiers(tiers, path: str = SETTINGS_PATH) -> dict:
 # 리스크 가드레일 — 계좌 안전장치(전략 무관). 라이브 봇이 강제(새 진입만 차단, 청산은 계속).
 DEFAULT_GUARDRAILS = {
     "dailyLossLimit": {"enabled": False, "pct": 10.0},      # 오늘 실현손실이 잔고의 pct% 넘으면 정지
-    "maxConsecutiveLosses": {"enabled": False, "count": 5},  # N연속 손절 시 정지
+    # N연속 손절 시 정지. cooldownHours 뒤 자동 해제(0이면 수동 해제 전까지 유지).
+    # ★ 쿨다운이 없으면 이 가드레일은 자기 해제가 불가능한 래치가 된다 — 진입이 막히면 새 트레이드가
+    #   안 생겨 연속 기록이 영원히 그대로다. 그래서 기본값은 자동 해제 쪽이다.
+    "maxConsecutiveLosses": {"enabled": False, "count": 5, "cooldownHours": 12.0},
     "killSwitch": False,                                     # 즉시 정지(마스터)
     # 사이징 하드 상한(항상 적용, off 없음): 오설정·침입으로 한 방에 계좌 날리는 걸 막는 천장.
     # 정상 매매(예: 10배·10%)엔 여유. 초과 설정은 거부가 아니라 이 값으로 클램프한다.
@@ -77,7 +80,9 @@ def get_guardrails(path: str = SETTINGS_PATH) -> dict:
     if isinstance(v.get("dailyLossLimit"), dict):
         g["dailyLossLimit"].update({k: v["dailyLossLimit"][k] for k in ("enabled", "pct") if k in v["dailyLossLimit"]})
     if isinstance(v.get("maxConsecutiveLosses"), dict):
-        g["maxConsecutiveLosses"].update({k: v["maxConsecutiveLosses"][k] for k in ("enabled", "count") if k in v["maxConsecutiveLosses"]})
+        g["maxConsecutiveLosses"].update({k: v["maxConsecutiveLosses"][k]
+                                          for k in ("enabled", "count", "cooldownHours")
+                                          if k in v["maxConsecutiveLosses"]})
     if "killSwitch" in v:
         g["killSwitch"] = bool(v["killSwitch"])
     if "maxLeverage" in v:
@@ -97,4 +102,23 @@ def set_guardrails(guardrails: dict, path: str = SETTINGS_PATH) -> dict:
     """글로벌 리스크 가드레일 저장."""
     d = _read(path)
     d["guardrails"] = dict(guardrails or {})
+    return _write(d, path)
+
+
+# 연속 손실 기준선 — 이 시각 **이후**에 닫힌 트레이드만 연속 기록에 센다.
+# 쿨다운이 끝나거나 사용자가 수동 해제하면 여기를 '지금'으로 올려 회로를 다시 닫는다(half-open→closed).
+# 설정(guardrails)이 아니라 상태라서 키를 분리한다 — 사용자가 저장한 값이 아니다.
+def get_streak_reset_ms(path: str = SETTINGS_PATH) -> int:
+    """연속 손실 기준선(ms). 없으면 0 = 전체 이력을 본다."""
+    try:
+        return int((_read(path).get("guardrailState") or {}).get("lossStreakResetMs") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def set_streak_reset_ms(ms: int, path: str = SETTINGS_PATH) -> dict:
+    """연속 손실 기준선을 올린다(쿨다운 만료 / 사용자 수동 해제)."""
+    d = _read(path)
+    st = d.get("guardrailState")
+    d["guardrailState"] = {**(st if isinstance(st, dict) else {}), "lossStreakResetMs": int(ms)}
     return _write(d, path)
