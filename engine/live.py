@@ -132,7 +132,7 @@ class LiveTrader:
                                    on_open=self._on_open, on_close=self._on_close,
                                    diagnose=self._on_entry_check)
         else:
-            self.stepper.apply_preset(preset)      # 쿨다운(last_exit_sb)은 유지
+            self.stepper.apply_preset(preset)      # 쿨다운(last_exit_time)은 유지
 
     def _rebuild_effective(self):
         """base 프리셋(신호: tf·진입·청산·방향) + 현재 봇 설정(심볼·사이징·실행·필터)을
@@ -213,7 +213,7 @@ class LiveTrader:
         self.mode = self._ledger_mode()          # 원장 버킷 교체(가짜돈/실돈 분리)
         self.ex.trades = []
         self._restore_from_ledger()              # 새 네트워크의 이력·기준잔고로
-        self.stepper.last_exit_sb = -10 ** 9     # 쿨다운 리셋(다른 계정이니 이어갈 게 없다)
+        self.stepper.last_exit_time = -10 ** 15     # 쿨다운 리셋(다른 계정이니 이어갈 게 없다)
         self._sync_live_position(base)           # 새 계정에 포지션이 남아 있으면 인계
         tag = "🧪 테스트넷(가짜돈)" if self.ex.testnet else "🔴 메인넷(실돈)"
         notify(f"🔀 네트워크 전환 {old} → {desired} · {tag} · 잔고 {self.ex.equity():.2f}", category="system")
@@ -277,7 +277,7 @@ class LiveTrader:
         self._rebuild_effective()
         if self.preset.symbol != old_sym:    # 심볼 바뀌면 과거 replay 방지
             self._last_ot = None
-        self.stepper.last_exit_sb = -10 ** 9
+        self.stepper.last_exit_time = -10 ** 15
         s = self.preset.sizing
         notify(f"⚙️ 봇 설정 반영 — {self.preset.symbol} lev{s.get('leverage')}", category="system")
         print(f"  [봇설정 반영] {self.preset.symbol} · lev{s.get('leverage')} · "
@@ -289,7 +289,7 @@ class LiveTrader:
         self._base_data = copy.deepcopy(preset.data)   # 새 신호 소스
         self.strategy_path = path
         self._rebuild_effective()                      # 신호 교체 + 봇설정 재적용(심볼·수수료 포함)
-        self.stepper.last_exit_sb = -10 ** 9         # 쿨다운 리셋
+        self.stepper.last_exit_time = -10 ** 15         # 쿨다운 리셋
         self._pending_strategy = None
         self._strategy_error = None
         # 과거 replay 방지: 새 전략/심볼 데이터의 최신 닫힌 봉으로 _last_ot 세팅
@@ -503,7 +503,7 @@ class LiveTrader:
         if self._diagnosed_ot is not None and self._diagnosed_ot == int(signal.open_time[sb]):
             return                            # 이 봉은 이번 폴에서 진짜 판정으로 이미 남겼다
         try:
-            side, block = self.stepper.entry_block(resolver, sb, now_ms)
+            side, block = self.stepper.entry_block(signal, resolver, sb, now_ms)
         except Exception as e:
             print(f"  [진입로그 실패] {e}", flush=True)
             return
@@ -562,13 +562,16 @@ class LiveTrader:
         signal = resample(base, self.tf_min)
         entry_time = int(saved.get("entryTime") or 0) if same else 0
         entry_time = entry_time or int(base.open_time[-1])
+        # 거래소에서 인계받은 포지션의 '진입 신호봉' — 인덱스가 아니라 **시각**으로 잡는다
+        # (배열은 폴마다 미끄러지지만 시각은 안 변한다. timeStop 이 이걸 기준으로 센다.)
         sb = max(0, int(np.searchsorted(signal.open_time, entry_time, side="right")) - 1)
+        sb_time = int(signal.open_time[sb]) if len(signal) else int(entry_time)
         nan = float("nan")
         p = _Position(
             side=pos["side"], entry_time=entry_time, entry_price=pos["entry_price"],
             qty=pos["qty"], leverage=pos["leverage"],
             margin=pos.get("margin") or pos["entry_price"] * pos["qty"] / max(1, pos["leverage"]),
-            liq_price=pos["liq_price"], entry_signal_idx=sb,
+            liq_price=pos["liq_price"], entry_signal_time=sb_time,
             stop_price=(saved.get("stop") if same else None) or nan,
             tp_price=(saved.get("tp") if same else None) or nan,
             entry_fee=(saved.get("entryFee") if same else None) or bm.trade_fee(

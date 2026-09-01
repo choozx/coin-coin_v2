@@ -118,7 +118,7 @@ def _raises(exc, fn):
 def _pos(side=1, price=100.0, qty=1.0, lev=5):
     return _Position(side=side, entry_time=1_000, entry_price=price, qty=qty, leverage=lev,
                      margin=price * qty / lev, liq_price=80.0, stop_price=95.0, tp_price=110.0,
-                     entry_fee=0.05, entry_signal_idx=3, peak=price)
+                     entry_fee=0.05, entry_signal_time=3 * 60_000, peak=price)
 
 
 def _ex(broker, **kw):

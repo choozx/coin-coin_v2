@@ -31,6 +31,11 @@ def _candles(n=300):
                    close=close, volume=np.full(n, 10.0), timeframe_min=1)
 
 
+def _signal():
+    """1m 프리셋이라 신호봉 = 1분봉. entry_block 이 봉 '시각'을 읽는 데 쓴다."""
+    return _candles()
+
+
 def _stepper(entry, filt=None, gate=None):
     preset = Preset({
         "schemaVersion": "1.0", "name": "t",
@@ -50,12 +55,12 @@ NEVER = {"left": RSI, "cmp": "<", "right": -1}
 
 def test_enters_when_everything_clear():
     st = _stepper(ALWAYS)
-    side, block = st.entry_block(SeriesResolver(_candles()), 250, NOW)
+    side, block = st.entry_block(_signal(), SeriesResolver(_candles()), 250, NOW)
     assert side == 1 and block is None
 
 
 def test_conditions_not_met():
-    side, block = _stepper(NEVER).entry_block(SeriesResolver(_candles()), 250, NOW)
+    side, block = _stepper(NEVER).entry_block(_signal(), SeriesResolver(_candles()), 250, NOW)
     assert side is None and block == "진입 조건 미충족"
 
 
@@ -63,40 +68,65 @@ def test_position_held_wins_over_everything():
     """포지션 보유가 최우선 사유 — 조건이 참이어도 새로 안 산다."""
     st = _stepper(ALWAYS)
     st.ex.position = object()                        # 보유 중인 척
-    side, block = st.entry_block(SeriesResolver(_candles()), 250, NOW)
+    side, block = st.entry_block(_signal(), SeriesResolver(_candles()), 250, NOW)
     assert side is None and block == "포지션 보유 중"
 
 
 def test_pending_limit_order():
     st = _stepper(ALWAYS)
     st.pending = {"side": 1, "limit": 100.0, "bars_left": 3}
-    _, block = st.entry_block(SeriesResolver(_candles()), 250, NOW)
+    _, block = st.entry_block(_signal(), SeriesResolver(_candles()), 250, NOW)
     assert block == "지정가 진입 대기 중"
 
 
 def test_closed_gate():
     """멈춤·가드레일은 게이트로 들어온다(라이브가 상세 사유로 덮어쓴다)."""
-    _, block = _stepper(ALWAYS, gate=lambda: False).entry_block(SeriesResolver(_candles()), 250, NOW)
+    _, block = _stepper(ALWAYS, gate=lambda: False).entry_block(_signal(), SeriesResolver(_candles()), 250, NOW)
     assert block == "진입 게이트 닫힘"
 
 
 def test_cooldown_reason_shows_progress():
     """'차단됨'이 아니라 몇 봉 남았는지가 보여야 쓸모가 있다."""
+    sig = _signal()
     st = _stepper(ALWAYS, filt={"cooldownBars": 10})
-    st.last_exit_sb = 247                            # 3봉 전에 청산
-    _, block = st.entry_block(SeriesResolver(_candles()), 250, NOW)
+    st.last_exit_time = int(sig.open_time[247])       # 3봉 전(시각 기준)에 청산
+    _, block = st.entry_block(sig, SeriesResolver(_candles()), 250, NOW)
     assert block == "청산 쿨다운 (3/10봉 경과)"
+
+
+def test_cooldown_counts_time_not_array_index():
+    """★ 라이브는 매 폴 '최근 N일' 윈도우를 새로 받아 배열이 미끄러진다 — 같은 시각의 봉이
+    폴마다 다른 인덱스를 갖는다. 쿨다운을 인덱스로 세면 영원히 안 풀린다(실측으로 확인).
+
+    같은 '청산 시각'을 인덱스만 다른 두 배열에서 재도 같은 경과가 나와야 한다.
+    """
+    sig = _signal()
+    exit_time = int(sig.open_time[240])
+    st = _stepper(ALWAYS, filt={"cooldownBars": 5})
+    st.last_exit_time = exit_time
+
+    # 창이 100봉 미끄러진 상황을 흉내: 같은 시각의 봉이 인덱스 250 → 150 이 된다
+    from engine.optimize import slice_candles
+    shifted = slice_candles(sig, 100, len(sig))
+    same_bar_in_shifted = 250 - 100
+    assert int(shifted.open_time[same_bar_in_shifted]) == int(sig.open_time[250])
+
+    a = st.entry_block(sig, SeriesResolver(sig), 250, NOW)[1]
+    b = st.entry_block(shifted, SeriesResolver(shifted), same_bar_in_shifted, NOW)[1]
+    assert a == b == "청산 쿨다운 (10/5봉 경과)" or (a == b is None), (a, b)
+    # 10봉 경과 > 한도 5 → 둘 다 통과여야 한다(인덱스로 셌다면 한쪽이 막혔을 것)
+    assert a is None and b is None
 
 
 def test_trading_hours_reason():
     st = _stepper(ALWAYS, filt={"tradingHoursUTC": [{"from": "00:00", "to": "00:01"}]})
-    _, block = st.entry_block(SeriesResolver(_candles()), 250, NOW)
+    _, block = st.entry_block(_signal(), SeriesResolver(_candles()), 250, NOW)
     assert block == "거래 시간대 아님 (filter.tradingHoursUTC)"
 
 
 def test_funding_window_reason_names_the_gap():
     st = _stepper(ALWAYS, filt={"avoidFundingWindowMinutes": 600})
-    _, block = st.entry_block(SeriesResolver(_candles()), 250, NOW)
+    _, block = st.entry_block(_signal(), SeriesResolver(_candles()), 250, NOW)
     assert block.startswith("펀딩 임박") and "분" in block
 
 
@@ -105,7 +135,7 @@ def test_gate_not_consulted_while_holding():
     calls = []
     st = _stepper(ALWAYS, gate=lambda: calls.append(1) or True)
     st.ex.position = object()
-    st.entry_block(SeriesResolver(_candles()), 250, NOW)
+    st.entry_block(_signal(), SeriesResolver(_candles()), 250, NOW)
     assert calls == []
 
 
@@ -132,9 +162,9 @@ def test_funding_filter_uses_the_rate_of_that_interval():
              bm.last_funding_time(_at(9)): 0.0020}      # 08시 구간: 비싸다(한도 0.05% 초과)
     st = _st_funding(sched)
     r = SeriesResolver(_candles())
-    assert st.entry_block(r, 250, _at(3))[1] is None                    # 00시 구간 → 통과
-    assert "펀딩률 과다" in st.entry_block(r, 250, _at(9))[1]           # 08시 구간 → 차단
-    assert st.entry_block(r, 250, _at(17))[1] is None                   # 16시 구간 → 스케줄 없음, 상수 폴백
+    assert st.entry_block(_signal(), r, 250, _at(3))[1] is None                    # 00시 구간 → 통과
+    assert "펀딩률 과다" in st.entry_block(_signal(), r, 250, _at(9))[1]           # 08시 구간 → 차단
+    assert st.entry_block(_signal(), r, 250, _at(17))[1] is None                   # 16시 구간 → 스케줄 없음, 상수 폴백
 
 
 def test_funding_filter_never_looks_ahead():
@@ -142,19 +172,19 @@ def test_funding_filter_never_looks_ahead():
     future_spike = {bm.last_funding_time(_at(9)): 0.0020}     # 08시 값만 있다
     st = _st_funding(future_spike)
     # 07:30 은 아직 00시 구간이다. 08시의 비싼 값을 미리 보면 안 된다.
-    assert st.entry_block(SeriesResolver(_candles()), 250, _at(7))[1] is None
+    assert st.entry_block(_signal(), SeriesResolver(_candles()), 250, _at(7))[1] is None
 
 
 def test_funding_filter_falls_back_to_constant_without_schedule():
     """스케줄이 없으면(라이브 페이퍼 등) 예전처럼 상수를 본다 — 동작이 사라지진 않는다."""
     assert _st_funding(None, const=0.0020).entry_block(
-        SeriesResolver(_candles()), 250, _at(9))[1].startswith("펀딩률 과다")
+        _signal(), SeriesResolver(_candles()), 250, _at(9))[1].startswith("펀딩률 과다")
     assert _st_funding(None, const=0.0001).entry_block(
-        SeriesResolver(_candles()), 250, _at(9))[1] is None
+        _signal(), SeriesResolver(_candles()), 250, _at(9))[1] is None
 
 
 def test_funding_filter_reason_names_the_actual_rate():
     """사유에 상수가 아니라 그 구간의 실제 값이 찍혀야 디버깅이 된다."""
     sched = {bm.last_funding_time(_at(9)): 0.0020}
-    reason = _st_funding(sched, const=0.0001).entry_block(SeriesResolver(_candles()), 250, _at(9))[1]
+    reason = _st_funding(sched, const=0.0001).entry_block(_signal(), SeriesResolver(_candles()), 250, _at(9))[1]
     assert "0.2000%" in reason and "0.0100%" not in reason

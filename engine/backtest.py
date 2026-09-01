@@ -56,7 +56,9 @@ class _Position:
     stop_price: float      # nan 가능
     tp_price: float        # nan 가능
     entry_fee: float
-    entry_signal_idx: int
+    entry_signal_time: int          # 진입 신호봉의 open_time(ms). ★ 인덱스가 아니다 —
+    #   라이브는 매 폴 '최근 N일' 윈도우를 새로 받아 배열이 미끄러지므로 인덱스가 시간과
+    #   무관해진다(실측: 시간이 흘러도 마지막 sb 가 960 고정). timeStop 이 영영 안 걸렸다.
     peak: float            # 트레일링용 최고가(롱)/최저가(숏)
     funding_accum: float = 0.0
 
@@ -201,7 +203,8 @@ class Stepper:
         self.on_open = on_open
         self.on_close = on_close
         self.diagnose = diagnose
-        self.last_exit_sb = -10 ** 9          # 쿨다운 기준: 마지막 청산이 일어난 신호봉
+        self.last_exit_time = -10 ** 15       # 쿨다운 기준: 마지막 청산이 일어난 **신호봉 시각(ms)**
+        #   인덱스로 두면 라이브에서 영원히 안 풀린다(슬라이딩 윈도우 — 위 entry_signal_time 주석 참고).
         self.apply_preset(preset)
 
     def apply_preset(self, preset: Preset):
@@ -216,11 +219,12 @@ class Stepper:
         # 1분봉 해상도라 초→봉으로 반올림(최소 1봉). 미설정(0)이면 옛 동작(신호봉 종가 즉시 maker).
         sec = execution.get("makerTimeoutSeconds") or 0
         self.maker_timeout_bars = max(1, round(sec / 60)) if (self.maker_entry and sec) else 0
+        self.tf_ms = TIMEFRAME_MINUTES[preset.timeframe] * MINUTE_MS   # 봉수↔시간 환산
         self.pending = None                    # 대기 중인 지정가 진입(전략 전환/재설정 시 취소)
 
-    def _close(self, price, reason, ts, sb, is_maker=False):
+    def _close(self, price, reason, ts, sb_time, is_maker=False):
         trade = self.ex.close(price, reason, ts, is_maker=is_maker)
-        self.last_exit_sb = sb                # 청산한 신호봉 → 쿨다운 기준 갱신
+        self.last_exit_time = int(sb_time)    # 청산한 신호봉 **시각** → 쿨다운 기준 갱신
         if self.on_close:
             self.on_close(trade)
         return trade
@@ -228,14 +232,15 @@ class Stepper:
     def step(self, base, signal, bar_of, is_close, atr_series, resolver, t):
         """1분봉 t 하나 처리."""
         ot = int(base.open_time[t]); hi, lo, cl = base.high[t], base.low[t], base.close[t]
-        sb = int(bar_of[t])                   # 이 1분봉이 속한 신호봉
-        self.manage_position(ot, hi, lo, cl, sb)
+        sb = int(bar_of[t])                   # 이 1분봉이 속한 신호봉(배열 인덱스)
+        sb_time = int(signal.open_time[sb])   # 그 신호봉의 시각 — 기간 계산은 전부 이걸로
+        self.manage_position(ot, hi, lo, cl, sb_time)
         if self.pending is not None:          # 지정가 진입 대기 중이면 이 봉에서 체결/추격 판정
             self._resolve_pending(signal, atr_series, hi, lo, cl, ot, sb)
         if is_close[t]:
             self.signal_step(signal, atr_series, resolver, ot, sb)
 
-    def manage_position(self, ot, hi, lo, cl, sb):
+    def manage_position(self, ot, hi, lo, cl, sb_time):
         """보유 중 1분봉 해상도 관리: 펀딩 → 청산 → 손절/트레일링/익절.
 
         ★ 여기의 return 은 '이 메서드'만 끝낸다 — 청산이 일어난 봉에서도 호출자는 이어서
@@ -253,28 +258,28 @@ class Stepper:
 
         # 2) 청산 (손절보다 먼저! 레버리지 백테스트 뻥튀기 방지)
         if (pos.side == 1 and lo <= pos.liq_price) or (pos.side == -1 and hi >= pos.liq_price):
-            self._close(pos.liq_price, "liquidation", ot, sb); return
+            self._close(pos.liq_price, "liquidation", ot, sb_time); return
 
         # 3) 손절 / 트레일링 / 익절 (보수적으로 나쁜 것부터)
         trailing = self.preset.exit.get("trailing")
         if pos.side == 1:
             pos.peak = max(pos.peak, hi)
             if not np.isnan(pos.stop_price) and lo <= pos.stop_price:
-                self._close(pos.stop_price, "stop_loss", ot, sb)
+                self._close(pos.stop_price, "stop_loss", ot, sb_time)
             elif trailing and _trailing_hit(pos, trailing, lo, hi):
-                self._close(_trailing_stop(pos, trailing), "trailing", ot, sb)
+                self._close(_trailing_stop(pos, trailing), "trailing", ot, sb_time)
             elif not np.isnan(pos.tp_price) and hi >= pos.tp_price:
-                self._close(pos.tp_price, "take_profit", ot, sb, is_maker=True)
+                self._close(pos.tp_price, "take_profit", ot, sb_time, is_maker=True)
         else:
             pos.peak = min(pos.peak, lo)
             if not np.isnan(pos.stop_price) and hi >= pos.stop_price:
-                self._close(pos.stop_price, "stop_loss", ot, sb)
+                self._close(pos.stop_price, "stop_loss", ot, sb_time)
             elif trailing and _trailing_hit(pos, trailing, lo, hi):
-                self._close(_trailing_stop(pos, trailing), "trailing", ot, sb)
+                self._close(_trailing_stop(pos, trailing), "trailing", ot, sb_time)
             elif not np.isnan(pos.tp_price) and lo <= pos.tp_price:
-                self._close(pos.tp_price, "take_profit", ot, sb, is_maker=True)
+                self._close(pos.tp_price, "take_profit", ot, sb_time, is_maker=True)
 
-    def entry_block(self, resolver, sb, fill_time):
+    def entry_block(self, signal, resolver, sb, fill_time):
         """(진입 방향 or None, 막힌 사유 or None) — 진입 판정을 한 곳에 모은 것.
 
         순서는 예전 signal_step 과 글자 그대로 같다(포지션 → 대기주문 → 게이트 → 필터 → 조건).
@@ -289,7 +294,8 @@ class Stepper:
             return None, "지정가 진입 대기 중"
         if self.entry_gate is not None and not self.entry_gate():
             return None, "진입 게이트 닫힘"        # 라이브가 멈춤/가드레일 사유로 덮어쓴다
-        reason = _entry_block_reason(sb, fill_time, self.preset.filter, self.last_exit_sb, self.cfg)
+        reason = _entry_block_reason(int(signal.open_time[sb]), self.tf_ms, fill_time,
+                                     self.preset.filter, self.last_exit_time, self.cfg)
         if reason:
             return None, reason
         if self.entry_rules:
@@ -304,6 +310,7 @@ class Stepper:
         """신호봉 마감 시점: 신호 기반 청산 → 진입."""
         ex, cfg, preset = self.ex, self.cfg, self.preset
         sig_close = signal.close[sb]
+        sb_time = int(signal.open_time[sb])          # 기간 판정(쿨다운·시간청산)은 인덱스가 아니라 시각으로
         # 체결 시각 = 이 1분봉이 '닫히는' 순간 = ot + 1분. (ot 는 봉의 시작)
         # 예: 5m 11:00 봉의 마지막 1분봉은 ot=11:04 이고 11:05:00 에 닫힘 → 체결은 11:05.
         # ot 를 그대로 쓰면 체결이 1분 이르게 기록돼 차트 마커가 신호봉 위에 찍힌다.
@@ -321,14 +328,15 @@ class Stepper:
                     st_exit.get("as"), "take_profit")
                 # maker 모드(지정가 진입)면 SuperTrend 청산도 BBO 지정가로 체결됐다고 가정 → maker.
                 # (실전: post-only 걸고 3초 내 미체결이면 취소 후 taker 청산 — README 참고.)
-                self._close(sig_close, st_reason, fill_time, sb, is_maker=self.maker_entry)
+                self._close(sig_close, st_reason, fill_time, sb_time, is_maker=self.maker_entry)
             elif cond is not None and evaluate(cond, resolver, sb):
-                self._close(sig_close, "signal", fill_time, sb)
-            elif time_stop is not None and (sb - pos.entry_signal_idx) >= time_stop["maxBars"]:
-                self._close(sig_close, "time", fill_time, sb)
+                self._close(sig_close, "signal", fill_time, sb_time)
+            elif (time_stop is not None
+                  and (sb_time - pos.entry_signal_time) >= time_stop["maxBars"] * self.tf_ms):
+                self._close(sig_close, "time", fill_time, sb_time)
 
         # 진입 신호. 펀딩 임박·거래시간 필터는 '체결 순간' 기준이어야 하므로 fill_time 으로 판정.
-        side, block = self.entry_block(resolver, sb, fill_time)
+        side, block = self.entry_block(signal, resolver, sb, fill_time)
         if self.diagnose is not None:              # 라이브 전용(백테스트는 None → 비용 0)
             self.diagnose(resolver, sb, fill_time, side, block)
         if side is None:
@@ -340,7 +348,8 @@ class Stepper:
         equity = ex.equity()
         lev = _leverage_for(preset.sizing, equity, cfg.max_leverage)   # 현재 자산 기준 레버리지
         p = _open_position(preset, preset.sizing, ex_block, sig_close, fill_time, sb,
-                           side, lev, equity, cfg, atr_series, signal, entry_maker=self.maker_entry)
+                           side, lev, equity, cfg, atr_series, signal,
+                           entry_maker=self.maker_entry, sb_time=sb_time)
         if p is not None:
             ex.open(p, is_maker=self.maker_entry)
             if self.on_open:
@@ -369,7 +378,8 @@ class Stepper:
         equity = ex.equity()
         lev = _leverage_for(preset.sizing, equity, cfg.max_leverage)
         p = _open_position(preset, preset.sizing, preset.exit, price, ot, sb,
-                           side, lev, equity, cfg, atr_series, signal, entry_maker=is_maker)
+                           side, lev, equity, cfg, atr_series, signal, entry_maker=is_maker,
+                           sb_time=int(signal.open_time[sb]))
         if p is not None:
             ex.open(p, is_maker=is_maker)
             if self.on_open:
@@ -409,7 +419,7 @@ def run(base: Candles, preset: Preset, cfg: BacktestConfig = None) -> Metrics:
     # 라이브는 데이터가 끝나지 않으므로 포지션을 그대로 들고 간다.
     if ex.position is not None:
         stepper._close(base.close[-1], "signal", int(base.open_time[-1]) + MINUTE_MS,
-                       int(bar_of[-1]))
+                       int(signal.open_time[int(bar_of[-1])]))
 
     return Metrics(cfg.initial_equity, ex.equity(), trades, equity_curve)
 
@@ -464,14 +474,17 @@ def _known_funding_rate(ot: int, cfg) -> float:
     return cfg.funding_schedule.get(bm.last_funding_time(ot), cfg.funding_rate)
 
 
-def _entry_block_reason(sb, ot, filt, last_exit_idx, cfg):
+def _entry_block_reason(sb_time, tf_ms, ot, filt, last_exit_time, cfg):
     """진입 필터가 막는 사유(str) 또는 None(통과).
 
     bool 이 아니라 사유를 돌려주는 이유: '왜 진입을 안 했나' 로그가 필터 단계를
     '차단됨' 한 마디로 뭉개면 쿨다운인지 거래시간인지 펀딩인지 알 수 없다.
     """
     if filt.get("cooldownBars"):
-        waited = sb - last_exit_idx
+        # ★ 봉 인덱스가 아니라 **시각** 차이로 센다. 라이브는 매 폴 '최근 N일' 윈도우를 새로
+        #   받아 배열이 미끄러지므로, 인덱스 차이는 시간이 흘러도 0 근처에 고정된다
+        #   (실측: 15분이 지나도 마지막 sb 가 960 그대로) → 쿨다운이 영원히 안 풀렸다.
+        waited = int((sb_time - last_exit_time) // tf_ms) if tf_ms > 0 else 0
         if waited < filt["cooldownBars"]:
             return f"청산 쿨다운 ({waited}/{filt['cooldownBars']}봉 경과)"
     if filt.get("avoidFundingWindowMinutes"):
@@ -492,7 +505,7 @@ def _entry_allowed(sb, ot, filt, last_exit_idx, cfg) -> bool:
 
 
 def _open_position(preset, sizing, ex, price, ot, sb, side, lev, equity, cfg, atr_series, signal,
-                   entry_maker=False):
+                   entry_maker=False, sb_time=None):
     atr_val = atr_series[sb]
     # 손절/익절가 먼저 계산 (리스크 사이징이 손절 거리를 필요로 함).
     # 롱 손절은 아래(-side), 익절은 위(+side). swing 타입은 side 무시.
@@ -528,5 +541,8 @@ def _open_position(preset, sizing, ex, price, ot, sb, side, lev, equity, cfg, at
     return _Position(
         side=side, entry_time=ot, entry_price=price, qty=qty, leverage=lev,
         margin=margin, liq_price=liq, stop_price=stop_price, tp_price=tp_price,
-        entry_fee=entry_fee, entry_signal_idx=sb, peak=price,
+        # 진입 신호봉 '시각'. 호출부가 안 주면 signal 에서 뽑는다(signal=None 인 단위테스트 대비).
+        entry_fee=entry_fee, peak=price,
+        entry_signal_time=int(sb_time if sb_time is not None
+                              else (signal.open_time[sb] if signal is not None else ot)),
     )
