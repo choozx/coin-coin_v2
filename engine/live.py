@@ -275,13 +275,28 @@ class LiveTrader:
             return                           # 포지션 있으면 청산 후 다음 폴링에 반영
         old_sym = self.preset.symbol
         self._rebuild_effective()
-        if self.preset.symbol != old_sym:    # 심볼 바뀌면 과거 replay 방지
-            self._last_ot = None
+        if self.preset.symbol != old_sym:    # 심볼 바뀌면 기준봉이 의미를 잃는다
+            self._skip_to_latest("심볼 변경")   # ★ None 으로 두면 다음 폴이 10일치를 replay 한다
         self.stepper.last_exit_time = -10 ** 15
         s = self.preset.sizing
         notify(f"⚙️ 봇 설정 반영 — {self.preset.symbol} lev{s.get('leverage')}", category="system")
         print(f"  [봇설정 반영] {self.preset.symbol} · lev{s.get('leverage')} · "
               f"{(s.get('size') or {}).get('type')} · maker={self.stepper.maker_entry}", flush=True)
+
+    def _skip_to_latest(self, context: str = "전환") -> None:
+        """처리 기준봉을 '지금 최신 닫힌 봉'으로 옮긴다 — 과거 신호를 몰아 실행하지 않도록.
+
+        심볼·전략이 바뀌면 기존 기준점이 의미를 잃는다. 그렇다고 None 으로 두면 다음 폴이
+        창 전체를 replay 한다(위 poll_once 주석 참고). 받아오기에 실패하면 **기존 값을 유지**
+        한다 — _last_ot 은 시각이라 심볼이 바뀌어도 '그 시각 이후만 처리'라는 의미가 남는다.
+        """
+        try:
+            base = self._fetch(int(time.time() * 1000))
+            if len(base):
+                self._last_ot = int(base.open_time[-1])
+                return
+        except Exception as e:
+            print(f"  [경고] {context}: 기준봉 세팅 실패({e}) — 이전 기준점 유지", flush=True)
 
     def _apply_strategy(self, preset: Preset, path: str):
         """무포지션 상태에서 전략을 실제로 갈아끼운다(심볼 바뀌면 수수료·데이터도 갱신)."""
@@ -292,14 +307,7 @@ class LiveTrader:
         self.stepper.last_exit_time = -10 ** 15         # 쿨다운 리셋
         self._pending_strategy = None
         self._strategy_error = None
-        # 과거 replay 방지: 새 전략/심볼 데이터의 최신 닫힌 봉으로 _last_ot 세팅
-        self._last_ot = None
-        try:
-            base = self._fetch(int(time.time() * 1000))
-            if len(base):
-                self._last_ot = int(base.open_time[-1])
-        except Exception:
-            pass
+        self._skip_to_latest("전략 전환")     # 과거 replay 방지: 기준봉을 최신으로
         notify(f"🔄 전략 전환 {old} → {self.preset.name} ({self.preset.symbol} {self.preset.timeframe})", category="system")
         print(f"  [전략전환] {old} → {self.preset.name} ({self.preset.symbol} {self.preset.timeframe})", flush=True)
 
@@ -382,7 +390,12 @@ class LiveTrader:
         return base
 
     def poll_once(self, now_ms: int = None, base=None):
-        """한 번 폴링 → 새로 닫힌 1분봉들을 순서대로 처리. 반환: 이번에 발생한 이벤트 리스트."""
+        """한 번 폴링 → 새로 닫힌 1분봉들을 순서대로 처리. 반환: 이번에 발생한 이벤트 리스트.
+
+        base 를 직접 주입하면 '전체 replay 의도'로 본다(백테스트 대조 테스트가 그렇게 쓴다).
+        실운영은 우리가 창을 받아오므로, 기준점이 없을 때 과거를 몰아 실행하지 않는다.
+        """
+        injected = base is not None
         if base is None:
             self._maybe_switch_strategy()    # 폴링 시작 시 전략 전환 확인(무포지션이면 교체)
             self._maybe_apply_bot_config()   # 봇 설정(심볼·사이징·실행·필터) 변경 반영(무포지션이면)
@@ -406,10 +419,19 @@ class LiveTrader:
         self._maybe_flatten(now_ms)      # 사용자 즉시청산 요청 처리(있으면 시장가 청산 + 자동 정지)
         self._reconcile_live_position(base)   # 유령 포지션 위에서 판정하지 않게 스텝 전에 거래소와 맞춘다
         # 아직 처리 안 한 1분봉만 (갭이 있어도 순서대로 따라잡음)
-        start = 0
         if self._last_ot is not None:
-            idx = np.searchsorted(base.open_time, self._last_ot, side="right")
-            start = int(idx)
+            start = int(np.searchsorted(base.open_time, self._last_ot, side="right"))
+        elif injected:
+            start = 0                     # 호출자가 캔들을 직접 준 경우 = 전체 replay 의도
+        else:
+            # ★ 실운영인데 기준점이 없다 = 기동 직후이거나 전환 경로가 세팅을 빠뜨린 것.
+            #   여기서 창 전체를 훑으면 최대 warmup_days(기본 10일=14,400봉) 의 과거 신호가
+            #   **지금 시세로** 한꺼번에 체결된다 — 라이브면 실주문 수십 건이다
+            #   (실측: 심볼 변경 한 번에 한 폴 7트레이드=14주문).
+            #   개별 경로(_skip_to_latest)도 세팅하지만 하나라도 빠뜨리면 돈이 나가므로
+            #   판정 직전에 한 번 더 막는다. 최신 봉 하나만 처리하고 기준점을 잡는다.
+            start = len(base) - 1
+            print("  [경고] 처리 기준봉이 없어 최신 봉만 처리 — 과거 replay 방지", flush=True)
         for t in range(start, len(base)):
             self.stepper.step(base, signal, bar_of, is_close, atr_series, resolver, t)
             self._last_ot = int(base.open_time[t])

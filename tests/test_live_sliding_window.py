@@ -119,3 +119,79 @@ def test_time_stop_fires_on_a_sliding_window():
     closed = [tr for tr in st.ex.trades if tr.exit_reason == "time"]
     assert closed, (f"시간청산이 발동해야 한다(진입봉 {entry_time}, "
                     f"창이 {TF_MIN*4}분 이동) — 인덱스 기준이면 영영 안 걸린다")
+
+
+# ---- 과거 replay 방지: 기준봉(_last_ot)이 사라지는 자리들 ----
+
+def _trader(tmp_env, base):
+    """네트워크 없이 도는 LiveTrader — _fetch 를 고정 창으로 대체한다."""
+    from engine.backtest import BacktestConfig
+    from engine.executor import PaperExecutor
+    from engine import live as L
+    preset = Preset({
+        "schemaVersion": "1.0", "name": "replay",
+        "market": {"exchange": "binance-futures", "symbol": "BTCUSDT",
+                   "timeframe": f"{TF_MIN}m", "direction": "long"},
+        "entry": {"left": {"source": "close"}, "cmp": ">", "right": 0},   # 항상 참 = 봉마다 신호
+        "exit": {"timeStop": {"maxBars": 1}},
+        "sizing": {"leverage": 1, "marginMode": "isolated",
+                   "size": {"type": "equityPercent", "value": 10}},
+    })
+    tr = L.LiveTrader(preset, PaperExecutor(equity=10_000.0),
+                      BacktestConfig(initial_equity=10_000.0),
+                      state_path=os.path.join(tmp_env, "s.json"),
+                      ledger_path=os.path.join(tmp_env, "t.db"),
+                      strategy_path="x", mode="paper")
+    tr._fetch = lambda now_ms: base
+    return tr
+
+
+def test_production_poll_never_replays_the_whole_window(tmp_path):
+    """★ 회귀: 실운영에서 기준봉이 없어도 창 전체를 몰아 실행하면 안 된다.
+
+    창이 10일이면 과거 신호 수십 건이 **지금 시세로** 한꺼번에 체결된다. 라이브면 실주문이다
+    (실측: 심볼 변경 한 번에 한 폴에서 7트레이드=14주문 발생했다).
+    """
+    base = _base(0, n=WINDOW_BARS)
+    tr = _trader(str(tmp_path), base)
+    tr._last_ot = None                                   # 기준점이 없는 상태
+    tr.poll_once(now_ms=int(base.open_time[-1]) + MIN)   # base 를 주입하지 않음 = 실운영 경로
+    assert len(tr.ex.trades) <= 1, (
+        f"과거 봉이 몰아서 실행됐다 — {len(tr.ex.trades)}건")
+    assert tr._last_ot is not None, "처리 후엔 기준점이 잡혀 있어야 다음 폴이 안전하다"
+
+
+def test_symbol_change_moves_the_cursor_instead_of_clearing_it(tmp_path):
+    """★ 회귀: 봇 설정으로 심볼을 바꿔도 기준봉이 None 으로 남으면 안 된다.
+
+    전략 전환 경로엔 이 처리가 있었는데 봇 설정 경로에만 빠져 있었다 — 같은 실수가 두 곳에
+    갈라져 있으면 하나는 반드시 잊힌다. 그래서 _skip_to_latest 한 곳으로 모았다.
+    """
+    from engine import control
+    base = _base(0, n=WINDOW_BARS)
+    tr = _trader(str(tmp_path), base)
+    tr.bootstrap(now_ms=int(base.open_time[-1]) + MIN)
+    assert tr._last_ot is not None
+
+    control.set_bot_config({"symbol": "ETHUSDT"}, path=os.path.join(str(tmp_path), "c.json"))
+    tr._bot_cfg = {}                                     # 변경을 감지하도록
+    import engine.control as C
+    orig = C.get_bot_config
+    C.get_bot_config = lambda *a, **k: {"symbol": "ETHUSDT"}
+    try:
+        tr._maybe_apply_bot_config()
+    finally:
+        C.get_bot_config = orig
+    assert tr.preset.symbol == "ETHUSDT", "심볼이 실제로 바뀌어야 테스트가 의미 있다"
+    assert tr._last_ot is not None, "심볼이 바뀌어도 기준봉은 최신으로 옮겨져 있어야 한다"
+
+
+def test_cursor_survives_a_failed_fetch(tmp_path):
+    """받아오기에 실패하면 기준점을 **유지**한다 — None 으로 두면 다음 폴이 통째로 replay 된다."""
+    base = _base(0, n=WINDOW_BARS)
+    tr = _trader(str(tmp_path), base)
+    tr.bootstrap(now_ms=int(base.open_time[-1]) + MIN)
+    before = tr._last_ot
+    tr._fetch = lambda now_ms: (_ for _ in ()).throw(RuntimeError("네트워크 끊김"))
+    tr._skip_to_latest("테스트")
+    assert tr._last_ot == before
