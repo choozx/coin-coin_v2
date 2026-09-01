@@ -35,7 +35,8 @@ from . import settings
 from . import ledger
 from . import indicators as ind
 from .candles import resample, signal_close_index, TIMEFRAME_MINUTES, MINUTE_MS
-from .conditions import SeriesResolver
+from .conditions import (SeriesResolver, collect_operands, operand_label,
+                         required_warmup_bars)
 from .preset import Preset, load_preset_file, merge_bot_config
 from .executor import PaperExecutor, LiveExecutor
 from .backtest import BacktestConfig, Stepper
@@ -126,6 +127,18 @@ class LiveTrader:
         트레이더는 폴링에 필요한 tf_min 만 유지한다.
         """
         self.tf_min = TIMEFRAME_MINUTES[preset.timeframe]
+        # ★ 창 길이를 프리셋에 맞춘다. 10일 고정이면 상위 TF 에서 지표가 영영 NaN 이고
+        #   (10일 = 4h 61봉 / 1d 11봉), NaN 은 항상 false 라 **한 번도 진입하지 않는다**.
+        #   그런데 조용해서 '조건 미충족'과 구별되지 않는다. 줄이지는 않는다 — 기존 저TF
+        #   동작을 바꾸지 않기 위해 기본값과 큰 쪽을 쓴다.
+        need_bars = required_warmup_bars(preset.data.get("entry"),
+                                         *[r.get("when") for r in (preset.data.get("entryRules") or [])],
+                                         (preset.exit or {}).get("condition"))
+        need_days = need_bars * self.tf_min / (24 * 60)
+        if need_days > self.warmup_days:
+            print(f"  [워밍업] {preset.timeframe} · 지표 수렴에 {need_bars}봉 필요 → "
+                  f"창 {self.warmup_days:.1f}일 → {need_days:.1f}일로 확장", flush=True)
+            self.warmup_days = need_days
         if getattr(self, "stepper", None) is None:
             self.stepper = Stepper(preset, self.cfg, self.ex,
                                    entry_gate=self._entry_gate,
@@ -560,6 +573,38 @@ class LiveTrader:
             self._sync_live_position(base)
         start = "플랫으로" if self.ex.position is None else "포지션 인계받아"
         print(f"부트스트랩: {len(base)}봉 워밍업, {start} 시작 → 이후 새로 닫히는 봉만 실행.", flush=True)
+        self._warn_if_indicators_nan(base)
+
+    def _warn_if_indicators_nan(self, base) -> None:
+        """기동 시 지표가 NaN 이면 크게 알린다 — 조용히 '진입 조건 미충족'으로 위장되는 상태다.
+
+        창을 프리셋에 맞춰 늘려도 **캐시에 그만큼의 과거가 없으면** 여전히 NaN 이다. 그러면
+        봇은 멀쩡히 돌면서 한 번도 진입하지 않고, 로그엔 '조건 미충족'만 쌓인다. 실제로
+        10일 고정 창에서 4h/1d 프리셋이 이 상태였다 — 아무도 몰랐을 것이다.
+        """
+        try:
+            if len(base) < 2:
+                return
+            signal = resample(base, self.tf_min)
+            r = SeriesResolver(signal)
+            i = len(signal) - 1
+            nodes = [self.preset.data.get("entry")]
+            nodes += [rule.get("when") for rule in (self.preset.data.get("entryRules") or [])]
+            bad = []
+            for node in nodes:
+                for op in collect_operands(node if isinstance(node, dict) else {}):
+                    v = float(r.resolve(op)[i])
+                    if np.isnan(v):
+                        bad.append(operand_label(op))
+            if bad:
+                names = ", ".join(sorted(set(bad)))
+                msg = (f"⚠️ 지표 워밍업 부족 — {names} 가 NaN 입니다. 이 상태로는 진입 조건이 "
+                       f"**절대 참이 되지 않습니다**(신호봉 {len(signal)}개). "
+                       f"캐시에 과거 데이터를 더 채우세요(/collector).")
+                notify(msg, category="system", buttons=["status"])
+                print(f"  [워밍업 경고] {names} NaN · 신호봉 {len(signal)}개", flush=True)
+        except Exception as e:
+            print(f"  [워밍업 점검 실패] {e}", flush=True)
 
     def _sync_live_position(self, base, context: str = "재시작"):
         """거래소의 실제 포지션을 진실로 삼아 엔진 상태를 맞춘다(재시작·폴 중 재조정 공통).

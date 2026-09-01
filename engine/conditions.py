@@ -305,3 +305,44 @@ def explain_lines(exp: dict, depth: int = 0) -> list:
     for ch in exp.get("children") or []:
         lines += explain_lines(ch, depth + 1)
     return lines
+
+
+# ── 워밍업 계산 ──────────────────────────────────────────────────────────────
+# 지표가 값을 가지려면 과거 봉이 얼마나 필요한가. 라이브가 받는 창이 이보다 짧으면 지표가
+# 영영 NaN 이고, NaN 은 evaluate 에서 항상 false 라 **그 전략은 한 번도 진입하지 않는다**.
+# 조용해서 '조건 미충족'과 구별되지 않는다 — 실측: 10일 창에서 4h/1d 프리셋의 EMA(200)·
+# HAWKEYE(200) 가 NaN, 1d 는 SUPERTREND(14) 마저 NaN.
+
+# 기간처럼 쓰이는 params 키(값이 클수록 더 긴 과거가 필요하다).
+_LOOKBACK_PARAMS = ("slow", "signal", "bb_length", "rsi_length", "smoothing", "smooth_k", "smooth_d")
+
+# 재귀 지표(EMA·ADX·QQE·SuperTrend)는 기간만큼만 있으면 값이 나오지만 **수렴하지 않는다**
+# (TA-Lib 의 unstable period). 넉넉히 배수를 준다 — 창을 늘리는 비용보다 안 맞는 게 비싸다.
+UNSTABLE_MULT = 3
+MIN_WARMUP_BARS = 200
+
+
+def operand_lookback(operand) -> int:
+    """이 operand 가 필요로 하는 과거 봉 수(대략). 상수·시세는 0."""
+    if not isinstance(operand, dict) or "indicator" not in operand:
+        return 0
+    n = int(operand.get("period") or 0)
+    for k in _LOOKBACK_PARAMS:
+        v = (operand.get("params") or {}).get(k)
+        if isinstance(v, (int, float)):
+            n = max(n, int(v))
+    return n
+
+
+def max_lookback(*nodes) -> int:
+    """여러 조건 트리를 훑어 가장 긴 lookback. 진입·청산 조건을 다 넣어 부른다."""
+    best = 0
+    for node in nodes:
+        for op in collect_operands(node if isinstance(node, dict) else {}):
+            best = max(best, operand_lookback(op))
+    return best
+
+
+def required_warmup_bars(*nodes) -> int:
+    """지표가 '수렴한' 값을 갖기까지 필요한 신호봉 수."""
+    return max(MIN_WARMUP_BARS, max_lookback(*nodes) * UNSTABLE_MULT)
