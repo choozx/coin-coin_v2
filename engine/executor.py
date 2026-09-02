@@ -364,7 +364,7 @@ class LiveExecutor(Executor):
     def close(self, exit_price: float, reason: str, exit_time: int, is_maker: bool = False):
         """실주문으로 청산 → ClosedTrade. exit_price(엔진이 가정한 가격)는 참고만 하고
         실제 체결가로 기록한다. 단 강제청산은 이미 거래소가 끝낸 일이라 그 가격을 쓴다."""
-        from .binance_broker import OrderError
+        from .binance_broker import OrderError, ReduceOnlyFlat
         pos = self.position
         if pos is None:
             raise RuntimeError("청산할 포지션 없음")
@@ -386,9 +386,17 @@ class LiveExecutor(Executor):
             # 스텝 미만 잔량 = 거래소엔 사실상 없는 dust(부분체결 회계로 로컬에만 남은 것).
             # 주문을 낼 수 없으니 flat 으로 보고 기록한다 — 안 그러면 매 폴 재시도로 갇힌다.
             return self._record(pos, exit_price, 0.0, reason, exit_time)
-        fill = (self._broker.limit_then_market(side, qty, self.fill_timeout_s, reduce_only=True,
-                                               max_attempts=self.maker_max_attempts)
-                if is_maker else self._broker.market_order(side, qty, reduce_only=True))
+        try:
+            fill = (self._broker.limit_then_market(side, qty, self.fill_timeout_s, reduce_only=True,
+                                                   max_attempts=self.maker_max_attempts)
+                    if is_maker else self._broker.market_order(side, qty, reduce_only=True))
+        except ReduceOnlyFlat as e:
+            # -2022: 줄일 포지션이 없다. **거래소가 정말 무포지션인지 확인하고** 닫힌 것으로 기록한다.
+            # 확인 없이 지우면 살아 있는 포지션을 장부에서만 없애는 최악이 된다.
+            if not self._exchange_flat():
+                raise OrderError(f"reduceOnly 거부인데 거래소엔 포지션이 남아 있음({reason}): {e}")
+            print(f"  [청산] reduceOnly 거부(-2022) + 거래소 무포지션 → 이미 닫힌 것으로 기록", flush=True)
+            return self._record(pos, exit_price, 0.0, reason, exit_time)
         if fill.qty <= 0:
             raise OrderError(f"청산 주문 미체결({reason}) — 포지션 유지, 다음 봉에 재시도")
         if fill.qty < qty * 0.999:                 # 부분청산: 남은 수량은 계속 엔진이 관리

@@ -17,6 +17,10 @@ import time
 from dataclasses import dataclass, field
 
 
+class ReduceOnlyFlat(Exception):
+    """reduceOnly 가 거부됨 = 거래소에 줄일 포지션이 없다. 청산 경로에선 '이미 닫힘'으로 다룬다."""
+
+
 class OrderError(RuntimeError):
     """주문 불가/거부 — 진입은 건너뛰고 다음 봉에 재시도해도 되는 종류(잔고부족·최소주문 미달 등)."""
 
@@ -220,6 +224,10 @@ class BinanceBroker:
         try:
             o = self.client().create_order(self.symbol, "market", side, qty, None, params)
         except Exception as e:
+            # -2022 는 '줄일 게 없다' 는 뜻이라 청산 경로에선 실패가 아니다 → 호출부가 판단하게
+            # 별도 예외로 올린다. OrderError 로 뭉개면 폴이 중단되고 포지션이 로컬에만 남는다.
+            if reduce_only and _is_reduce_only_reject(e):
+                raise ReduceOnlyFlat(str(e))
             raise OrderError(f"시장가 주문 거부: {e}")
         return self._fill_of(self._settled(o), fallback_maker=False)
 
@@ -273,7 +281,14 @@ class BinanceBroker:
                 self.check_order_size(remaining, limit)
             except OrderError:
                 return filled
-        taker = self.market_order(side, remaining, reduce_only)
+        try:
+            taker = self.market_order(side, remaining, reduce_only)
+        except ReduceOnlyFlat:
+            # 잔량을 줄이려는데 거래소엔 포지션이 없다 = 앞의 지정가가 이미 다 닫았다(체결 조회가
+            # 못 따라온 것) 거나 그 사이 외부에서 닫혔다. 받아낸 체결이 있으면 그게 답이다.
+            if filled is not None and filled.qty > 0:
+                return filled
+            raise                                        # 아무것도 못 받았으면 호출부가 판단한다
         return taker if filled is None else _merge(filled, taker)
 
     def _wait_fill(self, order: dict, timeout_s: float) -> dict:
@@ -357,6 +372,16 @@ class BinanceBroker:
 def _is_post_only_reject(e) -> bool:
     s = str(e)
     return "-5022" in s or "post only" in s.lower() or "postonly" in s.lower()
+
+
+def _is_reduce_only_reject(e) -> bool:
+    """-2022 ReduceOnly Order is rejected — **줄일 포지션이 없다**는 뜻이다.
+
+    청산 경로에서 이건 실패가 아니라 '이미 닫혔다'는 신호다. 우리 지정가가 다 채웠는데
+    체결 조회가 못 따라왔거나, 그 사이 강제청산·수동청산으로 포지션이 사라진 경우다.
+    """
+    s = str(e)
+    return "-2022" in s or "reduceonly" in s.lower().replace(" ", "")
 
 
 def _merge(a: Fill, b: Fill) -> Fill:

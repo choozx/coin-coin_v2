@@ -15,7 +15,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine.backtest import _Position                       # noqa: E402
-from engine.binance_broker import Fill, OrderError, _merge   # noqa: E402
+from engine.binance_broker import BinanceBroker, Fill, OrderError, _merge  # noqa: E402
 from engine.executor import LiveExecutor, api_keys           # noqa: E402
 from engine.live import LiveTrader                          # noqa: E402
 
@@ -966,3 +966,110 @@ def test_fill_log_failure_never_blocks_trading():
     finally:
         fill_log.record = orig
     assert ex.position is not None                 # 진입은 정상적으로 완료됐다
+
+
+# ---- -2022 reduceOnly 거부: '줄일 포지션이 없다' = 실패가 아니라 '이미 닫힘' ----
+
+class _RejectingBroker(FakeBroker):
+    """reduceOnly 주문을 바이낸스 -2022 로 거부하는 가짜 거래소."""
+
+    def __init__(self, *a, flat=True, limit_fill=None, **kw):
+        super().__init__(*a, **kw)
+        self._flat = flat                 # 거래소에 포지션이 남아 있는가
+        self._limit_fill = limit_fill     # 지정가로 먼저 채워진 양(있으면 그만큼 체결)
+
+    def position(self):
+        return None if self._flat else self.position_data
+
+    def market_order(self, side, qty, reduce_only=False):
+        from engine.binance_broker import ReduceOnlyFlat
+        if reduce_only:
+            raise ReduceOnlyFlat("binance {'code':-2022,'msg':'ReduceOnly Order is rejected.'}")
+        return super().market_order(side, qty, reduce_only)
+
+
+def test_reduce_only_reject_records_close_when_exchange_is_flat():
+    """★ 거래소가 이미 무포지션이면 -2022 는 '닫혔다'는 뜻 — 거래로 기록하고 넘어가야 한다.
+
+    예전엔 OrderError 로 올라가 폴이 중단됐고, 포지션이 로컬에만 남아 3폴(≈3분) 뒤에야
+    '외부 청산'으로 잘못 기록됐다(사유·체결가가 실제와 다르게 남는다).
+    """
+    broker = _RejectingBroker(flat=True)
+    ex = _ex(broker)
+    ex.position = _pos(price=100.0, qty=1.0)
+    trade = ex.close(95.0, "stop_loss", 1_700_000_000_000)
+    assert trade.exit_reason == "stop_loss", "사유가 external 로 뭉개지면 안 된다"
+    assert ex.position is None
+
+
+def test_reduce_only_reject_raises_when_position_still_exists():
+    """★ 거래소에 포지션이 남아 있는데 거부됐다면 진짜 문제 — 장부에서만 지우면 최악이다."""
+    from engine.binance_broker import OrderError
+    broker = _RejectingBroker(flat=False,
+                              position={"side": 1, "qty": 1.0, "entry_price": 100.0,
+                                        "leverage": 5, "liq_price": 80.0, "margin": 20.0})
+    ex = _ex(broker)
+    ex.position = _pos(price=100.0, qty=1.0)
+    try:
+        ex.close(95.0, "stop_loss", 1_700_000_000_000)
+        assert False, "예외가 올라와야 한다"
+    except OrderError as e:
+        assert "포지션이 남아" in str(e)
+    assert ex.position is not None, "포지션을 지우면 안 된다"
+
+
+class _PartialLimitBroker(BinanceBroker):
+    """**진짜** limit_then_market 로직을 태우되 네트워크만 걷어낸 브로커.
+
+    가짜 브로커는 limit_then_market 을 통째로 대체하므로 잔량 처리 분기를 안 지나간다 —
+    -2022 를 잔량에서 만나는 게 바로 그 분기라서 실물 로직으로 검증해야 한다.
+    """
+
+    def __init__(self, limit_qty):
+        super().__init__("k", "s", True, "BTCUSDT")
+        self.limit_qty = limit_qty            # 지정가로 채워지는 양
+        self.market_calls = 0
+
+    @property
+    def symbol(self): return "BTC/USDT:USDT"      # 실물은 market() 로 해석 → 네트워크를 탄다
+    def round_qty(self, q): return round(float(q), 8)
+    def round_price(self, p): return float(p)
+    def bbo(self): return 95.0, 95.1
+    def client(self):
+        class _C:
+            def create_order(*a, **k): return {"id": "1"}
+            def cancel_order(*a, **k): return None
+        return _C()
+    def _wait_fill(self, o, t): return o
+    def _fill_of(self, o, fallback_maker=False):
+        return Fill(price=95.2, qty=self.limit_qty, maker_qty=self.limit_qty, fee=0.0,
+                    order_ids=["1"])
+    def _settled(self, o): return o
+    def market_order(self, side, qty, reduce_only=False):
+        from engine.binance_broker import ReduceOnlyFlat
+        self.market_calls += 1
+        if reduce_only:
+            raise ReduceOnlyFlat("binance {'code':-2022,'msg':'ReduceOnly Order is rejected.'}")
+        raise AssertionError("청산 경로인데 reduce_only 가 아니다")
+
+
+def test_limit_fills_survive_a_reduce_only_reject_on_the_remainder():
+    """★ 지정가가 대부분 닫았는데 잔량 시장가가 -2022 나면, **받아낸 체결이 답**이다.
+
+    예전엔 그 -2022 가 OrderError 로 올라가 이미 채워진 체결까지 통째로 버려졌다.
+    """
+    b = _PartialLimitBroker(limit_qty=0.9)          # 1.0 중 0.9 만 지정가 체결
+    fill = b.limit_then_market("sell", 1.0, 0.01, reduce_only=True, max_attempts=1)
+    assert b.market_calls == 1, "잔량 0.1 로 시장가를 시도했어야 한다"
+    assert abs(fill.qty - 0.9) < 1e-9 and abs(fill.price - 95.2) < 1e-9
+
+
+def test_reduce_only_reject_with_no_fills_propagates():
+    """지정가가 하나도 안 채워졌는데 -2022 면 호출부(close)가 판단하도록 올려보낸다."""
+    from engine.binance_broker import ReduceOnlyFlat
+    b = _PartialLimitBroker(limit_qty=0.0)
+    try:
+        b.limit_then_market("sell", 1.0, 0.01, reduce_only=True, max_attempts=1)
+        assert False, "ReduceOnlyFlat 가 올라와야 한다"
+    except ReduceOnlyFlat:
+        pass
