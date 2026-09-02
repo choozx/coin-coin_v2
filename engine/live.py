@@ -81,6 +81,8 @@ class LiveTrader:
         self.entry_log_path = os.environ.get("ENTRY_LOG_PATH", entry_log.DEFAULT_PATH)
         self._signal = None                  # 마지막 폴의 신호봉(로그가 봉 시각을 적을 때 참조)
         self._banned_until = 0               # 레이트리밋 밴 만료(ms) — 그때까진 폴을 쉰다
+        self._req_last = {}                  # 직전 폴의 API 요청 집계(메서드별)
+        self._req_peak = 0                   # 한 폴 최대 요청 수 — 밴 위험을 이걸로 본다
         self._last_entry_check = None        # 마지막 진입 판정 기록(대시보드·로그 요약)
         self._diagnosed_ot = None            # 이번 폴에서 '진짜 판정'을 기록한 신호봉(중복 방지)
         self._restore_from_ledger()          # 원장에서 잔고·이력 복원(재시작해도 안 사라짐)
@@ -359,6 +361,9 @@ class LiveTrader:
             "guardrail": self._guardrail_reason,         # 가드레일 발동 사유(대시보드 표시), 없으면 null
             "entryCheck": self._last_entry_check,        # 마지막 진입 판정(왜 안 샀나) — entry_log 와 같은 형식
             "bannedUntil": self._banned_until or None,   # 레이트리밋 밴 만료(ms). 이 동안은 폴을 쉰다
+            # API 요청 계측 — 밴은 '얼마나 보냈나'를 몰라서 당한다. 폴당 수치를 남긴다.
+            "apiReq": {"last": self._req_last, "lastTotal": sum(self._req_last.values()),
+                       "peak": self._req_peak},
             "mode": self.mode,                           # paper | testnet | live (원장 조회용 = 버킷)
             # 네트워크 스위치용. canMainnet=이 프로세스가 실돈 권한(--real-money)을 받았는가.
             "network": getattr(ex, "network", None) if self.is_live else None,
@@ -476,6 +481,18 @@ class LiveTrader:
                 notify(f"▶️ 매매 재개 — 새 진입 시작 ({self.preset.symbol} {self.preset.timeframe})", category="trade")
                 print("  [제어] 재개 → 새 진입 시작", flush=True)
         return paused
+
+    def _collect_req_counts(self) -> None:
+        """이번 폴에 나간 API 요청을 집계한다(브로커가 세고 여기서 수확·리셋).
+
+        평상시는 3회 남짓인데 청산 한 번이 수십 회다 — 그 편차가 밴을 만든다. 숫자를 남겨두면
+        '얼마나 보냈나'를 사후에 알 수 있고, 그게 없어서 이번 밴의 원인을 추정에 의존해야 했다.
+        """
+        b = getattr(self.ex, "_broker", None)
+        if b is None or not hasattr(b, "take_req_counts"):
+            return
+        self._req_last = b.take_req_counts()
+        self._req_peak = max(self._req_peak, sum(self._req_last.values()))
 
     def _entry_gate(self) -> bool:
         """새 진입 허용 여부. 멈춤·리스크 가드레일은 진입만 막고 기존 포지션 관리는 계속."""
@@ -782,11 +799,15 @@ class LiveTrader:
                                category="trade", buttons=["pause", "flatten"])
                     elif e["type"] == "close":
                         notify(f"🔴 청산 {e['reason']} @{e['price']:.2f} pnl {e['pnl']:+.2f} 잔고 {self.ex.equity():.0f}", category="trade")
+                self._collect_req_counts()
                 st = f"잔고 {self.ex.equity():.2f}"
                 pos = self.ex.position
                 st += f" | 포지션 {'롱' if pos.side>0 else '숏'} @{pos.entry_price:.2f}" if pos else " | 무포지션"
                 if self._last_entry_check:
                     st += f" | {entry_log.summary(self._last_entry_check)}"
+                n = sum(self._req_last.values())
+                if n:
+                    st += f" | API {n}회(최대 {self._req_peak})"
                 print(f"{time.strftime('%H:%M:%S')}  {st}", flush=True)
                 fails = 0
                 if self._banned_until:       # 정상 폴이 돌았다 = 밴 해제

@@ -93,3 +93,58 @@ def test_ban_clears_when_it_expires():
     b._banned_until = int(time.time() * 1000) - 1     # 이미 지난 밴
     b.raise_if_banned()                               # 예외 없이 통과
     assert b._banned_until == 0
+
+
+# ---- 요청 계측: 밴은 '얼마나 보냈나'를 몰라서 당한다 ----
+
+class _Counting:
+    def fetch_balance(self, *a, **k): return {"total": {}}
+    def fetch_positions(self, *a, **k): return []
+
+
+def test_requests_are_counted_per_method():
+    """폴당 요청 수를 알아야 밴 위험을 사후에라도 진단할 수 있다."""
+    from engine.binance_broker import _Guarded
+    b = BinanceBroker("k", "s", True, "BTCUSDT")
+    raw = _Counting()
+    b._ex, b._guard = raw, _Guarded(raw, b)
+    b.client().fetch_balance()
+    b.client().fetch_positions()
+    b.client().fetch_positions()
+    assert b.req_counts == {"fetch_balance": 1, "fetch_positions": 2}
+
+
+def test_take_req_counts_resets_so_each_poll_is_measured_separately():
+    """수확하면 리셋 — 안 그러면 누적값이라 '폴당 몇 회'를 못 읽는다."""
+    from engine.binance_broker import _Guarded
+    b = BinanceBroker("k", "s", True, "BTCUSDT")
+    raw = _Counting()
+    b._ex, b._guard = raw, _Guarded(raw, b)
+    b.client().fetch_balance()
+    assert b.take_req_counts() == {"fetch_balance": 1}
+    assert b.take_req_counts() == {}
+
+
+def test_blocked_requests_are_not_counted_as_sent():
+    """밴 중 차단된 호출은 '보낸 요청'이 아니다 — 계측이 부풀면 진단이 틀어진다."""
+    msg, _ = _future_ban_msg()
+    b, raw = _broker(msg)
+    try:
+        b.client().fetch_balance()
+    except RateLimited:
+        pass
+    sent = b.take_req_counts()
+    for _ in range(3):
+        try:
+            b.client().fetch_balance()
+        except RateLimited:
+            pass
+    assert b.take_req_counts() == {}, "차단된 호출이 계측에 잡히면 안 된다"
+    assert sent == {"fetch_balance": 1}
+
+
+def test_poll_interval_defaults_to_the_cheaper_value():
+    """체결 확인 간격이 요청 수를 지배한다 — 기본값이 0.4 면 회차당 7회다."""
+    b = BinanceBroker("k", "s", True, "BTCUSDT")
+    assert b.poll_interval == BinanceBroker.DEFAULT_POLL_SEC == 1.0
+    assert BinanceBroker("k", "s", True, "BTCUSDT", poll_interval=0.4).poll_interval == 0.4

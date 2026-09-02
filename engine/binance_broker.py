@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -63,6 +64,7 @@ class _Guarded:
 
         def call(*a, **k):
             self._b.raise_if_banned()          # 밴 중이면 네트워크를 아예 안 탄다
+            self._b.req_counts[name] = self._b.req_counts.get(name, 0) + 1
             try:
                 return attr(*a, **k)
             except Exception as e:
@@ -101,19 +103,27 @@ class Fill:
 class BinanceBroker:
     """ccxt binanceusdm 배선. 한 심볼 전용(트레이더가 심볼을 바꾸면 새로 만든다)."""
 
+    # 지정가 체결을 확인하는 간격. 짧을수록 체결을 빨리 알지만 **회차당 fetch_order 가 그만큼
+    # 늘어난다**(3초 대기면 0.4초 간격 = 7회, 1.0초 = 3회). 청산 한 번이 재호가 5회를 돌므로
+    # 이 값이 요청 수를 지배한다 — 실측 사고에서 밴을 만든 게 이 항목이다.
+    DEFAULT_POLL_SEC = 1.0
+
     def __init__(self, api_key: str, api_secret: str, testnet: bool, symbol: str,
-                 poll_interval: float = 0.4):
+                 poll_interval: float = None):
         self.api_key = api_key
         self.api_secret = api_secret
         self.testnet = testnet
         self.raw_symbol = symbol                 # 프리셋 표기(BTCUSDT)
-        self.poll_interval = poll_interval
+        self.poll_interval = float(os.environ.get("MAKER_POLL_SEC", self.DEFAULT_POLL_SEC)
+                                   if poll_interval is None else poll_interval)
         self._ex = None
         self._symbol = None                      # ccxt 통일 심볼(BTC/USDT:USDT)
         self._market = None
         self._leverage_set = None
         self._guard = None
         self._banned_until = 0                   # 이 시각(ms)까지는 요청 금지
+        # 요청 계측 — 밴은 '얼마나 보냈나'를 몰라서 당한다. 메서드별로 세어 상태에 싣는다.
+        self.req_counts: dict = {}
 
     # ---- 연결/메타 ----
     def client(self):
@@ -142,6 +152,11 @@ class BinanceBroker:
                 self._ex.set_sandbox_mode(True)
             self._guard = _Guarded(self._ex, self)
         return self._guard
+
+    def take_req_counts(self) -> dict:
+        """직전 구간의 요청 집계를 돌려주고 리셋(폴마다 호출 → 폴당 요청 수가 그대로 나온다)."""
+        counts, self.req_counts = self.req_counts, {}
+        return counts
 
     def raise_if_banned(self) -> None:
         """밴이 안 끝났으면 요청 없이 즉시 RateLimited. 끝났으면 상태를 지운다."""

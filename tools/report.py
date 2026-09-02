@@ -74,6 +74,30 @@ def ledger(path, mode):
     print(f"  레버리지 {sorted(set(x[10] for x in r))}")
 
 
+def state(path):
+    """봇 상태 — 밴 여부와 API 요청 계측. 밴은 '얼마나 보냈나'를 몰라서 당한다."""
+    print(f"\n=== 봇 상태 {path} ===")
+    if not os.path.exists(path):
+        print("  파일 없음"); return
+    try:
+        d = json.load(open(path, encoding="utf-8"))
+    except Exception as e:
+        print(f"  읽기 실패: {e}"); return
+    print(f"  {d.get('mode')} · {'⏸ 멈춤' if d.get('paused') else '▶️ 실행중'} · "
+          f"갱신 {_t(d.get('updatedAt', 0))} UTC")
+    if d.get("bannedUntil"):
+        left = (d["bannedUntil"] - datetime.now(timezone.utc).timestamp() * 1000) / 60000
+        print(f"  🚫 레이트리밋 밴 — 해제까지 {left:.1f}분 (그동안 포지션 관리 정지)")
+    api = d.get("apiReq") or {}
+    if api:
+        print(f"  API 요청: 직전 폴 {api.get('lastTotal', 0)}회 · 최대 {api.get('peak', 0)}회"
+              f"  {api.get('last') or ''}")
+        if (api.get("peak") or 0) > 100:
+            print("    ⚠ 한 폴에 100회를 넘겼다 — 밴 위험(청산 재시도 루프 의심)")
+    if d.get("guardrail"):
+        print(f"  🛡 가드레일: {d['guardrail']}")
+
+
 def entry(path, top=12):
     print(f"\n=== 진입 판정 {path} ===")
     rows = _rows(path)
@@ -150,6 +174,7 @@ def main():
     ap.add_argument("--data", default="data", help="데이터 디렉터리(기본 data)")
     ap.add_argument("--mode", default="testnet", help="원장 버킷: paper|testnet|live")
     a = ap.parse_args()
+    state(os.path.join(a.data, "state.json"))
     ledger(os.path.join(a.data, "trades.db"), a.mode)
     entry(os.path.join(a.data, "entry_log.jsonl"))
     fills(os.path.join(a.data, "fill_log.jsonl"))
