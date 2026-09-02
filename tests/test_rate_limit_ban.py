@@ -144,9 +144,13 @@ def test_blocked_requests_are_not_counted_as_sent():
 
 
 def test_poll_interval_defaults_to_the_cheaper_value():
-    """체결 확인 간격이 요청 수를 지배한다 — 기본값이 0.4 면 회차당 7회다."""
+    """체결 확인 간격이 요청 수를 지배한다 — 회차당 fetch_order = TIMEOUT / POLL_SEC.
+
+    0.4 초였을 때 청산 1회가 60~79 요청이 되어 밴을 맞았다. 이후 체결 대기를 크게 늘렸으므로
+    (진입 15초 → 60초) 간격도 같이 늘려야 요청 예산이 유지된다 — 둘은 같이 움직여야 한다.
+    """
     b = BinanceBroker("k", "s", True, "BTCUSDT")
-    assert b.poll_interval == BinanceBroker.DEFAULT_POLL_SEC == 1.0
+    assert b.poll_interval == BinanceBroker.DEFAULT_POLL_SEC == 3.0
     assert BinanceBroker("k", "s", True, "BTCUSDT", poll_interval=0.4).poll_interval == 0.4
 
 

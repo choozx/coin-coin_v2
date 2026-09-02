@@ -108,9 +108,14 @@ def entry(path, top=12):
     dec = sum(1 for r in rows if r.get("decided"))
     print(f"  {len(rows)}줄 · 판정 {dec} / 미리보기 {len(rows)-dec}"
           f" · {_t(rows[0]['at'])} ~ {_t(rows[-1]['at'])} UTC")
-    print("  ── 무엇이 막았나 ──")
-    for k, n in collections.Counter(r.get("block") or "진입!" for r in rows).most_common():
-        print(f"    {n:7d}  {k}")
+    # 판정과 미리보기를 **섞으면 안 된다.** 미리보기는 "지금 봉이 닫혔다면 어땠을까"라서
+    # 거기서 나온 '진입!'은 실제 주문이 아니다. 합쳐 세면 원장 건수와 안 맞아 헷갈린다
+    # (실측: 진입! 19건인데 원장은 5건이었다 — 대부분이 미리보기였다).
+    print("  ── 무엇이 막았나 (판정 / 미리보기) ──")
+    dec_c = collections.Counter(r.get("block") or "진입!" for r in rows if r.get("decided"))
+    pre_c = collections.Counter(r.get("block") or "진입!" for r in rows if not r.get("decided"))
+    for k, _ in (dec_c + pre_c).most_common():
+        print(f"    {dec_c[k]:7d} / {pre_c[k]:<7d}  {k}")
     c = collections.Counter()
     for r in rows:
         if r.get("block") != "진입 조건 미충족":
@@ -120,13 +125,24 @@ def entry(path, top=12):
                 # 값은 매 봉 달라지므로 지표 이름만 집계한다(무엇이 병목인가).
                 c[f"{rule['side']}: {cond.split('=')[0].split(' ')[0]}"] += 1
     if c:
-        print("  ── 어느 조건이 걸렸나(지표별) ──")
+        # 여기는 판정·미리보기를 합쳐 센다 — "무엇이 병목인가"는 표본이 많을수록 정확하고,
+        # 미리보기도 같은 지표를 같은 방식으로 평가하므로 섞어도 편향이 안 생긴다.
+        print("  ── 어느 조건이 걸렸나(지표별·판정+미리보기) ──")
         for k, n in c.most_common(top):
             print(f"    {n:7d}  {k}")
     print("  ── 최근 5줄 ──")
     for r in rows[-5:]:
-        kind = "판정" if r.get("decided") else "  · "
-        print(f"    {_t(r['at'])} [{kind}] {r.get('block') or '🟢 진입 ' + str(r.get('entered'))}")
+        decided = bool(r.get("decided"))
+        blk = r.get("block")
+        if blk:
+            msg = blk
+        elif decided:
+            msg = f"🟢 진입 {r.get('entered')}"
+        else:
+            # 미리보기는 봉이 아직 안 닫혔다 = 주문이 나가지 않았다. '🟢 진입 None' 으로 찍히면
+            # 진입한 줄로 오해한다.
+            msg = "진입 가능(주문 안 나감)"
+        print(f"    {_t(r['at'])} [{'판정' if decided else '  · '}] {msg}")
 
 
 def fills(path):

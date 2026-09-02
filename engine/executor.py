@@ -137,8 +137,22 @@ def _testnet_flag() -> bool:
         "(.env에 인라인 주석이 값에 붙지 않았는지 확인)")
 
 
-DEFAULT_FILL_TIMEOUT = 3.0       # post-only 지정가를 기다리는 초 — 넘으면 재호가/시장가 추격
-DEFAULT_MAKER_ATTEMPTS = 5       # BBO 재호가 추격 횟수 — 소진 후 남은 수량만 taker(1이면 구 동작)
+# 체결 추격 파라미터 — **진입과 청산은 인내심이 달라야 한다.**
+#
+# 실측(fill_log, 08-31~09-02): 3초×5회 = 15초만 버티다 시장가로 끝나서 maker 비율이 3.2% 였다.
+# BTCUSDC 는 maker 0bp / taker 5bp 인데 엔진은 maker 를 가정하고 손익을 계산한다 → 왕복 ~9bp 를
+# 백테스트가 못 보고 있었다(원장 실수수료 4.35bp 가 taker 5bp 에 붙어 있는 게 교차검증).
+#
+# 진입은 기다려도 손해가 없다(늦게 들어가거나 안 들어갈 뿐). 1시간봉 신호에 15초는 터무니없이
+# 짧다 → 60초까지 늘린다. 청산은 반대다 — 기다리는 동안 가격이 반대로 가면 그게 곧 손실이고,
+# 레버리지가 붙어 있다. 그래서 청산은 오히려 **더 짧게** 잡고 빨리 빠져나온다.
+#
+# 요청 수 = ATTEMPTS × (4 + TIMEOUT/POLL_SEC) + 2. 폴 간격을 1.0→3.0 초로 함께 늘렸으므로
+# 진입 34회(기존 37회) · 청산 13회(기존 37회) — **밴을 만든 청산 쪽이 1/3 로 줄었다.**
+DEFAULT_FILL_TIMEOUT = 20.0      # 진입: post-only 지정가 회차당 대기 초
+DEFAULT_MAKER_ATTEMPTS = 3       # 진입: BBO 재호가 추격 횟수(소진 후 남은 수량만 taker)
+DEFAULT_EXIT_FILL_TIMEOUT = 5.0  # 청산: 회차당 대기 초 — 짧게. 못 받으면 바로 시장가
+DEFAULT_EXIT_MAKER_ATTEMPTS = 2  # 청산: 재호가 추격 횟수
 LIVE_POSITION_PATH = os.environ.get("LIVE_POSITION_PATH", "data/live_position.json")
 
 
@@ -163,8 +177,10 @@ class LiveExecutor(Executor):
     수수료로 그 _Position 을 덮어써서, 이후 엔진의 손절/청산 판정이 허구가 아닌 실제 포지션을
     기준으로 돌게 만드는 것이다. 청산가도 우리 근사식 대신 **거래소가 계산한 값**으로 바꾼다.
 
-    체결 정책(진입·maker 청산 공통): post-only 지정가(BBO) → `fill_timeout_s` 초 미체결 시
-    취소 → 시장가 추격. 손절·강제청산은 언제나 시장가(확실히 빠져나가는 게 우선).
+    체결 정책: post-only 지정가(BBO) → 회차당 대기 초 미체결 시 취소 → 재호가 → 소진하면 시장가.
+    진입은 `fill_timeout_s`/`maker_max_attempts`(길게 — 기다려도 손해가 없다), 청산은
+    `exit_fill_timeout_s`/`exit_maker_attempts`(짧게 — 기다리는 동안의 가격 이동이 곧 손실).
+    손절·강제청산은 언제나 시장가(확실히 빠져나가는 게 우선).
 
     보안: 키는 .env(gitignore)/시크릿에만. 출금권한 OFF·IP 화이트리스트 필수.
     BINANCE_TESTNET=1(기본)이면 테스트넷(가짜돈), 0이면 메인넷.
@@ -173,7 +189,8 @@ class LiveExecutor(Executor):
     def __init__(self, testnet: bool = None, symbol: str = None,
                  taker_fee: float = None, maker_fee: float = None,
                  fill_timeout_s: float = None, maker_max_attempts: int = None, broker=None,
-                 position_path: str = LIVE_POSITION_PATH, allow_mainnet: bool = False):
+                 position_path: str = LIVE_POSITION_PATH, allow_mainnet: bool = False,
+                 exit_fill_timeout_s: float = None, exit_maker_attempts: int = None):
         self.testnet = _testnet_flag() if testnet is None else testnet
         # 실돈 권한은 기동 때 한 번 준다(--real-money). 대시보드 스위치는 '이미 준 권한 안에서'만
         # 움직인다 — 버튼 하나로 가짜돈 봇이 실돈 봇이 되면 안 된다.
@@ -190,6 +207,13 @@ class LiveExecutor(Executor):
                                if fill_timeout_s is None else fill_timeout_s)
         self.maker_max_attempts = (int(os.environ.get("MAKER_MAX_ATTEMPTS", DEFAULT_MAKER_ATTEMPTS))
                                    if maker_max_attempts is None else int(maker_max_attempts))
+        # 청산은 별도 값. 명시 인자로 진입 값을 주면 청산도 그 값을 따른다(테스트에서 한 번에 지정).
+        self.exit_fill_timeout_s = (
+            float(os.environ.get("MAKER_EXIT_FILL_TIMEOUT_SEC", DEFAULT_EXIT_FILL_TIMEOUT))
+            if exit_fill_timeout_s is None else exit_fill_timeout_s)
+        self.exit_maker_attempts = (
+            int(os.environ.get("MAKER_EXIT_ATTEMPTS", DEFAULT_EXIT_MAKER_ATTEMPTS))
+            if exit_maker_attempts is None else int(exit_maker_attempts))
         self.position_path = position_path
         self.position = None
         self.trades: list[ClosedTrade] = []      # 원장에서 복원됨(가드레일의 연속손실 계산용)
@@ -394,8 +418,9 @@ class LiveExecutor(Executor):
             # 주문을 낼 수 없으니 flat 으로 보고 기록한다 — 안 그러면 매 폴 재시도로 갇힌다.
             return self._record(pos, exit_price, 0.0, reason, exit_time)
         try:
-            fill = (self._broker.limit_then_market(side, qty, self.fill_timeout_s, reduce_only=True,
-                                                   max_attempts=self.maker_max_attempts)
+            fill = (self._broker.limit_then_market(side, qty, self.exit_fill_timeout_s,
+                                                   reduce_only=True,
+                                                   max_attempts=self.exit_maker_attempts)
                     if is_maker else self._broker.market_order(side, qty, reduce_only=True))
         except ReduceOnlyFlat as e:
             # -2022: 줄일 포지션이 없다. **거래소가 정말 무포지션인지 확인하고** 닫힌 것으로 기록한다.

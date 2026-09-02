@@ -49,12 +49,16 @@ services:
       BINANCE_MAINNET_API_KEY: ${BINANCE_MAINNET_API_KEY:-}
       BINANCE_MAINNET_API_SECRET: ${BINANCE_MAINNET_API_SECRET:-}
       BINANCE_TESTNET: ${BINANCE_TESTNET:-1}   # 시작 네트워크(이후엔 대시보드 스위치가 이긴다)
-      MAKER_FILL_TIMEOUT_SEC: ${MAKER_FILL_TIMEOUT_SEC:-3}   # post-only 지정가 대기 초 → 넘으면 시장가
-      # ★ 아래 둘이 청산 1회의 API 요청 수를 지배한다(실측: 밴을 만든 항목).
-      #   회차당 fetch_order = TIMEOUT / POLL_SEC. 3초/1.0초면 3회, 0.4초면 7회.
-      #   ATTEMPTS 를 줄이면 요청은 줄지만 maker 체결률이 떨어져 수수료가 오른다(트레이드오프).
-      MAKER_MAX_ATTEMPTS: ${MAKER_MAX_ATTEMPTS:-5}           # BBO 재호가 추격 횟수
-      MAKER_POLL_SEC: ${MAKER_POLL_SEC:-1.0}                 # 체결 확인 간격(초)
+      # ── 체결 추격(maker 비율 ↔ API 요청 수 ↔ 청산 지연의 3자 트레이드오프) ──
+      # 요청 수 = ATTEMPTS × (4 + TIMEOUT/POLL_SEC) + 2.  회차당 fetch_order = TIMEOUT/POLL_SEC.
+      # 실측(fill_log 08-31~09-02): 진입 3초×5회로는 maker 3.2% — 사실상 전량 taker 였다.
+      # BTCUSDC maker 0bp / taker 5bp 이므로 엔진의 maker 가정 대비 왕복 ~9bp 가 새고 있었다.
+      # 진입은 기다려도 손해가 없어 길게(60초), 청산은 기다림이 곧 손실이라 짧게(10초) 잡는다.
+      MAKER_FILL_TIMEOUT_SEC: ${MAKER_FILL_TIMEOUT_SEC:-20}       # 진입 회차당 대기 초
+      MAKER_MAX_ATTEMPTS: ${MAKER_MAX_ATTEMPTS:-3}                # 진입 BBO 재호가 추격 횟수
+      MAKER_EXIT_FILL_TIMEOUT_SEC: ${MAKER_EXIT_FILL_TIMEOUT_SEC:-5}  # 청산 회차당 대기 초
+      MAKER_EXIT_ATTEMPTS: ${MAKER_EXIT_ATTEMPTS:-2}              # 청산 재호가 추격 횟수
+      MAKER_POLL_SEC: ${MAKER_POLL_SEC:-3.0}                      # 체결 확인 간격(초)
       LIVE_POSITION_PATH: /app/data/live_position.json       # 재시작 때 손절/익절가 복원용 사이드카
       PYTHONUNBUFFERED: 1                   # 도커 stdout은 파이프 → 블록버퍼링. 없으면 로그가 안 보임
       TZ: UTC

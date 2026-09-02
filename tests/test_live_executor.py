@@ -50,6 +50,7 @@ class FakeBroker:
         self.leverage = None
         self.hedge = False
         self.maker_attempts = None           # 마지막 limit 주문에 넘어온 재호가 횟수
+        self.maker_timeout = None            # 마지막 limit 주문에 넘어온 회차당 대기 초
 
     # -- 메타/조회 --
     def market(self):
@@ -100,6 +101,7 @@ class FakeBroker:
 
     def limit_then_market(self, side, qty, timeout_s, reduce_only=False, max_attempts=1):
         self.maker_attempts = max_attempts
+        self.maker_timeout = timeout_s
         return self._next("limit", side, qty, reduce_only)
 
 
@@ -143,7 +145,7 @@ def test_open_adopts_real_fill_not_engine_assumption():
 
 
 def test_open_uses_post_only_path_when_maker():
-    """maker 진입 프리셋이면 post-only 지정가(→3초 후 시장가) 경로를 타야 한다."""
+    """maker 진입 프리셋이면 post-only 지정가(→대기 후 시장가) 경로를 타야 한다."""
     broker = FakeBroker()
     ex = _ex(broker)
     ex.open(_pos(), is_maker=True)
@@ -152,22 +154,73 @@ def test_open_uses_post_only_path_when_maker():
 
 
 def test_maker_open_threads_reprice_attempts_to_broker():
-    """maker 진입이면 재호가 횟수(기본 5)가 브로커까지 전달돼야 한다."""
+    """maker 진입이면 재호가 횟수·대기 초가 브로커까지 전달돼야 한다."""
     broker = FakeBroker()
     ex = _ex(broker)
-    assert ex.maker_max_attempts == 5              # env 없으면 기본 5
+    assert (ex.maker_max_attempts, ex.fill_timeout_s) == (3, 20.0)   # env 없으면 기본값
     ex.open(_pos(), is_maker=True)
-    assert broker.maker_attempts == 5
+    assert (broker.maker_attempts, broker.maker_timeout) == (3, 20.0)
+
+
+def test_exit_chases_shorter_than_entry():
+    """청산은 진입보다 **짧게** 기다려야 한다.
+
+    진입은 기다려도 손해가 없다(늦게 들어가거나 안 들어갈 뿐). 청산은 기다리는 동안 가격이
+    반대로 가면 그게 곧 손실이고 레버리지가 붙어 있다 — 그래서 두 값을 분리했다.
+    분리 전에는 청산이 진입과 같은 인내심을 갖게 돼, 대기를 늘리는 순간 청산 지연도 같이 늘었다.
+    """
+    broker = FakeBroker()
+    ex = _ex(broker)
+    ex.open(_pos(), is_maker=True)
+    entry_wait = broker.maker_attempts * broker.maker_timeout
+    ex.close(110.0, "supertrend", 2_000, is_maker=True)
+    exit_wait = broker.maker_attempts * broker.maker_timeout
+    assert (broker.maker_attempts, broker.maker_timeout) == (2, 5.0)
+    assert exit_wait < entry_wait                  # 60초 vs 10초
+
+
+def test_exit_chase_env_override():
+    """청산 추격도 env 로 조절 가능해야 한다 — 재배포 없이 실측 보고 튜닝하려면 필요하다."""
+    with _with_env(MAKER_EXIT_FILL_TIMEOUT_SEC="7", MAKER_EXIT_ATTEMPTS="4"):
+        broker = FakeBroker()
+        ex = _ex(broker)
+        assert (ex.exit_maker_attempts, ex.exit_fill_timeout_s) == (4, 7.0)
+        ex.open(_pos(), is_maker=True)
+        ex.close(110.0, "supertrend", 2_000, is_maker=True)
+        assert (broker.maker_attempts, broker.maker_timeout) == (4, 7.0)
+
+
+def test_maker_chase_request_budget_stays_under_ban_threshold():
+    """추격 설정이 만드는 **요청 수**가 예산 안에 있어야 한다.
+
+    이 프로젝트에서 실제로 봇을 멈춘 것은 체결 실패가 아니라 밴(-1003)이었다. 대기 시간을
+    늘릴 때마다 요청이 같이 늘어나므로, 기본값을 만질 때 이 산식이 깨지는지 여기서 잡는다.
+    회차당 = BBO 1 + 주문 1 + 취소 1 + 재확인 1 + fetch_order(TIMEOUT/POLL) , 끝에 시장가 2.
+    """
+    from engine.binance_broker import BinanceBroker
+    from engine import executor as ex_mod
+
+    poll = BinanceBroker.DEFAULT_POLL_SEC
+
+    def budget(timeout_s, attempts):
+        return attempts * (4 + timeout_s / poll) + 2
+
+    entry = budget(ex_mod.DEFAULT_FILL_TIMEOUT, ex_mod.DEFAULT_MAKER_ATTEMPTS)
+    exit_ = budget(ex_mod.DEFAULT_EXIT_FILL_TIMEOUT, ex_mod.DEFAULT_EXIT_MAKER_ATTEMPTS)
+    # 사고 당시 실측이 청산 1회에 60~79회였다. 그 아래로 확실히 내려와 있어야 한다.
+    assert exit_ <= 20, f"청산 요청 예산 초과: {exit_}"
+    assert entry <= 40, f"진입 요청 예산 초과: {entry}"
+    assert exit_ < entry                            # 밴을 만든 쪽이 더 싸야 한다
 
 
 def test_maker_max_attempts_env_override():
-    """MAKER_MAX_ATTEMPTS 로 재호가 횟수를 바꿀 수 있다(1=구 동작)."""
-    with _with_env(MAKER_MAX_ATTEMPTS="1"):
+    """MAKER_MAX_ATTEMPTS/MAKER_FILL_TIMEOUT_SEC 로 진입 추격을 바꿀 수 있다(1=구 동작)."""
+    with _with_env(MAKER_MAX_ATTEMPTS="1", MAKER_FILL_TIMEOUT_SEC="3"):
         broker = FakeBroker()
         ex = _ex(broker)
-        assert ex.maker_max_attempts == 1
+        assert (ex.maker_max_attempts, ex.fill_timeout_s) == (1, 3.0)
         ex.open(_pos(), is_maker=True)
-        assert broker.maker_attempts == 1
+        assert (broker.maker_attempts, broker.maker_timeout) == (1, 3.0)
 
 
 def test_open_saves_sidecar_before_liq_fetch():

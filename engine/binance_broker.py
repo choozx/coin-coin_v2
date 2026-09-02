@@ -104,9 +104,13 @@ class BinanceBroker:
     """ccxt binanceusdm 배선. 한 심볼 전용(트레이더가 심볼을 바꾸면 새로 만든다)."""
 
     # 지정가 체결을 확인하는 간격. 짧을수록 체결을 빨리 알지만 **회차당 fetch_order 가 그만큼
-    # 늘어난다**(3초 대기면 0.4초 간격 = 7회, 1.0초 = 3회). 청산 한 번이 재호가 5회를 돌므로
-    # 이 값이 요청 수를 지배한다 — 실측 사고에서 밴을 만든 게 이 항목이다.
-    DEFAULT_POLL_SEC = 1.0
+    # 늘어난다**(회차당 = TIMEOUT / POLL_SEC). 이 값이 요청 수를 지배한다 — 실측 사고에서
+    # 밴(-1003)을 만든 게 이 항목이다.
+    #
+    # 3.0 초인 이유: 체결 대기를 진입 15초 → 60초로 늘리면서(executor.DEFAULT_FILL_TIMEOUT 주석
+    # 참조) 요청 수를 그대로 두려면 간격도 같이 늘려야 한다. 체결 인지가 최대 3초 늦지만
+    # 1시간봉 전략에서 3초는 무의미하고, 밴은 봇을 통째로 멈춘다 — 교환비가 명백하다.
+    DEFAULT_POLL_SEC = 3.0
 
     def __init__(self, api_key: str, api_secret: str, testnet: bool, symbol: str,
                  poll_interval: float = None):
