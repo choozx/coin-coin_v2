@@ -235,15 +235,37 @@ def test_liquidation_still_open_falls_back_to_market_close():
 
 
 def test_partial_close_keeps_remainder_and_raises():
-    """부분청산이면 잔량을 계속 들고 있어야 한다 — '다 닫았다'고 기록하면 유령 포지션이 남는다."""
+    """부분청산이면 잔량을 계속 들고 있어야 한다 — '다 닫았다'고 기록하면 유령 포지션이 남는다.
+
+    ★ 거래소에 잔량이 **실제로 남아 있어야** 부분청산이다. 무포지션이면 우리 회계가 과소집계된
+    것이므로 완전 청산으로 확정한다(아래 테스트) — 그 구별을 위해 여기선 잔량을 심어둔다.
+    """
     broker = FakeBroker()
     ex = _ex(broker)
     ex.open(_pos(qty=1.0))
     broker.fills.append(Fill(price=99.0, qty=0.4, taker_qty=0.4, fee=0.2))
+    broker.position_data = {"side": 1, "qty": 0.6, "entry_price": 100.0, "leverage": 5,
+                            "liq_price": 80.0, "margin": 12.0}      # 거래소엔 0.6 이 남아 있다
     _raises(OrderError, lambda: ex.close(99.0, "signal", 2_000))
     assert ex.position is not None
     assert _near(ex.position.qty, 0.6)
     assert ex.trades == []
+
+
+def test_partial_looking_fill_is_confirmed_complete_when_exchange_is_flat():
+    """★ 부분체결로 **보이지만** 거래소가 무포지션이면 완전 청산으로 확정한다.
+
+    -2022 의 가장 흔한 원인이 '지정가가 다 채웠는데 체결 조회가 못 따라온 것'이다. 그때 우리
+    회계는 과소집계 상태다 — 그대로 부분청산 처리하면 유령 잔량을 들고 매 폴 재시도하는 루프가 된다.
+    """
+    broker = FakeBroker()
+    ex = _ex(broker)
+    ex.open(_pos(qty=1.0))
+    broker.fills.append(Fill(price=99.0, qty=0.4, taker_qty=0.4, fee=0.2))
+    broker.position_data = None                                     # 거래소는 이미 flat
+    trade = ex.close(99.0, "signal", 2_000)
+    assert trade.exit_reason == "signal" and ex.position is None
+    assert _near(trade.exit_price, 99.0)
 
 
 def test_close_dust_below_step_records_flat():

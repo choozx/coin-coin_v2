@@ -258,6 +258,10 @@ class BinanceBroker:
             try:
                 o = self.client().create_order(self.symbol, "limit", side, remaining, limit, params)
             except Exception as e:
+                # 구멍 ①: **지정가** 쪽 -2022 도 잡아야 한다. 잔량 시장가만 막아두면, 다음 폴에
+                # 남은 dust 를 지정가로 다시 걸 때 여기서 OrderError 로 터져 같은 루프가 반복된다.
+                if reduce_only and _is_reduce_only_reject(e):
+                    raise ReduceOnlyFlat(str(e))
                 if not _is_post_only_reject(e):
                     raise OrderError(f"지정가 주문 거부: {e}")
                 break                                             # 이미 교차 → 남은 수량 taker 로 마무리

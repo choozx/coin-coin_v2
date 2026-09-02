@@ -399,11 +399,19 @@ class LiveExecutor(Executor):
             return self._record(pos, exit_price, 0.0, reason, exit_time)
         if fill.qty <= 0:
             raise OrderError(f"청산 주문 미체결({reason}) — 포지션 유지, 다음 봉에 재시도")
-        if fill.qty < qty * 0.999:                 # 부분청산: 남은 수량은 계속 엔진이 관리
-            pos.qty = max(0.0, pos.qty - fill.qty)
-            self._save_position()
-            raise OrderError(
-                f"부분청산({reason}): {fill.qty}/{qty} 체결, 잔량 {pos.qty} 유지 — 다음 봉에 재시도")
+        if fill.qty < qty * 0.999:                 # 부분청산으로 **보이는** 경우
+            # 구멍 ②: 잔량이 -2022 로 거부돼 여기 왔다면 거래소는 이미 무포지션일 수 있다.
+            # 그대로 '부분청산' 처리하면 유령 잔량을 들고 매 폴 재시도하는 루프가 된다.
+            # 실제로 -2022 의 가장 흔한 원인이 '지정가가 다 채웠는데 체결 조회가 못 따라온 것'이라
+            # 우리 회계가 과소집계된 상태다 → 거래소를 확인해 flat 이면 **완전 청산으로 확정**한다.
+            if self._exchange_flat():
+                print(f"  [청산] 부분체결로 보였으나 거래소 무포지션 → 완전 청산으로 확정 "
+                      f"({fill.qty}/{qty})", flush=True)
+            else:
+                pos.qty = max(0.0, pos.qty - fill.qty)
+                self._save_position()
+                raise OrderError(
+                    f"부분청산({reason}): {fill.qty}/{qty} 체결, 잔량 {pos.qty} 유지 — 다음 봉에 재시도")
         self._log_fill("exit", pos, exit_price, qty, fill, is_maker=is_maker, reason=reason)
         return self._record(pos, fill.price, self._fee_of(fill), reason, exit_time)
 
