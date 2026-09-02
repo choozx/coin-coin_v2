@@ -97,8 +97,18 @@ def collect(symbol: str, start_ms: int, end_ms: int) -> int:
     return total
 
 
+def collect_funding(symbol: str, start_ms: int, end_ms: int) -> int:
+    """펀딩 히스토리 수집 — 엔진의 backfill_funding 그대로(같은 `funding` 테이블).
+
+    캔들과 달리 심볼 이름을 그대로 쓴다. 펀딩은 해상도 개념이 없어(8h 고정) 1분봉 캐시와
+    섞일 일이 없고, 엔진이 실거래에서 읽는 것과 같은 데이터라 따로 둘 이유가 없다.
+    """
+    return cs.backfill_funding(symbol, start_ms, end_ms)
+
+
 def main():
     ap = argparse.ArgumentParser(description="횡단면 연구용 다심볼 1h 수집")
+    ap.add_argument("--funding", action="store_true", help="캔들 대신 펀딩 히스토리를 수집")
     ap.add_argument("--before", default="2021-01-01", help="이 날짜 이전 상장분만 (유니버스 고정)")
     ap.add_argument("--since", default=None, help="수집 시작일 (기본: --before 와 같음)")
     ap.add_argument("--list", action="store_true", help="유니버스만 출력하고 끝")
@@ -115,9 +125,10 @@ def main():
 
     start_ms, end_ms = int(since.timestamp() * 1000), int(time.time() * 1000)
     t0, grand = time.time(), 0
+    what = collect_funding if a.funding else collect
     for i, (s, on) in enumerate(uni, 1):
         try:
-            n = collect(s, start_ms, end_ms)
+            n = what(s, start_ms, end_ms)
         except Exception as e:
             print(f"  [{i}/{len(uni)}] {s:<14} 실패: {e}", flush=True)
             continue
@@ -126,7 +137,8 @@ def main():
         eta = el / i * (len(uni) - i)
         print(f"  [{i}/{len(uni)}] {s:<14} {n:6,}봉  누적 {grand:,}  "
               f"경과 {el/60:.1f}분  남은예상 {eta/60:.1f}분", flush=True)
-    print(f"\n완료 — {len(uni)}심볼 {grand:,}봉, {(time.time()-t0)/60:.1f}분", flush=True)
+    unit = "건(펀딩)" if a.funding else "봉"
+    print(f"\n완료 — {len(uni)}심볼 {grand:,}{unit}, {(time.time()-t0)/60:.1f}분", flush=True)
 
 
 if __name__ == "__main__":
