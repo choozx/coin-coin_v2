@@ -112,14 +112,20 @@ class BinanceBroker:
     # 1시간봉 전략에서 3초는 무의미하고, 밴은 봇을 통째로 멈춘다 — 교환비가 명백하다.
     DEFAULT_POLL_SEC = 3.0
 
+    DEFAULT_PASSIVE_TICKS = 1        # BBO 에서 물러나는 틱 수 — 0 이면 교차 거부(-5022)를 맞는다
+
     def __init__(self, api_key: str, api_secret: str, testnet: bool, symbol: str,
-                 poll_interval: float = None):
+                 poll_interval: float = None, passive_ticks: int = None):
         self.api_key = api_key
         self.api_secret = api_secret
         self.testnet = testnet
         self.raw_symbol = symbol                 # 프리셋 표기(BTCUSDT)
         self.poll_interval = float(os.environ.get("MAKER_POLL_SEC", self.DEFAULT_POLL_SEC)
                                    if poll_interval is None else poll_interval)
+        # BBO 에서 몇 틱 물러나 지정가를 걸 것인가(0=BBO 에 딱 붙임=구 동작).
+        # 1 틱이면 교차가 불가능해 -5022 가 사라진다 — limit_then_market 주석 참조.
+        self.passive_ticks = int(os.environ.get("MAKER_PASSIVE_TICKS", self.DEFAULT_PASSIVE_TICKS)
+                                 if passive_ticks is None else passive_ticks)
         self._ex = None
         self._symbol = None                      # ccxt 통일 심볼(BTC/USDT:USDT)
         self._market = None
@@ -219,6 +225,27 @@ class BinanceBroker:
             return float(ex.price_to_precision(m["symbol"], price))
         except Exception as e:
             raise OrderError(f"가격 정밀도 변환 실패: {price} ({e})")
+
+    def price_tick(self) -> float:
+        """가격 최소 단위(틱). post-only 를 확실히 하려면 BBO 에서 이만큼 물러나야 한다.
+
+        PRICE_FILTER.tickSize 가 거래소 정본이다. ccxt 의 precision 은 버전에 따라 '소수 자릿수'
+        이거나 '틱 값'이라 그것만 믿으면 심볼에 따라 틀린다 — 정본을 먼저 보고 그 다음 유도한다.
+        """
+        m = self.market()
+        for f in ((m.get("info") or {}).get("filters") or []):
+            if f.get("filterType") == "PRICE_FILTER":
+                try:
+                    t = float(f.get("tickSize") or 0)
+                except (TypeError, ValueError):
+                    t = 0.0
+                if t > 0:
+                    return t
+        p = (m.get("precision") or {}).get("price")
+        if p is None:
+            return 0.0
+        p = float(p)
+        return p if 0 < p < 1 else 10.0 ** -int(p)     # <1 이면 이미 틱, 아니면 자릿수
 
     def check_order_size(self, qty: float, price: float) -> None:
         """최소 수량/최소 명목가 검사. 미달이면 OrderError(진입 스킵)."""
@@ -320,29 +347,45 @@ class BinanceBroker:
         return self._fill_of(self._settled(o), fallback_maker=False)
 
     def limit_then_market(self, side: str, qty: float, timeout_s: float,
-                          reduce_only: bool = False, max_attempts: int = 1) -> Fill:
-        """post-only 지정가(BBO)를 매 회차 재호가하며 최대 max_attempts 회 추격 →
+                          reduce_only: bool = False, max_attempts: int = 1,
+                          passive_ticks: int = None) -> Fill:
+        """post-only 지정가를 매 회차 재호가하며 최대 max_attempts 회 추격 →
         소진 후 남은 수량만 시장가(taker). 반환: 회차별 체결을 합산한 Fill.
 
         max_attempts=1 이면 '한 번 걸고 안 되면 taker'(구 동작). >1 이면 미체결 시 취소하고
         새 BBO 로 다시 걸기를 반복 — 호가가 도망가도 붙는 쪽을 따라가 maker 비율을 높인다.
         회차당 대기는 timeout_s(최악 max_attempts×timeout_s 초 블록). 이미 채워진 maker 분은
         시장가 마무리에도 그대로 유지된다.
+
+        passive_ticks: BBO 에서 **몇 틱 물러나** 걸 것인가(매수 bid-n틱 / 매도 ask+n틱).
+        0 이면 BBO 에 딱 붙인다(구 동작).
+
+        ★ 왜 물러나는가 (실측 2026-09-02): BBO 에 딱 붙이면 주문이 도달하는 사이 반대쪽 호가가
+        그 가격까지 오는 순간 교차로 판정돼 -5022(post-only 거부)가 난다. BTCUSDC 는 스프레드가
+        1틱일 때가 많아 왕복 지연 동안 흔하다. fill_log 역산 결과 5회 설정에서 지정가가 평균
+        1.2회만 걸리고 끝났다 = 거의 매번 첫 회차에 거부당해 시장가로 밀렸다(maker 2.5%).
+        한 틱 물러나면 교차가 구조적으로 불가능하다. 체결 확률은 떨어지지만 안 되면 어차피
+        시장가라 하한은 같고, 진입은 60초를 기다릴 수 있으므로 교환비가 맞는다.
         """
         if timeout_s <= 0:
             return self.market_order(side, qty, reduce_only)
         attempts = max(1, int(max_attempts))
+        if passive_ticks is None:
+            passive_ticks = self.passive_ticks
+        back = self.price_tick() * max(0, int(passive_ticks))
         params = {"timeInForce": "GTX"}                           # GTX = post-only(테이커면 거부)
         if reduce_only:
             params["reduceOnly"] = True
         filled = None                                             # 누적 maker 체결(합산 Fill)
+        rejects = 0                                               # post-only 거부 횟수(관찰용)
         remaining = self.round_qty(qty)
         limit = None
         for _ in range(attempts):
             if remaining <= 0:
                 break
             bid, ask = self.bbo()                                 # 매 회차 재호가(reprice)
-            limit = self.round_price(bid if side == "buy" else ask)   # 붙는 쪽에 걸어야 maker
+            # 붙는 쪽에 걸어야 maker. 거기서 back 만큼 물러나 교차(-5022)를 원천 차단한다.
+            limit = self.round_price(bid - back if side == "buy" else ask + back)
             try:
                 o = self.client().create_order(self.symbol, "limit", side, remaining, limit, params)
             except Exception as e:
@@ -352,7 +395,13 @@ class BinanceBroker:
                     raise ReduceOnlyFlat(str(e))
                 if not _is_post_only_reject(e):
                     raise OrderError(f"지정가 주문 거부: {e}")
-                break                                             # 이미 교차 → 남은 수량 taker 로 마무리
+                # 교차로 거부됐다. 이건 **일시적인 레이스**다 — 호가는 다음 순간 또 바뀐다.
+                # 예전엔 여기서 break 해 추격 전체를 포기하고 시장가로 밀었고, 그게 maker 비율을
+                # 2.5% 로 만든 진짜 원인이었다(대기 시간을 늘려도 거부는 대기 전에 난다).
+                # 회차는 소비하되 다음 회차에서 새 호가로 다시 건다.
+                rejects += 1
+                print(f"  [지정가] post-only 거부(-5022) — 호가 교차. 재호가 {rejects}회", flush=True)
+                continue
             o = self._wait_fill(o, timeout_s)
             got = self._fill_of(o, fallback_maker=True)
             if self.round_qty(max(0.0, remaining - got.qty)) > 0:

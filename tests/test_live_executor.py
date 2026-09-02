@@ -1107,6 +1107,10 @@ class _PartialLimitBroker(BinanceBroker):
 
     @property
     def symbol(self): return "BTC/USDT:USDT"      # 실물은 market() 로 해석 → 네트워크를 탄다
+    def market(self):                             # price_tick 이 여기서 틱을 읽는다
+        return {"symbol": "BTC/USDT:USDT", "quote": "USDT",
+                "limits": {"amount": {"min": 0.001}, "cost": {"min": 5.0}},
+                "info": {"filters": [{"filterType": "PRICE_FILTER", "tickSize": "0.10"}]}}
     def round_qty(self, q): return round(float(q), 8)
     def round_price(self, p): return float(p)
     def bbo(self): return 95.0, 95.1

@@ -59,6 +59,10 @@ services:
       MAKER_EXIT_FILL_TIMEOUT_SEC: ${MAKER_EXIT_FILL_TIMEOUT_SEC:-5}  # 청산 회차당 대기 초
       MAKER_EXIT_ATTEMPTS: ${MAKER_EXIT_ATTEMPTS:-2}              # 청산 재호가 추격 횟수
       MAKER_POLL_SEC: ${MAKER_POLL_SEC:-3.0}                      # 체결 확인 간격(초)
+      # ★ maker 비율을 실제로 지배하는 값. BBO 에 딱 붙이면(0) 주문 도달 직전에 반대 호가가
+      #   오는 순간 교차로 -5022 거부가 나고, 그러면 시장가로 밀린다. 실측에서 지정가가 5회 설정
+      #   인데 평균 1.2회만 걸린 이유가 이것이다. 1틱 물러나면 교차가 구조적으로 불가능하다.
+      MAKER_PASSIVE_TICKS: ${MAKER_PASSIVE_TICKS:-1}              # BBO 에서 물러나는 틱 수(0=구 동작)
       LIVE_POSITION_PATH: /app/data/live_position.json       # 재시작 때 손절/익절가 복원용 사이드카
       PYTHONUNBUFFERED: 1                   # 도커 stdout은 파이프 → 블록버퍼링. 없으면 로그가 안 보임
       TZ: UTC

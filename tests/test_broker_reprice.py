@@ -140,12 +140,65 @@ def test_partial_maker_then_taker_remainder():
     assert [c[0] for c in fake.created] == ["limit", "limit", "market"]
 
 
-def test_gtx_reject_falls_straight_to_taker():
-    """걸자마자 교차(GTX 거부)면 그 회차를 소진으로 보고 남은 수량을 taker 로."""
-    fake = FakeCCXT(books=(100.0, 101.0), limit_fills=[], market_px=101.0, reject_at={0})
-    fill = _Broker(fake).limit_then_market("buy", 1.0, TIMEOUT, max_attempts=5)
-    assert _near(fill.qty, 1.0) and _near(fill.taker_qty, 1.0) and _near(fill.maker_qty, 0.0)
-    assert [c[0] for c in fake.created] == ["market"]     # limit 은 거부돼 기록 안 됨
+def test_gtx_reject_retries_instead_of_giving_up():
+    """★ 교차 거부(-5022)는 **일시적 레이스**다 — 여기서 추격을 포기하면 안 된다.
+
+    예전엔 break 로 남은 전량을 시장가에 밀었다. 실측(2026-09-02)이 이게 maker 비율을 2.5% 로
+    만든 진짜 원인임을 보여줬다: 5회 설정인데 지정가가 평균 1.2회만 걸리고 끝났다(fill_log 의
+    orders 역산). **대기 시간을 늘려도 소용없다 — 거부는 대기 '전'에 나기 때문이다.**
+    """
+    fake = FakeCCXT(books=(100.0, 101.0), limit_fills=[0.0, 1.0], market_px=101.0, reject_at={0})
+    fill = _Broker(fake).limit_then_market("buy", 1.0, TIMEOUT, max_attempts=3)
+    assert _near(fill.maker_qty, 1.0) and _near(fill.taker_qty, 0.0)
+    assert [c[0] for c in fake.created] == ["limit"]      # 거부는 기록 안 됨. 2회차가 전량 maker
+
+
+def test_gtx_reject_every_attempt_still_ends_in_taker():
+    """전 회차가 거부되면 결국 시장가 — 재시도가 무한루프가 되면 안 된다."""
+    fake = FakeCCXT(books=(100.0, 101.0), limit_fills=[], market_px=101.0, reject_at={0, 1, 2})
+    fill = _Broker(fake).limit_then_market("buy", 1.0, TIMEOUT, max_attempts=3)
+    assert _near(fill.taker_qty, 1.0)
+    assert [c[0] for c in fake.created] == ["market"]
+    assert fake._limit_i == 3                            # 회차는 다 써봤다
+
+
+class _TickBroker(_Broker):
+    """틱 크기를 아는 브로커 — BBO 에서 물러나는 동작 검증용."""
+
+    def market(self):
+        m = dict(super().market())
+        m["info"] = {"filters": [{"filterType": "PRICE_FILTER", "tickSize": "0.10"}]}
+        return m
+
+
+def test_passive_tick_places_behind_the_bbo():
+    """★ BBO 에 딱 붙이면 도달 직전에 반대 호가가 오는 순간 교차로 거부된다.
+
+    한 틱 물러나면 교차가 **구조적으로** 불가능하다. 체결 확률은 떨어지지만 안 되면 어차피
+    시장가라 하한은 같다 — 그래서 기다릴 수 있는 진입 쪽에서는 명백히 이득이다.
+    """
+    fake = FakeCCXT(books=(100.0, 101.0), limit_fills=[1.0])
+    b = _TickBroker(fake)
+    assert _near(b.price_tick(), 0.1)
+    b.limit_then_market("buy", 1.0, TIMEOUT, max_attempts=3, passive_ticks=1)
+    assert _near(fake.created[0][3], 99.9)               # bid 100.0 - 1틱
+
+    fake2 = FakeCCXT(books=(100.0, 101.0), limit_fills=[1.0])
+    _TickBroker(fake2).limit_then_market("sell", 1.0, TIMEOUT, max_attempts=3, passive_ticks=1)
+    assert _near(fake2.created[0][3], 101.1)             # ask 101.0 + 1틱
+
+
+def test_passive_ticks_zero_keeps_old_bbo_behaviour():
+    """0 이면 예전처럼 BBO 에 딱 붙인다 — 되돌릴 수 있는 스위치로 남긴다."""
+    fake = FakeCCXT(books=(100.0, 101.0), limit_fills=[1.0])
+    _TickBroker(fake).limit_then_market("buy", 1.0, TIMEOUT, max_attempts=3, passive_ticks=0)
+    assert _near(fake.created[0][3], 100.0)
+
+
+def test_passive_ticks_defaults_to_one():
+    """기본이 0 이면 -5022 를 다시 맞는다 — 기본값 자체를 잠근다."""
+    assert BinanceBroker.DEFAULT_PASSIVE_TICKS == 1
+    assert _Broker(FakeCCXT(books=(100.0, 101.0), limit_fills=[1.0])).passive_ticks == 1
 
 
 def test_sell_side_attaches_to_ask():
