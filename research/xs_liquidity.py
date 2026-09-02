@@ -79,10 +79,12 @@ def main():
     print("-" * 92)
     for cap in PORTFOLIOS:
         per = cap * GROSS / (2 * K)
+        # ★ `v or 999` 로 쓰면 안 된다 — 슬리피지가 정확히 0.0(첫 호가로 다 채움)일 때
+        #   falsy 라서 '체결 불가'로 뒤집힌다. 실제로 이 버그로 소액 구간이 1000bp 로 나왔다.
         sl = []
         for s, a in books.items():
             v = slip_bp(a, per)
-            sl.append(half[s] + (v if v is not None else 999.0))
+            sl.append(half[s] + (999.0 if v is None else v))
         sl = np.array(sl)
         med, q75, worst = np.median(sl), np.percentile(sl, 75), sl.max()
         # M 은 극단 펀딩 심볼을 고른다 → 평균이 아니라 상위 25% 쪽이 현실에 가깝다
