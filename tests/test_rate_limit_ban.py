@@ -148,3 +148,47 @@ def test_poll_interval_defaults_to_the_cheaper_value():
     b = BinanceBroker("k", "s", True, "BTCUSDT")
     assert b.poll_interval == BinanceBroker.DEFAULT_POLL_SEC == 1.0
     assert BinanceBroker("k", "s", True, "BTCUSDT", poll_interval=0.4).poll_interval == 0.4
+
+
+# ---- 밴이 매매 루프를 죽이면 안 된다 (재시작 127회 사고) ----
+
+def test_equity_returns_last_known_value_while_banned():
+    """★ 밴 중 잔고 조회 실패가 예외로 올라가면 **관찰 경로가 매매 루프를 죽인다.**
+
+    실제 사고: _write_state → ex.equity() → RateLimited 가 **예외 핸들러 안에서** 터져
+    run() 을 통째로 빠져나갔다 → 프로세스 종료 → 도커 재시작 → 반복(재시작 127회).
+    """
+    import tempfile
+    from engine.executor import LiveExecutor
+
+    class _Banned:
+        def equity(self, asset):
+            raise RateLimited(int(time.time() * 1000) + 60_000)
+
+    ex = LiveExecutor(testnet=True, symbol="BTCUSDT", broker=_Banned(),
+                      position_path=os.path.join(tempfile.mkdtemp(), "p.json"))
+    ex._equity_cache = (time.time() - 999, 1234.5)      # 마지막으로 알던 값
+    assert ex.equity(force=True) == 1234.5, "밴 중엔 캐시값을 돌려줘야 한다"
+
+
+def test_write_state_never_raises():
+    """상태 기록은 관찰용이다 — 여기서 예외가 나면 매매가 멈춘다."""
+    import tempfile
+    from engine.backtest import BacktestConfig
+    from engine.live import LiveTrader
+    from engine.executor import PaperExecutor
+    from engine.preset import Preset
+
+    tmp = tempfile.mkdtemp()
+    preset = Preset({"schemaVersion": "1.0", "name": "t",
+                     "market": {"exchange": "binance-futures", "symbol": "BTCUSDT",
+                                "timeframe": "1m", "direction": "long"},
+                     "entry": {"left": {"source": "close"}, "cmp": ">", "right": 0},
+                     "exit": {"stopLoss": {"type": "percent", "value": 1.0}},
+                     "sizing": {"leverage": 1, "marginMode": "isolated",
+                                "size": {"type": "equityPercent", "value": 10}}})
+    tr = LiveTrader(preset, PaperExecutor(equity=100.0), BacktestConfig(),
+                    state_path=os.path.join(tmp, "s.json"),
+                    ledger_path=os.path.join(tmp, "t.db"), strategy_path="x", mode="paper")
+    tr.ex.equity = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("잔고 조회 폭발"))
+    tr._write_state()                                   # 예외가 올라오면 테스트 실패

@@ -20,6 +20,7 @@ import time
 
 from . import binance_math as bm
 from . import fill_log
+from .binance_broker import RateLimited
 from .metrics import Trade
 
 
@@ -297,7 +298,13 @@ class LiveExecutor(Executor):
         now = time.time()
         if not force and now - self._equity_cache[0] < 3.0:
             return self._equity_cache[1]
-        val = self._broker.equity(self.quote_asset)
+        try:
+            val = self._broker.equity(self.quote_asset)
+        except RateLimited:
+            # ★ 밴 중엔 잔고를 못 읽는다. 여기서 예외를 올리면 **상태 기록·알림 같은 관찰 경로가
+            #   매매 루프를 죽인다** — 실제로 그래서 크래시 루프(재시작 127회)가 났다.
+            #   마지막으로 알던 값을 돌려준다(대시보드가 조금 오래된 값을 보는 게 훨씬 낫다).
+            return self._equity_cache[1]
         self._equity_cache = (now, val)
         return val
 

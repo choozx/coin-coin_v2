@@ -344,7 +344,18 @@ class LiveTrader:
                 "uPnlPct": round(gross / margin * 100, 2) if margin else None}
 
     def _write_state(self):
-        """포지션·트레이드·잔고 스냅샷을 state_path에 원자적으로 기록(대시보드용)."""
+        """포지션·트레이드·잔고 스냅샷을 state_path에 원자적으로 기록(대시보드용).
+
+        ★ 이 함수는 **어떤 이유로도 예외를 올리지 않는다.** 관찰용 기록이 매매 루프를 죽이면
+        본말전도다 — 실제로 밴 중에 여기서 API 를 때려 예외가 나고, 그게 예외 핸들러 안에서
+        터지는 바람에 run() 을 통째로 빠져나가 크래시 루프(재시작 127회)가 됐다.
+        """
+        try:
+            self._write_state_inner()
+        except Exception as e:
+            print(f"  [상태기록 실패] {e}", flush=True)
+
+    def _write_state_inner(self):
         if not self.state_path:
             return
         ex = self.ex
@@ -481,6 +492,25 @@ class LiveTrader:
                 notify(f"▶️ 매매 재개 — 새 진입 시작 ({self.preset.symbol} {self.preset.timeframe})", category="trade")
                 print("  [제어] 재개 → 새 진입 시작", flush=True)
         return paused
+
+    def _bootstrap_waiting_out_bans(self, once: bool = False) -> None:
+        """기동. 밴이면 만료까지 기다렸다 다시 시도한다 — **죽지 않는다.**
+
+        bootstrap 은 거래소 조회를 하므로 밴 중엔 실패한다. 예전엔 그대로 예외가 올라가
+        프로세스가 죽고 도커가 재시작 → 또 죽는 루프가 됐다. 재시작할수록 요청이 늘어
+        밴이 연장되는 최악의 되먹임이다. 여기서 기다리는 게 유일하게 옳다.
+        """
+        while True:
+            try:
+                self.bootstrap()
+                return
+            except RateLimited as e:
+                wait = max(1.0, e.until_ms / 1000.0 - time.time())
+                self._banned_until = e.until_ms
+                print(f"  [밴] 기동 보류 — {wait:.0f}초 대기 후 재시도", flush=True)
+                if once:
+                    raise
+                time.sleep(min(wait, 900))
 
     def _collect_req_counts(self) -> None:
         """이번 폴에 나간 API 요청을 집계한다(브로커가 세고 여기서 수확·리셋).
@@ -777,7 +807,7 @@ class LiveTrader:
 
     def run(self, interval: int = 60, once: bool = False):
         """폴링 루프. once=True면 한 번만. interval초마다 poll_once(now)."""
-        self.bootstrap()
+        self._bootstrap_waiting_out_bans(once)
         self._write_state()
         # 모드를 알림에 그대로 — '페이퍼'로 고정돼 있으면 실돈 봇이 페이퍼처럼 보고된다.
         # 테스트넷/실돈까지 구분한다(둘 다 mode='live' 라 한 덩어리로 보면 제일 위험한 착각이 생긴다).
@@ -956,7 +986,15 @@ def main():
             raise SystemExit(
                 "BINANCE_TESTNET=0 (메인넷=실돈) 입니다. 정말 실돈으로 돌리려면 --real-money 를 "
                 "함께 주세요. 테스트넷으로 돌리려면 BINANCE_TESTNET=1.")
-        ex.preflight()                            # 헤지모드·마진모드·잔고 점검(문제면 여기서 중단)
+        # 밴이면 preflight 도 실패한다 → 죽지 말고 기다린다(죽으면 재시작 루프가 밴을 연장한다).
+        while True:
+            try:
+                ex.preflight()                    # 헤지모드·마진모드·잔고 점검(문제면 여기서 중단)
+                break
+            except RateLimited as e:
+                wait = max(1.0, e.until_ms / 1000.0 - time.time())
+                print(f"🚫 레이트리밋 밴 — 기동 점검 보류, {wait:.0f}초 대기", flush=True)
+                time.sleep(min(wait, 900))
     else:
         ex = PaperExecutor(equity=args.equity, maker_fee=mk, taker_fee=tk)
     trader = LiveTrader(preset, ex, cfg, strategy_path=args.preset,
