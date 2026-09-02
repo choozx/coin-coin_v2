@@ -13,8 +13,65 @@
 """
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
+
+
+class RateLimited(Exception):
+    """바이낸스가 IP 를 레이트리밋으로 밴했다. until_ms 까지는 **요청을 보내면 안 된다.**
+
+    밴 중에 계속 때리면 바이낸스가 밴을 연장한다 — 스스로 상처를 키우는 짓이다.
+    """
+
+    def __init__(self, until_ms: int, msg: str = ""):
+        self.until_ms = int(until_ms)
+        super().__init__(msg or f"레이트리밋 밴 — {int(until_ms)} 까지 요청 금지")
+
+
+_BAN_RE = re.compile(r"banned until (\d{10,})")
+DEFAULT_BAN_MS = 60_000          # 만료 시각을 못 읽으면 보수적으로 1분 쉰다
+
+
+def _ban_until(e):
+    """예외에서 밴 만료 시각(ms) 추출. 밴이 아니면 None.
+
+    바이낸스는 418(I'm a teapot) 또는 -1003 으로 알리고 본문에 `banned until <ms>` 를 준다.
+    실측 사례: {"code":-1003,"msg":"Way too many requests; IP(...) banned until 1788319856878.
+    Please use the websocket for live updates to avoid bans."}
+    """
+    s = str(e)
+    if "-1003" not in s and "418" not in s and "too many request" not in s.lower():
+        return None
+    m = _BAN_RE.search(s)
+    return int(m.group(1)) if m else int(time.time() * 1000) + DEFAULT_BAN_MS
+
+
+class _Guarded:
+    """ccxt 클라이언트 래퍼 — 밴을 감지해 기록하고, **밴 중에는 요청 자체를 안 보낸다.**
+
+    모든 API 호출이 broker.client() 를 거치므로 여기 한 곳에서 막으면 샐 구멍이 없다.
+    """
+
+    def __init__(self, ex, broker):
+        self._ex, self._b = ex, broker
+
+    def __getattr__(self, name):
+        attr = getattr(self._ex, name)
+        if not callable(attr):
+            return attr
+
+        def call(*a, **k):
+            self._b.raise_if_banned()          # 밴 중이면 네트워크를 아예 안 탄다
+            try:
+                return attr(*a, **k)
+            except Exception as e:
+                until = _ban_until(e)
+                if until:
+                    self._b._banned_until = until
+                    raise RateLimited(until, str(e))
+                raise
+        return call
 
 
 class ReduceOnlyFlat(Exception):
@@ -55,6 +112,8 @@ class BinanceBroker:
         self._symbol = None                      # ccxt 통일 심볼(BTC/USDT:USDT)
         self._market = None
         self._leverage_set = None
+        self._guard = None
+        self._banned_until = 0                   # 이 시각(ms)까지는 요청 금지
 
     # ---- 연결/메타 ----
     def client(self):
@@ -81,7 +140,17 @@ class BinanceBroker:
                 "enableRateLimit": True, "options": opts})
             if self.testnet:
                 self._ex.set_sandbox_mode(True)
-        return self._ex
+            self._guard = _Guarded(self._ex, self)
+        return self._guard
+
+    def raise_if_banned(self) -> None:
+        """밴이 안 끝났으면 요청 없이 즉시 RateLimited. 끝났으면 상태를 지운다."""
+        if not self._banned_until:
+            return
+        now = time.time() * 1000
+        if now < self._banned_until:
+            raise RateLimited(self._banned_until)
+        self._banned_until = 0                   # 만료 → 정상 복귀
 
     def market(self) -> dict:
         """이 심볼의 ccxt 마켓 정보(정밀도·최소주문). 최초 1회 load_markets."""

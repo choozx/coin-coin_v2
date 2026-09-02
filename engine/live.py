@@ -40,6 +40,7 @@ from .conditions import (SeriesResolver, collect_operands, operand_label,
 from .preset import Preset, load_preset_file, merge_bot_config
 from .executor import PaperExecutor, LiveExecutor
 from .backtest import BacktestConfig, Stepper
+from .binance_broker import RateLimited
 
 
 class LiveTrader:
@@ -79,6 +80,7 @@ class LiveTrader:
         self._guardrail_note = None          # 해제 알림에 덧붙일 한 줄(예: 쿨다운 종료 사유)
         self.entry_log_path = os.environ.get("ENTRY_LOG_PATH", entry_log.DEFAULT_PATH)
         self._signal = None                  # 마지막 폴의 신호봉(로그가 봉 시각을 적을 때 참조)
+        self._banned_until = 0               # 레이트리밋 밴 만료(ms) — 그때까진 폴을 쉰다
         self._last_entry_check = None        # 마지막 진입 판정 기록(대시보드·로그 요약)
         self._diagnosed_ot = None            # 이번 폴에서 '진짜 판정'을 기록한 신호봉(중복 방지)
         self._restore_from_ledger()          # 원장에서 잔고·이력 복원(재시작해도 안 사라짐)
@@ -356,6 +358,7 @@ class LiveTrader:
             "paused": self._paused,
             "guardrail": self._guardrail_reason,         # 가드레일 발동 사유(대시보드 표시), 없으면 null
             "entryCheck": self._last_entry_check,        # 마지막 진입 판정(왜 안 샀나) — entry_log 와 같은 형식
+            "bannedUntil": self._banned_until or None,   # 레이트리밋 밴 만료(ms). 이 동안은 폴을 쉰다
             "mode": self.mode,                           # paper | testnet | live (원장 조회용 = 버킷)
             # 네트워크 스위치용. canMainnet=이 프로세스가 실돈 권한(--real-money)을 받았는가.
             "network": getattr(ex, "network", None) if self.is_live else None,
@@ -766,6 +769,7 @@ class LiveTrader:
         print(f"  [알림 라우팅] {routing_summary(('trade', 'system'))}", flush=True)
         notify(f"▶️ {tag} 시작 {self.preset.name} {self.preset.symbol} {self.preset.timeframe} 잔고 {self.ex.equity():.0f}", category="system")
         fails = 0
+        banned_notified = False              # 밴 알림은 한 번만(만료 후 리셋)
         while True:
             now = int(time.time() * 1000)
             try:
@@ -785,6 +789,27 @@ class LiveTrader:
                     st += f" | {entry_log.summary(self._last_entry_check)}"
                 print(f"{time.strftime('%H:%M:%S')}  {st}", flush=True)
                 fails = 0
+                if self._banned_until:       # 정상 폴이 돌았다 = 밴 해제
+                    notify("✅ 레이트리밋 밴 해제 — 매매를 재개합니다.", category="system")
+                    print("  [밴] 해제 — 정상 복귀", flush=True)
+                self._banned_until, banned_notified = 0, False
+            except RateLimited as e:
+                # ★ 밴 중에 계속 때리면 바이낸스가 밴을 **연장한다.** 만료까지 쉬는 게 유일한 대응이다.
+                #   실측 사고: -1003 밴 → 청산 재시도가 매 폴 79요청씩 누적 → 밴 연장 → 11분 무응답.
+                self._banned_until = e.until_ms
+                self._write_state()          # 대시보드가 '왜 멈춰 있나'를 볼 수 있게 남긴다
+                wait = max(1.0, e.until_ms / 1000.0 - time.time())
+                if not banned_notified:
+                    banned_notified = True
+                    mins = wait / 60.0
+                    notify(f"🚫 레이트리밋 밴 — 바이낸스가 IP 를 차단했습니다. "
+                           f"{mins:.1f}분 쉬었다 재개합니다(그동안 포지션 관리가 멈춥니다).",
+                           category="system", buttons=["status"])
+                print(f"  [밴] 요청 금지 — {wait:.0f}초 대기", flush=True)
+                if once:
+                    break
+                time.sleep(min(wait, 900))   # 15분씩 끊어 자며 만료를 다시 확인
+                continue
             except Exception as e:
                 fails += 1
                 print(f"  [에러] {e}", flush=True)
