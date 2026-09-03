@@ -100,10 +100,11 @@ main() {
         dnotify "🚀 배포 ${from}→${remote:0:7} 시작 · 대상: ${targets}${deferred:+ (트레이더 연기)}"
         echo "배포 → ${remote:0:7} | 대상: ${targets}"
         save_logs "$remote" "$targets"      # ★ 교체 전에 로그를 건진다(아래 주석 참조)
-        # ★ 한 줄로 전부 올리지 않는다. compose 파일이 바뀌면 대상이 전 서비스가 되는데,
-        #   그러면 trader·collector 가 **동시에** 부트스트랩하며 같은 IP 에서 캔들을 긁는다.
-        #   2026-09-02 재시작 직후 -1003(IP 밴)이 났고, 그 시각 폴링 요청은 정상이었다(peak 7).
-        #   순차 기동은 배포를 조금 늦출 뿐이고 밴은 봇을 통째로 멈춘다 — 교환비가 명백하다.
+        # 한 줄로 전부 올리지 않고 하나씩 올린다. compose 파일이 바뀌면 대상이 전 서비스가 되고,
+        # 그러면 trader·collector 가 동시에 부트스트랩하며 같은 IP 에서 캔들을 긁는다.
+        # ※ 이건 **예방**이지 진단이 아니다. 2026-09-02 밴 때는 실제로 트레이더 하나만
+        #   재생성됐으므로(journalctl 확인) 동시 기동이 그 밴의 원인은 아니었다. 원인은 미상 —
+        #   그 시각 트레이더 로그가 재생성으로 지워졌다(그래서 save_logs 를 넣었다).
         local svc first=1
         for svc in $targets; do
             [ "$first" = 1 ] || sleep "${DEPLOY_STAGGER_SEC:-15}"
@@ -201,20 +202,13 @@ dnotify() {
     fi
 }
 
-# 트레이더가 포지션을 들고 있는가. state.json은 트레이더가 매 루프(기본 60초) 갱신한다.
-#   - 파일 없음/파싱 실패  → 없음으로 간주(막 띄웠거나 아직 상태를 안 씀)
-#   - 트레이더가 안 돌고 있음 → 지킬 대상이 없으므로 없음으로 간주
-#     (크래시로 state.json에 포지션이 박제된 채 영영 배포가 막히는 걸 방지)
+# 트레이더가 포지션을 들고 있는가. 판정은 deploy/position_guard.py 가 한다(테스트 있음).
+#   컨테이너가 아예 없으면 지킬 대상도 없다 → 여기서 바로 '없음'.
+#   나머지는 전부 guard 에 맡긴다 — **모르면 연기**가 원칙이고, 봇이 죽어 상태가 오래 멈추면
+#   그때는 통과시킨다(죽은 봇이 제 고침을 영영 막지 않게).
 has_open_position() {
     docker compose ps -q trader 2>/dev/null | grep -q . || return 1
-    python3 - <<'PY'
-import json, sys, pathlib
-p = pathlib.Path("data/state.json")
-try:
-    sys.exit(0 if json.loads(p.read_text()).get("position") else 1)
-except Exception:
-    sys.exit(1)
-PY
+    python3 deploy/position_guard.py data/state.json
 }
 
 main "$@"
