@@ -23,10 +23,14 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# 실제 격리는 tests/conftest.py 가 한다(어떤 테스트 모듈보다 먼저 로드되므로 순서 무관).
+# 여기 남긴 setdefault 는 이 파일을 pytest 없이 직접 실행할 때의 폴백이다 —
+# **덮어쓰면 안 된다**: conftest 가 심은 경로로 engine.* 이 이미 로드됐을 수 있고,
+# 그러면 아래 _isolated() 가 서로 다른 경로를 비교하게 된다.
 _TMP = tempfile.mkdtemp(prefix="parity-")
-os.environ["CONTROL_PATH"] = os.path.join(_TMP, "control.json")      # 없는 파일 → trader "running"
-os.environ["SETTINGS_PATH"] = os.path.join(_TMP, "settings.json")    # 없는 파일 → 가드레일 기본(끔)
-os.environ["STATE_PATH"] = os.path.join(_TMP, "state.json")
+os.environ.setdefault("CONTROL_PATH", os.path.join(_TMP, "control.json"))
+os.environ.setdefault("SETTINGS_PATH", os.path.join(_TMP, "settings.json"))
+os.environ.setdefault("STATE_PATH", os.path.join(_TMP, "state.json"))
 
 import numpy as np                                          # noqa: E402
 

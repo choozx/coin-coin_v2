@@ -24,3 +24,4 @@ presets/saved/
 
 # macOS 잡파일
 .DS_Store
+logs/

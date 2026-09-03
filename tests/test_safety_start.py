@@ -3,7 +3,11 @@
 배경: 재배포로 트레이더 컨테이너가 교체되자 사용자의 '재개'가 조용히 취소돼 봇이 며칠간
 매매를 안 했다. 봇에게 그 뒤로는 '처음부터 멈춤'과 구별되지 않아(_sync_paused 전이 없음)
 알림도 안 나갔다. 그래서 ① 덮어쓸 땐 알리고 ② 가짜돈이면 의도를 이어받는다.
-실돈(--real-money)은 예외 없이 멈춤 — 나쁜 배포가 즉시 실주문을 내면 안 된다.
+메인넷은 예외 없이 멈춤 — 나쁜 배포가 즉시 실주문을 내면 안 된다.
+
+★ 판정 기준은 '권한'(--real-money)이 아니라 '이번 기동이 붙는 네트워크'다. 권한으로 재면
+대시보드에서 네트워크를 오가려고 --real-money 를 준 **테스트넷 봇까지 배포마다 꺼진다**
+— 실제로 그렇게 됐고 아무도 몰랐다.
 """
 from __future__ import annotations
 
@@ -21,8 +25,8 @@ def _tmp():
     return os.path.join(tempfile.mkdtemp(), "control.json")
 
 
-def _start(path, real_money=False, start_running=False, once=False, live=True):
-    return safety_pause_on_start(start_running, once, live, real_money, path=path)
+def _start(path, real_money=False, start_running=False, once=False, live=True, testnet=True):
+    return safety_pause_on_start(start_running, once, live, real_money, path=path, testnet=testnet)
 
 
 # ---- 가짜돈: 의도를 이어받는다 ----
@@ -50,22 +54,34 @@ def test_first_boot_never_auto_resumes():
     assert control.service_state("trader", p) == "paused"
 
 
-# ---- 실돈: 예외 없이 멈춤 ----
+# ---- 메인넷: 예외 없이 멈춤 ----
 
-def test_real_money_always_pauses_and_reports():
-    """실돈 봇은 의도가 running 이어도 멈춤으로 시작하고, 덮어썼음을 알린다."""
+def test_mainnet_always_pauses_and_reports():
+    """메인넷 봇은 의도가 running 이어도 멈춤으로 시작하고, 덮어썼음을 알린다."""
     p = _tmp()
     control.set_service("trader", "running", p)
-    assert _start(p, real_money=True) == "overwrote"
+    assert _start(p, real_money=True, testnet=False) == "overwrote"
     assert control.service_state("trader", p) == "paused"
 
 
-def test_real_money_does_not_spam_on_repeat_restart():
+def test_mainnet_does_not_spam_on_repeat_restart():
     """이미 멈춰 있으면 조용하다 — 재시작마다 같은 경고를 반복하지 않는다."""
     p = _tmp()
     control.set_service("trader", "running", p)
-    assert _start(p, real_money=True) == "overwrote"
-    assert _start(p, real_money=True) == "kept"          # 두 번째부터는 침묵
+    assert _start(p, real_money=True, testnet=False) == "overwrote"
+    assert _start(p, real_money=True, testnet=False) == "kept"   # 두 번째부터는 침묵
+
+
+def test_testnet_resumes_even_with_real_money_permission():
+    """★ 실돈 '권한'이 있어도 지금 붙는 곳이 테스트넷이면 가짜돈이다 → 이어받는다.
+
+    이 한 줄이 없어서 테스트넷 봇이 배포마다 꺼졌다. 권한은 '메인넷에 갈 수 있다'는 뜻이지
+    '지금 메인넷이다'가 아니다.
+    """
+    p = _tmp()
+    control.set_service("trader", "running", p)
+    assert _start(p, real_money=True, testnet=True) == "resumed"
+    assert control.service_state("trader", p) == "running"
 
 
 # ---- 의도 기록의 경계 ----
@@ -74,7 +90,7 @@ def test_startup_pause_does_not_clobber_intent():
     """기동 안전 멈춤은 의도를 건드리지 않는다 — 안 그러면 자동 재개가 영영 안 산다."""
     p = _tmp()
     control.set_service("trader", "running", p)
-    _start(p, real_money=True)                           # 실돈 기동 → trader=paused
+    _start(p, real_money=True, testnet=False)            # 메인넷 기동 → trader=paused
     assert control.trader_intent(p) == "running"         # 그러나 사용자 의도는 그대로
     assert _start(p) == "resumed"                        # 가짜돈으로 다시 뜨면 이어받는다
 

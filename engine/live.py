@@ -75,6 +75,7 @@ class LiveTrader:
         # 멈춤/재개는 control.json 이 진실. 시작 시점의 값을 그대로 읽어둔다 —
         # False 로 시작하면 첫 폴링에서 '멈춤으로 바뀜'을 오탐해 기동 때마다 알림이 한 번 더 간다.
         self._paused = control.service_state("trader") == "paused"
+        self._equity_unknown_warned = False   # 잔고 미상 경고는 상태 전이 때만(폴링마다 보내면 스팸)
         self._events = []                    # 이번 폴링에서 발생한 이벤트(hook이 채움)
         self._guardrail_reason = None        # 리스크 가드레일 발동 사유(없으면 None)
         self._guardrail_note = None          # 해제 알림에 덧붙일 한 줄(예: 쿨다운 종료 사유)
@@ -261,7 +262,22 @@ class LiveTrader:
             today_pnl = sum(tr.pnl for tr in trades if tr.exit_time and
                             datetime.fromtimestamp(tr.exit_time / 1000, timezone.utc).strftime("%Y-%m-%d") == today)
             if today_pnl < 0:
-                base = self.ex.equity() - today_pnl      # 오늘 시작 잔고(= 현재잔고 - 오늘실현손익)
+                eq = self.ex.equity()
+                # ★ 잔고가 0 이면 '손실 0%' 가 아니라 **모른다**는 뜻이다. 그대로 계산하면
+                #   base = -today_pnl 이 되어 손실 크기와 무관하게 **정확히 100.0%** 가 나오고,
+                #   한도가 몇이든 무조건 발동한다(실제 사고: 밴 중 캐시가 0 이라 100% 발동).
+                #   0 을 만드는 경로가 셋이나 되고(밴 폴백·잔고 키 없음·진짜 0) 전부 조용하므로,
+                #   여기서 한 번에 막는다 — 모르는 값으로 리스크 판정을 하느니 판정을 미룬다.
+                if eq <= 0:
+                    if not self._equity_unknown_warned:
+                        self._equity_unknown_warned = True
+                        notify("⚠️ 잔고를 읽지 못해 일일 손실 가드레일을 일시 보류합니다 "
+                               "(밴·조회 실패 가능). 잔고가 다시 읽히면 자동 재개됩니다.",
+                               category="system")
+                    print("  [가드레일] 잔고 미상(0) → 일일 손실 판정 보류", flush=True)
+                    return None
+                self._equity_unknown_warned = False
+                base = eq - today_pnl                    # 오늘 시작 잔고(= 현재잔고 - 오늘실현손익)
                 loss_pct = (-today_pnl / base * 100) if base > 0 else 0
                 if loss_pct >= float(dll["pct"]):
                     return f"일일 손실 {loss_pct:.1f}% (한도 {dll['pct']}%)"
@@ -674,27 +690,40 @@ class LiveTrader:
             self.ex.position = None
             self.ex._save_position()
             return
-        same = (saved.get("side") == pos["side"] and saved.get("qty")
+        # '같은 포지션인가'(방향)와 '수량까지 정확한가'는 다른 질문이다. 예전엔 하나로 묶어서,
+        # 부분청산으로 수량이 2% 넘게 줄기만 해도 **진입 시각까지 버리고** 최신 봉으로 대체했다
+        # (실측: 08:46 진입이 재시작 시각 13:46 으로 바뀌어 timeStop 이 5시간 밀렸다).
+        # 방향이 같으면 같은 포지션이다 → 진입시각·최고가·레버리지는 살린다.
+        # 손절/익절만 수량 일치를 요구한다(수량이 다르면 그 가격이 계산된 전제가 달라졌다).
+        same_side = bool(saved) and saved.get("side") == pos["side"]
+        same = (same_side and saved.get("qty")
                 and abs(saved["qty"] - pos["qty"]) <= pos["qty"] * 0.02)
         signal = resample(base, self.tf_min)
-        entry_time = int(saved.get("entryTime") or 0) if same else 0
+        entry_time = int(saved.get("entryTime") or 0) if same_side else 0
         entry_time = entry_time or int(base.open_time[-1])
         # 거래소에서 인계받은 포지션의 '진입 신호봉' — 인덱스가 아니라 **시각**으로 잡는다
         # (배열은 폴마다 미끄러지지만 시각은 안 변한다. timeStop 이 이걸 기준으로 센다.)
         sb = max(0, int(np.searchsorted(signal.open_time, entry_time, side="right")) - 1)
         sb_time = int(signal.open_time[sb]) if len(signal) else int(entry_time)
         nan = float("nan")
+        # 레버리지: 거래소가 안 주면(응답에 필드 없음) 사이드카 → 1 순. 예전엔 곧장 1 이라
+        # 10배 포지션이 1배로 인계돼 margin 이 10배로 잡혔다(실측: state.json 에 x1 로 표시).
+        lev = int(pos.get("leverage") or 0) or int((saved.get("leverage") if same_side else 0) or 0)
+        if lev <= 0:
+            lev = 1
+            print("  [동기화] ⚠️ 레버리지를 알 수 없어 1 로 둡니다 — margin 계산이 부정확할 수 있습니다",
+                  flush=True)
         p = _Position(
             side=pos["side"], entry_time=entry_time, entry_price=pos["entry_price"],
-            qty=pos["qty"], leverage=pos["leverage"],
-            margin=pos.get("margin") or pos["entry_price"] * pos["qty"] / max(1, pos["leverage"]),
+            qty=pos["qty"], leverage=lev,
+            margin=pos.get("margin") or pos["entry_price"] * pos["qty"] / max(1, lev),
             liq_price=pos["liq_price"], entry_signal_time=sb_time,
             stop_price=(saved.get("stop") if same else None) or nan,
             tp_price=(saved.get("tp") if same else None) or nan,
             entry_fee=(saved.get("entryFee") if same else None) or bm.trade_fee(
                 pos["entry_price"], pos["qty"], taker=True,
                 taker_fee=self.cfg.taker_fee, maker_fee=self.cfg.maker_fee),
-            peak=(saved.get("peak") if same else None) or pos["entry_price"])
+            peak=(saved.get("peak") if same_side else None) or pos["entry_price"])
         self.ex.position = p
         self.ex._save_position()
         side_k = "롱" if p.side > 0 else "숏"
@@ -909,7 +938,7 @@ def loss_streak_block(trades, count: int, cooldown_hours: float, reset_ms: int, 
 
 
 def safety_pause_on_start(start_running: bool, once: bool, live: bool, real_money: bool,
-                          path: str = control.DEFAULT_PATH) -> str:
+                          path: str = control.DEFAULT_PATH, testnet: bool = True) -> str:
     """기동 시 매매 상태를 정한다. 반환: skip | resumed | kept | overwrote.
 
     안전 기본값 — 봇은 '멈춤'으로 시작하고 대시보드에서 명시적으로 켜야 새 진입을 낸다.
@@ -922,13 +951,17 @@ def safety_pause_on_start(start_running: bool, once: bool, live: bool, real_mone
     이어받아 자동 재개한다. 실돈을 만질 수 있는 프로세스(--real-money)는 예외 없이 멈춤이다 —
     나쁜 배포가 즉시 실주문을 내는 것보다 수동 재개 한 번이 싸다.
 
-    가짜돈 판정은 `real_money` 로 한다(ex.testnet 이 아니라): 이 시점엔 executor 가 아직 없고,
-    --real-money 없이는 메인넷에 붙을 수 없으며 대시보드의 네트워크 스위치도 그 권한 안에서만
-    움직인다. 즉 real_money=False 는 '이 프로세스는 절대 실돈이 못 된다'는 뜻이라 안전하다.
+    ★ 가짜돈 판정을 `real_money`(권한) 하나로만 하면 **테스트넷 봇도 재배포마다 멈춘다**.
+    실제로 그렇게 됐다 — 대시보드에서 네트워크를 오가려면 --real-money 를 줘야 하는데, 그
+    권한 때문에 테스트넷으로 도는 봇이 배포 때마다 꺼졌고 아무도 몰랐다. 권한이 아니라
+    **이번 기동이 실제로 붙는 네트워크**로 판정한다: 테스트넷이면 가짜돈이므로 이어받고,
+    메인넷이면 권한과 무관하게 멈춘다(나쁜 배포가 즉시 실주문을 내는 것보다 수동 재개가 싸다).
+    기동 후 대시보드로 메인넷에 전환하는 건 사용자의 명시적 행위라 여기 판정과 무관하다.
     """
     if start_running or (once and not live):
         return "skip"
-    if not real_money and control.trader_intent(path) == "running":
+    fake_money = (not real_money) or testnet
+    if fake_money and control.trader_intent(path) == "running":
         control.set_service("trader", "running", path, record_intent=False)
         return "resumed"
     # '덮어썼다'는 이번 기동이 실제로 running → paused 로 바꿨을 때만이다. service_state 는
@@ -957,7 +990,9 @@ def main():
                     help="시작 시 바로 매매 활성. 기본은 안전하게 '멈춤'으로 시작(대시보드에서 재개).")
     args = ap.parse_args()
 
-    start = safety_pause_on_start(args.start_running, args.once, args.live, args.real_money)
+    from .executor import _testnet_flag
+    start = safety_pause_on_start(args.start_running, args.once, args.live, args.real_money,
+                                  testnet=_testnet_flag())
     if start in ("kept", "overwrote"):
         print("🔒 안전 시작: 매매 '멈춤' 상태 — 대시보드에서 봇을 '재개'해야 새 진입이 시작됩니다.", flush=True)
     if start == "overwrote":
@@ -965,7 +1000,7 @@ def main():
         # _sync_paused 의 상태 전이가 없어 알림이 안 나가고, 워치독은 state.json 갱신만 보므로
         # 살아있는 멈춤 봇을 정상으로 판정한다 — 삼중 침묵. 덮어쓸 때는 반드시 알린다.
         notify("⚠️ 봇이 재시작되어 매매가 '멈춤'으로 되돌아갔습니다 "
-               "(재배포·재부팅 등). 실돈 봇은 자동 재개하지 않습니다 — 재개해 주세요.",
+               "(재배포·재부팅 등). 메인넷 봇은 자동 재개하지 않습니다 — 재개해 주세요.",
                category="trade", buttons=["resume", "status"])
     elif start == "resumed":
         print("🔄 의도 보존: 재시작 전 '재개' 상태를 이어갑니다(가짜돈).", flush=True)

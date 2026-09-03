@@ -99,8 +99,17 @@ main() {
         local from="${applied:0:7}"; [ -n "$from" ] || from="최초"   # 첫 배포면 앞이 비어 '배포 →abc' 로 보인다
         dnotify "🚀 배포 ${from}→${remote:0:7} 시작 · 대상: ${targets}${deferred:+ (트레이더 연기)}"
         echo "배포 → ${remote:0:7} | 대상: ${targets}"
-        # shellcheck disable=SC2086
-        docker compose up -d --no-build $targets
+        save_logs "$remote" "$targets"      # ★ 교체 전에 로그를 건진다(아래 주석 참조)
+        # ★ 한 줄로 전부 올리지 않는다. compose 파일이 바뀌면 대상이 전 서비스가 되는데,
+        #   그러면 trader·collector 가 **동시에** 부트스트랩하며 같은 IP 에서 캔들을 긁는다.
+        #   2026-09-02 재시작 직후 -1003(IP 밴)이 났고, 그 시각 폴링 요청은 정상이었다(peak 7).
+        #   순차 기동은 배포를 조금 늦출 뿐이고 밴은 봇을 통째로 멈춘다 — 교환비가 명백하다.
+        local svc first=1
+        for svc in $targets; do
+            [ "$first" = 1 ] || sleep "${DEPLOY_STAGGER_SEC:-15}"
+            first=0
+            docker compose up -d --no-build "$svc"
+        done
         docker image prune -f >/dev/null
     fi
 
@@ -141,6 +150,23 @@ affected_services() {
         fi
     done
     echo "${out% }"
+}
+
+# 교체 직전 로그를 파일로 건진다.
+#
+# 왜: `docker compose up -d` 는 컨테이너를 **재생성**하고, 그러면 그 컨테이너의 json-file
+#   로그가 통째로 사라진다. 즉 배포가 사고의 증거를 지운다. 실제로 2026-09-02 사고에서
+#   가드레일 발동 로그를 찾을 수 없었다 — 재시작 이전이 전부 없어졌기 때문이다.
+#   journalctl(deploy-poll)은 살아남지만 그건 배포 로그일 뿐 봇 로그가 아니다.
+save_logs() {
+    local commit="$1" targets="$2" dir="logs/predeploy" f
+    mkdir -p "$dir" 2>/dev/null || return 0
+    f="${dir}/$(date -u +%Y%m%dT%H%M%SZ)-${commit:0:7}.log"
+    # shellcheck disable=SC2086
+    docker compose logs --no-color --timestamps --tail 3000 $targets > "$f" 2>&1 || true
+    # 최근 20개만 남긴다(프리티어 디스크). 삭제 실패가 배포를 막지 않게 전부 || true.
+    ls -1t "$dir" 2>/dev/null | tail -n +21 | while read -r old; do rm -f "${dir}/${old}" || true; done
+    echo "  교체 전 로그 보관: ${f}"
 }
 
 # 카운터 파일 읽기 → 항상 숫자. 파일이 없거나 비었거나 깨졌으면 0.

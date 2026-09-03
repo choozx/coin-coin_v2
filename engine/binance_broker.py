@@ -275,7 +275,10 @@ class BinanceBroker:
                 "side": 1 if (p.get("side") == "long") else -1,
                 "qty": qty,
                 "entry_price": float(p.get("entryPrice") or 0),
-                "leverage": int(float(p.get("leverage") or 1)),
+                # ★ 0 = '모른다'. 예전엔 `or 1` 이라 필드가 없으면 조용히 1배가 됐고, 10배
+                #   포지션을 1배로 인계해 margin 이 10배로 잡혔다(실측: 청산가는 10배 값인데
+                #   state.json 만 x1). 모르면 모른다고 넘기고 호출부가 사이드카로 메운다.
+                "leverage": _position_leverage(p),
                 "liq_price": float(p.get("liquidationPrice") or 0) or float("nan"),
                 "margin_mode": p.get("marginMode"),
                 "margin": float(p.get("initialMargin") or 0),
@@ -508,6 +511,29 @@ class BinanceBroker:
                 return mine
             time.sleep(self.poll_interval)
         return []
+
+
+def _position_leverage(p: dict) -> int:
+    """거래소 포지션의 레버리지. 못 알아내면 **0**(=모름)을 준다.
+
+    ccxt 는 마진 모드·계정 설정에 따라 leverage 를 안 실어 줄 때가 있다. 그때는 명목/증거금
+    으로 유도한다 — 둘 다 거래소가 준 값이라 추정이 아니라 계산이다.
+    """
+    for v in (p.get("leverage"), (p.get("info") or {}).get("leverage")):
+        try:
+            n = int(float(v))
+        except (TypeError, ValueError):
+            continue
+        if n > 0:
+            return n
+    try:
+        im = float(p.get("initialMargin") or 0)
+        notional = abs(float(p.get("notional") or 0))
+        if im > 0 and notional > 0:
+            return max(1, int(round(notional / im)))
+    except (TypeError, ValueError):
+        pass
+    return 0
 
 
 def _is_post_only_reject(e) -> bool:
