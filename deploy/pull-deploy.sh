@@ -162,7 +162,11 @@ affected_services() {
 save_logs() {
     local commit="$1" targets="$2" dir="logs/predeploy" f
     mkdir -p "$dir" 2>/dev/null || return 0
-    f="${dir}/$(date -u +%Y%m%dT%H%M%SZ)-${commit:0:7}.log"
+    # 파일명에 시각을 넣지 않는다. 트레이더가 포지션 때문에 연기되면 이 함수가 2분마다
+    # 불리는데, 그때마다 새 파일이면 20개 상한을 40분이면 다 태워 정작 필요한 이력이 밀린다.
+    # 커밋+대상으로 이름을 고정하면 같은 조합은 덮어써져 **항상 최신**이 남고, 트레이더가
+    # 대상에 합류하는 순간엔 이름이 달라져 '교체 직전 스냅샷'이 따로 보존된다.
+    f="${dir}/${commit:0:7}-$(echo "$targets" | tr -s ' ' '_' | tr -cd '[:alnum:]_').log"
     # shellcheck disable=SC2086
     docker compose logs --no-color --timestamps --tail 3000 $targets > "$f" 2>&1 || true
     # 최근 20개만 남긴다(프리티어 디스크). 삭제 실패가 배포를 막지 않게 전부 || true.
