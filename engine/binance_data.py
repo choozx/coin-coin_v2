@@ -39,7 +39,8 @@ def _get(symbol: str, interval: str, start_ms: int, end_ms: int, limit: int, ret
             with urllib.request.urlopen(req, timeout=20) as resp:
                 # ★ 밴 판정에 쓰이는 IP 누적 weight 를 여기서 건진다(api_weight 주석 참조).
                 #   컬렉터는 ccxt 를 안 쓰므로 이 경로가 유일한 관측점이다.
-                api_weight.observe(api_weight.header_weight(resp.headers))
+                api_weight.observe(api_weight.header_weight(resp.headers),
+                                   scope=api_weight.MAINNET)   # BASE 가 메인넷 고정
                 return json.loads(resp.read())
         except urllib.error.HTTPError as e:
             # 429=레이트리밋, 418=밴. Retry-After 존중하고 백오프.

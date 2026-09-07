@@ -11,9 +11,15 @@ collector · dashboard · discordbot 이 함께 쓴다. 게다가 컬렉터는 c
 우리가 세는 '요청 수'로는 애초에 환산이 안 된다. 한 서비스만 이 헤더를 읽어도 **다섯이
 합산된 IP 전체 사용량**이 보인다.
 
-저장은 서비스별 파일로 나눈다(`data/api_weight/<service>.json`). 컨테이너가 다른 프로세스라
-한 파일에 같이 쓰면 경합이 나는데, 각자 제 파일만 쓰면 경합 자체가 없다. 읽는 쪽
-(tools/report.py)이 합쳐 본다.
+★ **scope(호스트)를 반드시 나눈다.** 트레이더 하나가 두 호스트를 친다 —
+주문·잔고는 ccxt 로 테스트넷(testnet.binancefuture.com), 캔들은 urllib 로 메인넷
+(fapi.binance.com). **둘은 서로 다른 weight 카운터**이고 한도도 각각이다. 처음엔 이걸
+한 통에 섞어 담았는데, 그러면 1407 이라는 숫자가 어느 호스트 것인지 알 수 없어 계측을
+넣은 의미가 사라진다(컬렉터 20 vs 트레이더 1407 이 모순처럼 보이던 이유가 이것이다).
+
+저장은 (서비스, scope) 별 파일로 나눈다(`data/api_weight/<service>-<scope>.json`).
+컨테이너가 다른 프로세스라 한 파일에 같이 쓰면 경합이 나는데, 각자 제 파일만 쓰면 경합
+자체가 없다. 읽는 쪽(tools/report.py)이 scope 별로 묶어 본다.
 """
 from __future__ import annotations
 
@@ -30,8 +36,11 @@ WRITE_EVERY_S = 10.0         # 매 요청마다 파일을 쓰면 그게 또 부�
 
 _HEADER = "x-mbx-used-weight-1m"
 
-_state = {"last": 0, "peak": 0, "peakAt": 0, "at": 0}
-_last_write = 0.0
+MAINNET = "mainnet"
+TESTNET = "testnet"
+
+_states = {}                 # scope -> {"last","peak","peakAt","at"}
+_last_write = {}             # scope -> epoch초
 
 
 def service_name() -> str:
@@ -60,51 +69,55 @@ def header_weight(headers) -> int:
     return 0
 
 
-def observe(weight: int, *, service: str = None, dir_path: str = None, now: float = None) -> dict:
-    """weight 한 건 관측. 0 이하는 '모름'이라 무시한다(피크를 0 으로 덮지 않게)."""
-    global _last_write
+def observe(weight: int, *, scope: str = MAINNET, service: str = None,
+            dir_path: str = None, now: float = None) -> dict:
+    """weight 한 건 관측. 0 이하는 '모름'이라 무시한다(피크를 0 으로 덮지 않게).
+
+    scope = 어느 호스트의 카운터인가. 섞으면 숫자가 무의미해진다(모듈 주석 참조).
+    """
+    st = _states.setdefault(scope, {"last": 0, "peak": 0, "peakAt": 0, "at": 0})
     w = int(weight or 0)
     if w <= 0:
-        return dict(_state)
+        return dict(st)
     now = time.time() if now is None else now
-    _state["last"] = w
-    _state["at"] = int(now * 1000)
-    fresh_peak = w > _state["peak"]
+    st["last"] = w
+    st["at"] = int(now * 1000)
+    fresh_peak = w > st["peak"]
     if fresh_peak:
-        _state["peak"] = w
-        _state["peakAt"] = _state["at"]
-    if fresh_peak or (now - _last_write) >= WRITE_EVERY_S:
-        _last_write = now
-        _write(service or service_name(), dir_path or DEFAULT_DIR)
-    return dict(_state)
+        st["peak"] = w
+        st["peakAt"] = st["at"]
+    if fresh_peak or (now - _last_write.get(scope, 0.0)) >= WRITE_EVERY_S:
+        _last_write[scope] = now
+        _write(service or service_name(), scope, dir_path or DEFAULT_DIR)
+    return dict(st)
 
 
-def snapshot() -> dict:
-    return dict(_state)
+def snapshot(scope: str = MAINNET) -> dict:
+    return dict(_states.get(scope) or {"last": 0, "peak": 0, "peakAt": 0, "at": 0})
 
 
 def reset() -> None:
     """테스트용 — 모듈 전역을 초기 상태로."""
-    global _last_write
-    _state.update({"last": 0, "peak": 0, "peakAt": 0, "at": 0})
-    _last_write = 0.0
+    _states.clear()
+    _last_write.clear()
 
 
-def _write(service: str, dir_path: str) -> None:
+def _write(service: str, scope: str, dir_path: str) -> None:
     """실패해도 절대 예외를 올리지 않는다 — 관찰이 매매를 멈추면 안 된다."""
     try:
         os.makedirs(dir_path, exist_ok=True)
-        path = os.path.join(dir_path, f"{service}.json")
+        path = os.path.join(dir_path, f"{service}-{scope}.json")
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"service": service, "limit": LIMIT_1M, **_state}, f)
+            json.dump({"service": service, "scope": scope, "limit": LIMIT_1M,
+                       **_states[scope]}, f)
         os.replace(tmp, path)
     except Exception:
         pass
 
 
 def read_all(dir_path: str = None) -> list:
-    """서비스별 기록을 모아 peak 내림차순으로. 읽기 실패한 파일은 건너뛴다."""
+    """(서비스, scope) 기록을 모아 peak 내림차순으로. 읽기 실패한 파일은 건너뛴다."""
     dir_path = dir_path or DEFAULT_DIR
     out = []
     try:
@@ -122,11 +135,27 @@ def read_all(dir_path: str = None) -> list:
     return sorted(out, key=lambda r: -int(r.get("peak") or 0))
 
 
-def verdict(rows) -> str:
-    """한 줄 판정. **weight 는 IP 합산값이라 서비스별로 더하면 안 된다** — 최대치가 곧 그 시점의 IP 사용량."""
-    peak = max([int(r.get("peak") or 0) for r in rows] or [0])
-    if peak <= 0:
-        return "관측 없음 — 아직 헤더를 한 번도 못 읽었다"
-    pct = peak / LIMIT_1M * 100
-    mark = "⚠️ 위험" if peak >= LIMIT_1M * WARN_RATIO else "여유"
-    return f"IP 최대 {peak}/{LIMIT_1M} weight ({pct:.0f}%) · {mark}"
+def by_scope(rows) -> dict:
+    """scope -> 그 호스트의 최대 weight. **scope 를 넘어 합치면 안 된다**(별개 카운터)."""
+    out = {}
+    for r in rows:
+        sc = r.get("scope") or MAINNET
+        out[sc] = max(out.get(sc, 0), int(r.get("peak") or 0))
+    return out
+
+
+def verdict(rows) -> list:
+    """scope 별 한 줄 판정.
+
+    같은 scope 안에서는 **서비스별로 더하지 않는다** — 헤더가 이미 그 호스트의 IP 합산이라
+    더하면 이중 계산이다. 다른 scope 끼리도 더하지 않는다 — 카운터도 한도도 별개다.
+    """
+    peaks = by_scope(rows)
+    if not peaks:
+        return ["관측 없음 — 아직 헤더를 한 번도 못 읽었다"]
+    lines = []
+    for sc, peak in sorted(peaks.items(), key=lambda kv: -kv[1]):
+        pct = peak / LIMIT_1M * 100
+        mark = "⚠️ 위험" if peak >= LIMIT_1M * WARN_RATIO else "여유"
+        lines.append(f"{sc:8} 최대 {peak}/{LIMIT_1M} weight ({pct:.0f}%) · {mark}")
+    return lines

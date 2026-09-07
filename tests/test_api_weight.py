@@ -46,10 +46,10 @@ def test_peak_is_recorded_and_persisted():
     api_weight.observe(100, service="collector", dir_path=d)
     api_weight.observe(2000, service="collector", dir_path=d)
     api_weight.observe(300, service="collector", dir_path=d)
-    with open(os.path.join(d, "collector.json"), encoding="utf-8") as f:
+    with open(os.path.join(d, "collector-mainnet.json"), encoding="utf-8") as f:
         rec = json.load(f)
     assert rec["peak"] == 2000 and rec["service"] == "collector"
-    assert rec["limit"] == api_weight.LIMIT_1M
+    assert rec["scope"] == api_weight.MAINNET and rec["limit"] == api_weight.LIMIT_1M
 
 
 def test_read_all_sorts_by_peak():
@@ -61,20 +61,50 @@ def test_read_all_sorts_by_peak():
     assert [r["service"] for r in rows] == ["trader", "collector"]
 
 
-def test_verdict_does_not_sum_services():
-    """★ 헤더 값은 이미 **IP 합산**이다. 서비스별로 더하면 이중 계산이 된다."""
-    rows = [{"peak": 1300}, {"peak": 1200}]
-    v = api_weight.verdict(rows)
+# ---- scope: 같은 프로세스가 두 호스트를 친다 ----
+
+def test_scopes_are_separate_counters():
+    """★ 트레이더는 주문을 테스트넷으로, 캔들을 메인넷으로 친다 — **별개 카운터**다.
+
+    처음엔 한 통에 섞어 담았고, 그래서 '트레이더 1407 vs 컬렉터 20' 이 모순처럼 보였다.
+    어느 호스트 것인지 모르는 숫자는 계측이 아니다.
+    """
+    d = tempfile.mkdtemp()
+    api_weight.observe(1400, scope=api_weight.TESTNET, service="trader", dir_path=d)
+    api_weight.observe(30, scope=api_weight.MAINNET, service="trader", dir_path=d)
+    assert api_weight.snapshot(api_weight.TESTNET)["peak"] == 1400
+    assert api_weight.snapshot(api_weight.MAINNET)["peak"] == 30
+    assert sorted(os.listdir(d)) == ["trader-mainnet.json", "trader-testnet.json"]
+
+
+def test_by_scope_never_merges_hosts():
+    rows = [{"scope": "testnet", "peak": 1400}, {"scope": "mainnet", "peak": 30}]
+    assert api_weight.by_scope(rows) == {"testnet": 1400, "mainnet": 30}
+
+
+def test_verdict_does_not_sum_services_within_a_scope():
+    """★ 같은 scope 안에선 헤더가 이미 IP 합산이다. 서비스별로 더하면 이중 계산이 된다."""
+    rows = [{"scope": "mainnet", "peak": 1300}, {"scope": "mainnet", "peak": 1200}]
+    v = "\n".join(api_weight.verdict(rows))
     assert "1300" in v and "2500" not in v
 
 
+def test_verdict_reports_each_scope_separately():
+    rows = [{"scope": "testnet", "peak": 1400}, {"scope": "mainnet", "peak": 30}]
+    v = api_weight.verdict(rows)
+    assert len(v) == 2
+    assert any("testnet" in l and "1400" in l for l in v)
+    assert any("mainnet" in l and "30" in l for l in v)
+
+
 def test_verdict_warns_near_limit():
-    assert "위험" in api_weight.verdict([{"peak": api_weight.LIMIT_1M // 2}])
-    assert "여유" in api_weight.verdict([{"peak": 10}])
+    hot = "\n".join(api_weight.verdict([{"peak": api_weight.LIMIT_1M // 2}]))
+    cool = "\n".join(api_weight.verdict([{"peak": 10}]))
+    assert "위험" in hot and "여유" in cool
 
 
 def test_verdict_says_unknown_when_never_observed():
-    assert "관측 없음" in api_weight.verdict([])
+    assert "관측 없음" in "".join(api_weight.verdict([]))
 
 
 def test_write_failure_never_raises():

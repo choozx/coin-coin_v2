@@ -196,10 +196,12 @@ def api_weight_section(dir_path):
     if not rows:
         print("  기록 없음 (아직 이 버전이 아니거나 요청이 없었음)")
         return
-    print(f"  {api_weight.verdict(rows)}")
-    # 서비스별로 더하지 않는다 — 헤더 값은 이미 IP 합산이라 더하면 이중 계산이다.
+    for line in api_weight.verdict(rows):
+        print(f"  {line}")
+    # 더하지 않는다 — 같은 scope 안에선 헤더가 이미 IP 합산이고, scope 끼리는 별개 카운터다.
     for r in rows:
-        print(f"    {str(r.get('service')):12} 최근 {r.get('last'):>5} · 최대 {r.get('peak'):>5}"
+        who = f"{r.get('service')}/{r.get('scope') or 'mainnet'}"
+        print(f"    {who:22} 최근 {r.get('last'):>5} · 최대 {r.get('peak'):>5}"
               f"  (최대 {_t(r.get('peakAt') or 0)} · 갱신 {_t(r.get('at') or 0)} UTC)")
 
 
