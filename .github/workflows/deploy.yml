@@ -49,17 +49,18 @@ jobs:
           cache-from: type=gha,scope=test-amd64
           cache-to: type=gha,mode=max,scope=test-amd64
       # 이미지엔 tests/ 도 pytest 도 없다(트레이더 런타임만 담는다). 그래서 이미지는
-      # 의존성 제공자로만 쓰고 소스는 통째로 마운트해 각 테스트의 자체 러너로 돌린다
-      # — 모든 tests/*.py 가 __main__ 러너를 갖고 있고 합계가 pytest 와 일치한다.
-      - name: 테스트 (136개)
+      # 의존성 제공자로만 쓰고, 소스를 마운트한 뒤 pytest 를 그 자리에서 설치해 돌린다.
+      #
+      # ★ 예전엔 `for f in tests/test_*.py; do python "$f"; done` 이었다. '모든 파일이
+      #   __main__ 러너를 갖는다'는 규약에 기댔는데, 러너가 없는 파일은 **아무것도 안 돌리고
+      #   0 으로 통과**한다. 실제로 12개 파일이 그 상태였고(로컬 pytest 292 vs CI 136),
+      #   회귀 테스트를 넣어도 CI 에선 안 돌고 있었다 — 게이트가 있는 척만 했다.
+      #   pytest 로 수집하면 규약을 기억할 필요도, 조용히 새는 구멍도 없다.
+      - name: 테스트 (pytest 전체 수집)
         run: |
           docker run --rm -v "$PWD:/src" -w /src coin-coin-test:ci sh -c '
-            fail=0
-            for f in tests/test_*.py; do
-              echo "── $f"
-              python "$f" || fail=1
-            done
-            exit $fail'
+            pip install --quiet --disable-pip-version-check pytest &&
+            python -m pytest tests/ -q'
 
   build-push:                   # ① Actions 러너에서 빌드 → ghcr에 push (EC2는 컴파일 안 함)
     needs: test                 # ★ 테스트가 통과해야만 이미지가 만들어진다
