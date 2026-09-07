@@ -25,6 +25,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY engine/ engine/
 COPY schema/ schema/
 COPY presets/ presets/
+# 운영 도구(report·maker_probe). 호스트엔 ccxt 가 없으므로 컨테이너 안에서 돌려야 한다:
+#   docker compose exec trader python -m tools.report
+#   docker compose exec trader python -m tools.maker_probe --n 10
+# 부수효과로 원장(SQLite WAL)도 컨테이너 안에서 읽게 돼 sudo 가 필요 없어진다.
+COPY tools/ tools/
 
 # 페이퍼 트레이딩 기본 실행. 프리셋·간격·잔고·알림은 환경변수로.
 #   PRESET          : 프리셋 JSON 경로 (presets/saved/... 또는 examples/...)
