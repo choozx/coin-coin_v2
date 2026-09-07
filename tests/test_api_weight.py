@@ -162,3 +162,74 @@ def test_charge_is_written_in_the_same_call_not_one_behind():
     with open(os.path.join(d, "trader-testnet.json"), encoding="utf-8") as f:
         rec = json.load(f)
     assert rec["endpoints"]["expensive"]["max"] == 800
+
+
+# ---- _Guarded 를 실제로 통과시켜 본다 ----
+
+class _FakeCCXT:
+    """ccxt 표면 흉내 — 헤더를 남기는 것만 진짜처럼."""
+
+    def __init__(self, weight):
+        self.last_response_headers = {"X-MBX-USED-WEIGHT-1M": str(weight)}
+        self.calls = []
+
+    def fetch_balance(self, *a, **k):
+        self.calls.append("fetch_balance")
+        return {"USDC": {"total": 100.0}}
+
+    def boom(self, *a, **k):
+        raise RuntimeError("네트워크 실패")
+
+
+class _FakeBrokerShell:
+    def __init__(self, testnet=True):
+        self.testnet, self.req_counts, self._banned_until = testnet, {}, 0
+
+    def raise_if_banned(self):
+        pass
+
+
+def _guarded(weight, testnet=True):
+    from engine.binance_broker import _Guarded
+    ex = _FakeCCXT(weight)
+    return _Guarded(ex, _FakeBrokerShell(testnet)), ex
+
+
+def test_guarded_records_weight_with_the_endpoint_name():
+    """★ 회귀: _record_weight 가 __getattr__ 의 지역변수 name 을 그냥 썼다 → 매 호출 NameError.
+
+    except 가 그걸 조용히 삼켜, 테스트넷 계측이 통째로 죽은 채 배포됐다. 단위 테스트는
+    api_weight 함수만 부르고 있어서 못 잡았다 — 래퍼를 실제로 통과시켜야 잡힌다.
+    """
+    api_weight.reset()
+    g, _ = _guarded(700)
+    g.fetch_balance()
+    assert api_weight.snapshot(api_weight.TESTNET)["last"] == 700
+    assert "fetch_balance" in api_weight.endpoints(api_weight.TESTNET)
+
+
+def test_guarded_records_weight_even_when_the_call_fails():
+    """밴 직전 응답이 제일 알고 싶은 값이다 — 실패해도 헤더는 남긴다(finally)."""
+    api_weight.reset()
+    g, _ = _guarded(2300)
+    try:
+        g.boom()
+    except RuntimeError:
+        pass
+    assert api_weight.snapshot(api_weight.TESTNET)["last"] == 2300
+
+
+def test_guarded_uses_mainnet_scope_when_not_testnet():
+    api_weight.reset()
+    g, _ = _guarded(120, testnet=False)
+    g.fetch_balance()
+    assert api_weight.snapshot(api_weight.MAINNET)["last"] == 120
+    assert api_weight.snapshot(api_weight.TESTNET)["last"] == 0
+
+
+def test_guarded_still_counts_requests():
+    """계측을 넣다가 기존 요청 카운트를 깨뜨리지 않았는지."""
+    api_weight.reset()
+    g, _ = _guarded(50)
+    g.fetch_balance()
+    assert g._b.req_counts["fetch_balance"] == 1

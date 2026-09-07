@@ -50,6 +50,9 @@ def _ban_until(e):
     return int(m.group(1)) if m else int(time.time() * 1000) + DEFAULT_BAN_MS
 
 
+_weight_warned = False       # weight 계측 실패 경고는 한 번만(폴링마다 찍으면 로그가 무의미해진다)
+
+
 class _Guarded:
     """ccxt 클라이언트 래퍼 — 밴을 감지해 기록하고, **밴 중에는 요청 자체를 안 보낸다.**
 
@@ -78,13 +81,18 @@ class _Guarded:
             finally:
                 # ★ 성공이든 실패든 헤더는 온다. 오히려 **밴 직전의 응답**이 제일 알고 싶은
                 #   값이라 finally 에서 읽는다. 요청 수는 우리 추정이고 이건 거래소의 정답이다.
-                self._record_weight()
+                self._record_weight(name)
         return call
 
-    def _record_weight(self) -> None:
+    def _record_weight(self, name: str) -> None:
         """ccxt 가 보관한 마지막 응답 헤더에서 IP 누적 weight 를 건진다.
 
-        ccxt 버전에 따라 이 속성이 없을 수 있고, 관찰이 매매를 막으면 안 되므로 전부 삼킨다.
+        ★ name 은 **인자로 받는다.** 처음엔 안 받고 __getattr__ 의 지역변수를 그냥 썼는데,
+        그건 여기서 정의돼 있지 않아 매 호출 NameError 였다. 아래 except 가 그걸 조용히
+        삼켜 테스트넷 계측이 통째로 죽은 채 배포됐고, 'testnet 기록이 안 늘어난다'로만 보였다.
+
+        관찰이 매매를 막으면 안 되므로 여전히 삼키되, **처음 한 번은 반드시 남긴다** —
+        조용한 실패가 이 프로젝트에서 반복해서 사고를 만들었다.
         """
         try:
             # scope 는 **이 브로커가 붙은 네트워크**다. 캔들(메인넷 urllib)과 카운터가
@@ -93,8 +101,11 @@ class _Guarded:
                 name,
                 api_weight.header_weight(getattr(self._ex, "last_response_headers", None)),
                 scope=api_weight.TESTNET if self._b.testnet else api_weight.MAINNET)
-        except Exception:
-            pass
+        except Exception as e:
+            global _weight_warned
+            if not _weight_warned:
+                _weight_warned = True
+                print(f"  [weight 계측 실패] {type(e).__name__}: {e} — 계측만 꺼집니다", flush=True)
 
 
 class ReduceOnlyFlat(Exception):
