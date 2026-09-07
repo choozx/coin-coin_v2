@@ -17,6 +17,13 @@ collector · dashboard · discordbot 이 함께 쓴다. 게다가 컬렉터는 c
 한 통에 섞어 담았는데, 그러면 1407 이라는 숫자가 어느 호스트 것인지 알 수 없어 계측을
 넣은 의미가 사라진다(컬렉터 20 vs 트레이더 1407 이 모순처럼 보이던 이유가 이것이다).
 
+⚠️ **ccxt 경로의 값은 믿지 않는다(2026-09-07 실측).** ccxt 의 `last_response_headers` 에서
+읽은 테스트넷 값이 1282~1806/2400 이라 '위험'을 계속 띄웠는데, 같은 시각 EC2 에서 직접
+친 `curl testnet.binancefuture.com/fapi/v1/time` 의 헤더는 **1~2** 였다. 즉 IP 는 놀고
+있었고 경보가 가짜였다. urllib 경로(binance_data)는 응답 헤더를 직접 읽으므로 실측과
+맞는다(메인넷 10~30). 그래서 기록은 계속하되 **source=ccxt 는 판정에서 뺀다** — 틀린 걸
+아는 지표로 경보를 울리면 계측이 없느니만 못하다. 원인 규명은 미해결.
+
 저장은 (서비스, scope) 별 파일로 나눈다(`data/api_weight/<service>-<scope>.json`).
 컨테이너가 다른 프로세스라 한 파일에 같이 쓰면 경합이 나는데, 각자 제 파일만 쓰면 경합
 자체가 없다. 읽는 쪽(tools/report.py)이 scope 별로 묶어 본다.
@@ -70,7 +77,11 @@ def header_weight(headers) -> int:
     return 0
 
 
-def observe(weight: int, *, scope: str = MAINNET, service: str = None,
+HTTP = "http"                # 응답 헤더 직독 — 실측과 일치, 신뢰
+CCXT = "ccxt"                # ccxt last_response_headers — 실측과 불일치, 미검증
+
+
+def observe(weight: int, *, scope: str = MAINNET, service: str = None, source: str = HTTP,
             dir_path: str = None, now: float = None) -> dict:
     """weight 한 건 관측. 0 이하는 '모름'이라 무시한다(피크를 0 으로 덮지 않게).
 
@@ -89,12 +100,12 @@ def observe(weight: int, *, scope: str = MAINNET, service: str = None,
         st["peakAt"] = st["at"]
     if fresh_peak or (now - _last_write.get(scope, 0.0)) >= WRITE_EVERY_S:
         _last_write[scope] = now
-        _write(service or service_name(), scope, dir_path or DEFAULT_DIR)
+        _write(service or service_name(), scope, source, dir_path or DEFAULT_DIR)
     return dict(st)
 
 
 def charge(label: str, weight: int, *, scope: str = MAINNET, service: str = None,
-           dir_path: str = None, now: float = None) -> int:
+           source: str = HTTP, dir_path: str = None, now: float = None) -> int:
     """엔드포인트 하나의 **비용**을 귀속시킨다. 반환: 직전 관측 대비 증가분.
 
     weight 헤더는 1분 누계라 값 하나로는 '누가 썼나'를 못 가른다. 우리 호출 **직전/직후의
@@ -119,7 +130,7 @@ def charge(label: str, weight: int, *, scope: str = MAINNET, service: str = None
         e["sum"] += delta
     # ★ 귀속을 **먼저** 갱신하고 나서 observe 한다. observe 안에서 파일을 쓰므로 순서가
     #   반대면 기록이 늘 한 박자 뒤처져, 방금 비싼 호출이 파일에 안 들어간다.
-    observe(weight, scope=scope, service=service, dir_path=dir_path, now=now)
+    observe(weight, scope=scope, service=service, source=source, dir_path=dir_path, now=now)
     return delta
 
 
@@ -138,14 +149,15 @@ def reset() -> None:
     _last_write.clear()
 
 
-def _write(service: str, scope: str, dir_path: str) -> None:
+def _write(service: str, scope: str, source: str, dir_path: str) -> None:
     """실패해도 절대 예외를 올리지 않는다 — 관찰이 매매를 멈추면 안 된다."""
     try:
         os.makedirs(dir_path, exist_ok=True)
         path = os.path.join(dir_path, f"{service}-{scope}.json")
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"service": service, "scope": scope, "limit": LIMIT_1M,
+            json.dump({"service": service, "scope": scope, "source": source,
+                       "limit": LIMIT_1M,
                        **_states[scope],
                        # 비싼 순 상위 8개만 — 파일이 커지면 매 10초 쓰기가 그 자체로 부하다.
                        "endpoints": dict(sorted((_endpoints.get(scope) or {}).items(),
@@ -179,10 +191,15 @@ def read_all(dir_path: str = None) -> list:
     return sorted(out, key=lambda r: -int(r.get("peak") or 0))
 
 
-def by_scope(rows) -> dict:
-    """scope -> 그 호스트의 최대 weight. **scope 를 넘어 합치면 안 된다**(별개 카운터)."""
+def by_scope(rows, trusted_only: bool = True) -> dict:
+    """scope -> 그 호스트의 최대 weight. **scope 를 넘어 합치면 안 된다**(별개 카운터).
+
+    trusted_only: source=ccxt 는 뺀다(모듈 주석의 2026-09-07 실측 참조).
+    """
     out = {}
     for r in rows:
+        if trusted_only and r.get("source") == CCXT:
+            continue
         sc = r.get("scope") or MAINNET
         out[sc] = max(out.get(sc, 0), int(r.get("peak") or 0))
     return out
@@ -196,6 +213,9 @@ def verdict(rows) -> list:
     """
     peaks = by_scope(rows)
     if not peaks:
+        untrusted = [r for r in rows if r.get("source") == CCXT]
+        if untrusted:
+            return ["신뢰 가능한 관측 없음 — ccxt 경로 값은 실측과 어긋나 판정에서 제외한다"]
         return ["관측 없음 — 아직 헤더를 한 번도 못 읽었다"]
     lines = []
     for sc, peak in sorted(peaks.items(), key=lambda kv: -kv[1]):

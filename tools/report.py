@@ -200,7 +200,8 @@ def api_weight_section(dir_path):
         print(f"  {line}")
     # 더하지 않는다 — 같은 scope 안에선 헤더가 이미 IP 합산이고, scope 끼리는 별개 카운터다.
     for r in rows:
-        who = f"{r.get('service')}/{r.get('scope') or 'mainnet'}"
+        tag = " [미검증]" if r.get("source") == "ccxt" else ""
+        who = f"{r.get('service')}/{r.get('scope') or 'mainnet'}{tag}"
         print(f"    {who:22} 최근 {r.get('last'):>5} · 최대 {r.get('peak'):>5}"
               f"  (최대 {_t(r.get('peakAt') or 0)} · 갱신 {_t(r.get('at') or 0)} UTC)")
         eps = r.get("endpoints") or {}

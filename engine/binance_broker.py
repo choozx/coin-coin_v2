@@ -100,7 +100,9 @@ class _Guarded:
             api_weight.charge(
                 name,
                 api_weight.header_weight(getattr(self._ex, "last_response_headers", None)),
-                scope=api_weight.TESTNET if self._b.testnet else api_weight.MAINNET)
+                scope=api_weight.TESTNET if self._b.testnet else api_weight.MAINNET,
+                # ★ 이 값은 실측과 어긋난다(2026-09-07) — 기록만 하고 경보엔 안 쓴다.
+                source=api_weight.CCXT)
         except Exception as e:
             global _weight_warned
             if not _weight_warned:

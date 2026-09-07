@@ -233,3 +233,41 @@ def test_guarded_still_counts_requests():
     g, _ = _guarded(50)
     g.fetch_balance()
     assert g._b.req_counts["fetch_balance"] == 1
+
+
+# ---- 틀린 걸 아는 지표로 경보를 울리지 않는다 ----
+
+def test_ccxt_source_is_excluded_from_verdict():
+    """★ 2026-09-07: ccxt 값이 1806/2400 '위험'을 계속 띄웠는데 curl 실측은 1~2 였다.
+
+    가짜 경보는 계측이 없느니만 못하다 — 그날 이 유령 하나를 쫓느라 시간을 썼다.
+    기록은 남기되(원인 미해결) 판정에서는 뺀다.
+    """
+    rows = [{"scope": "testnet", "peak": 1806, "source": api_weight.CCXT},
+            {"scope": "mainnet", "peak": 30, "source": api_weight.HTTP}]
+    v = "\n".join(api_weight.verdict(rows))
+    assert "1806" not in v and "위험" not in v
+    assert "30" in v
+
+
+def test_ccxt_rows_are_still_kept_for_debugging():
+    """판정에서 뺀다고 지우지는 않는다 — 원인 규명이 아직 남아 있다."""
+    rows = [{"scope": "testnet", "peak": 1806, "source": api_weight.CCXT}]
+    assert api_weight.by_scope(rows, trusted_only=False) == {"testnet": 1806}
+    assert "신뢰 가능한 관측 없음" in "".join(api_weight.verdict(rows))
+
+
+def test_guarded_marks_its_readings_as_ccxt():
+    """DEFAULT_DIR 은 임포트 시점에 확정된다 — env 를 나중에 바꿔도 안 먹으므로 상수를 갈아끼운다."""
+    api_weight.reset()
+    d = tempfile.mkdtemp()
+    orig = api_weight.DEFAULT_DIR
+    api_weight.DEFAULT_DIR = d
+    try:
+        g, _ = _guarded(500)
+        g.fetch_balance()
+        name = f"{api_weight.service_name()}-testnet.json"
+        with open(os.path.join(d, name), encoding="utf-8") as f:
+            assert json.load(f)["source"] == api_weight.CCXT
+    finally:
+        api_weight.DEFAULT_DIR = orig
