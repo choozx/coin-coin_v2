@@ -111,3 +111,54 @@ def test_write_failure_never_raises():
     """관찰이 매매를 멈추면 안 된다 — 쓰기 불가 경로에서도 조용히 넘어간다."""
     api_weight.observe(700, service="trader", dir_path="/proc/nope/nowhere")
     assert api_weight.snapshot()["peak"] == 700
+
+
+# ---- 엔드포인트 귀속: '누가 쓰는가' ----
+
+def test_charge_attributes_the_increase_to_the_call():
+    """호출 직전/직후 차이를 그 엔드포인트에 귀속시킨다 — 값 하나로는 범인을 못 가린다."""
+    d = tempfile.mkdtemp()
+    api_weight.charge("fetch_balance", 100, scope="testnet", dir_path=d, now=1000.0)
+    api_weight.charge("fetch_positions", 105, scope="testnet", dir_path=d, now=1001.0)
+    eps = api_weight.endpoints("testnet")
+    assert eps["fetch_positions"]["max"] == 5
+
+
+def test_charge_ignores_the_minute_rollover():
+    """★ 카운터는 매 분 0 으로 리셋된다. 그 경계의 음수 차이를 비용으로 세면 안 된다."""
+    d = tempfile.mkdtemp()
+    api_weight.charge("a", 2000, scope="testnet", dir_path=d, now=1000.0)
+    got = api_weight.charge("a", 12, scope="testnet", dir_path=d, now=1061.0)   # 다음 분
+    assert got == 0
+    assert api_weight.endpoints("testnet")["a"]["max"] == 0
+
+
+def test_charge_still_tracks_peak():
+    """귀속을 넣어도 피크 관측은 그대로여야 한다."""
+    d = tempfile.mkdtemp()
+    api_weight.charge("a", 300, scope="testnet", dir_path=d)
+    api_weight.charge("b", 90, scope="testnet", dir_path=d)
+    assert api_weight.snapshot("testnet")["peak"] == 300
+
+
+def test_read_all_drops_pre_scope_records():
+    """★ scope 도입 전 파일은 테스트넷·메인넷이 섞인 값이다 — 보여주면 없는 위험을 만든다.
+
+    실제로 배포 직후 옛 trader.json 이 남아 '메인넷 1791/2400 위험'이라는 유령이 나왔다.
+    """
+    d = tempfile.mkdtemp()
+    with open(os.path.join(d, "trader.json"), "w", encoding="utf-8") as f:
+        json.dump({"service": "trader", "peak": 1791, "last": 20}, f)     # scope 없음
+    api_weight.charge("x", 30, scope="mainnet", service="trader", dir_path=d)
+    rows = api_weight.read_all(d)
+    assert [r["peak"] for r in rows] == [30]
+
+
+def test_charge_is_written_in_the_same_call_not_one_behind():
+    """★ 귀속을 observe 뒤에 하면 기록이 한 박자 뒤처져, 방금 비싼 호출이 파일에 안 들어간다."""
+    d = tempfile.mkdtemp()
+    api_weight.charge("cheap", 100, scope="testnet", service="trader", dir_path=d, now=1000.0)
+    api_weight.charge("expensive", 900, scope="testnet", service="trader", dir_path=d, now=1001.0)
+    with open(os.path.join(d, "trader-testnet.json"), encoding="utf-8") as f:
+        rec = json.load(f)
+    assert rec["endpoints"]["expensive"]["max"] == 800

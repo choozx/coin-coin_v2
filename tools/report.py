@@ -203,6 +203,11 @@ def api_weight_section(dir_path):
         who = f"{r.get('service')}/{r.get('scope') or 'mainnet'}"
         print(f"    {who:22} 최근 {r.get('last'):>5} · 최대 {r.get('peak'):>5}"
               f"  (최대 {_t(r.get('peakAt') or 0)} · 갱신 {_t(r.get('at') or 0)} UTC)")
+        eps = r.get("endpoints") or {}
+        for label, e in sorted(eps.items(), key=lambda kv: -(kv[1].get("max") or 0))[:5]:
+            n, mx = e.get("n") or 0, e.get("max") or 0
+            avg = (e.get("sum") or 0) / n if n else 0
+            print(f"      {label:34} {n:>5}회 · 호출당 평균 {avg:6.1f} · 최대 {mx:>5}")
 
 
 def main():

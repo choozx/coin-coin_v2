@@ -40,6 +40,7 @@ MAINNET = "mainnet"
 TESTNET = "testnet"
 
 _states = {}                 # scope -> {"last","peak","peakAt","at"}
+_endpoints = {}              # scope -> {label: {"n","max","sum"}}  누가 비싼가
 _last_write = {}             # scope -> epoch초
 
 
@@ -92,6 +93,40 @@ def observe(weight: int, *, scope: str = MAINNET, service: str = None,
     return dict(st)
 
 
+def charge(label: str, weight: int, *, scope: str = MAINNET, service: str = None,
+           dir_path: str = None, now: float = None) -> int:
+    """엔드포인트 하나의 **비용**을 귀속시킨다. 반환: 직전 관측 대비 증가분.
+
+    weight 헤더는 1분 누계라 값 하나로는 '누가 썼나'를 못 가른다. 우리 호출 **직전/직후의
+    차이**를 그 호출에 귀속시키면 어느 엔드포인트가 비싼지 바로 보인다.
+
+    ⚠️ 같은 IP 의 다른 프로세스가 그 사이에 쓴 것도 이 차이에 섞인다 — 그래서 이건 정밀
+    측정이 아니라 **용의자 지목**이다. 한 엔드포인트에만 큰 값이 몰리면 그게 범인이고,
+    전부에 고르게 퍼져 있으면 범인은 우리가 아니라 밖에 있다. 그 구별이 목적이다.
+    """
+    st = _states.get(scope) or {}
+    prev, prev_at = int(st.get("last") or 0), int(st.get("at") or 0)
+    now = time.time() if now is None else now
+    w = int(weight or 0)
+    delta = 0
+    if w > 0 and label:
+        # 분이 바뀌면 카운터가 0 으로 리셋된다 → 그 경계의 음수 차이는 버린다(비용이 아니다).
+        same_minute = prev > 0 and w >= prev and (now * 1000 - prev_at) < 60_000
+        delta = w - prev if same_minute else 0
+        e = _endpoints.setdefault(scope, {}).setdefault(label, {"n": 0, "max": 0, "sum": 0})
+        e["n"] += 1
+        e["max"] = max(e["max"], delta)
+        e["sum"] += delta
+    # ★ 귀속을 **먼저** 갱신하고 나서 observe 한다. observe 안에서 파일을 쓰므로 순서가
+    #   반대면 기록이 늘 한 박자 뒤처져, 방금 비싼 호출이 파일에 안 들어간다.
+    observe(weight, scope=scope, service=service, dir_path=dir_path, now=now)
+    return delta
+
+
+def endpoints(scope: str = MAINNET) -> dict:
+    return {k: dict(v) for k, v in (_endpoints.get(scope) or {}).items()}
+
+
 def snapshot(scope: str = MAINNET) -> dict:
     return dict(_states.get(scope) or {"last": 0, "peak": 0, "peakAt": 0, "at": 0})
 
@@ -99,6 +134,7 @@ def snapshot(scope: str = MAINNET) -> dict:
 def reset() -> None:
     """테스트용 — 모듈 전역을 초기 상태로."""
     _states.clear()
+    _endpoints.clear()
     _last_write.clear()
 
 
@@ -110,7 +146,10 @@ def _write(service: str, scope: str, dir_path: str) -> None:
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump({"service": service, "scope": scope, "limit": LIMIT_1M,
-                       **_states[scope]}, f)
+                       **_states[scope],
+                       # 비싼 순 상위 8개만 — 파일이 커지면 매 10초 쓰기가 그 자체로 부하다.
+                       "endpoints": dict(sorted((_endpoints.get(scope) or {}).items(),
+                                                key=lambda kv: -kv[1]["max"])[:8])}, f)
         os.replace(tmp, path)
     except Exception:
         pass
@@ -129,9 +168,14 @@ def read_all(dir_path: str = None) -> list:
             continue
         try:
             with open(os.path.join(dir_path, name), encoding="utf-8") as f:
-                out.append(json.load(f))
+                rec = json.load(f)
         except Exception:
             continue
+        # scope 도입 전에 쓰인 파일은 테스트넷·메인넷이 **섞인** 값이라 해석이 불가능하다.
+        # mainnet 으로 간주해 보여주면 있지도 않은 '메인넷 75% 위험'이 만들어진다 → 버린다.
+        if not rec.get("scope"):
+            continue
+        out.append(rec)
     return sorted(out, key=lambda r: -int(r.get("peak") or 0))
 
 

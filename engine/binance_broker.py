@@ -89,7 +89,8 @@ class _Guarded:
         try:
             # scope 는 **이 브로커가 붙은 네트워크**다. 캔들(메인넷 urllib)과 카운터가
             # 별개라 섞으면 두 숫자 다 못 읽는 값이 된다.
-            api_weight.observe(
+            api_weight.charge(
+                name,
                 api_weight.header_weight(getattr(self._ex, "last_response_headers", None)),
                 scope=api_weight.TESTNET if self._b.testnet else api_weight.MAINNET)
         except Exception:
