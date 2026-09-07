@@ -21,6 +21,7 @@ import json
 import os
 import sqlite3
 import statistics
+import sys
 from datetime import datetime, timezone
 
 
@@ -185,6 +186,23 @@ def fills(path):
             print(f"    지정가 재시도  평균 {statistics.mean(orders):.1f}회 · 최대 {max(orders)}회")
 
 
+def api_weight_section(dir_path):
+    """IP 누적 weight — 밴은 요청 수가 아니라 이걸로 난다."""
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from engine import api_weight
+
+    print(f"\n=== API weight {dir_path} ===")
+    rows = api_weight.read_all(dir_path)
+    if not rows:
+        print("  기록 없음 (아직 이 버전이 아니거나 요청이 없었음)")
+        return
+    print(f"  {api_weight.verdict(rows)}")
+    # 서비스별로 더하지 않는다 — 헤더 값은 이미 IP 합산이라 더하면 이중 계산이다.
+    for r in rows:
+        print(f"    {str(r.get('service')):12} 최근 {r.get('last'):>5} · 최대 {r.get('peak'):>5}"
+              f"  (최대 {_t(r.get('peakAt') or 0)} · 갱신 {_t(r.get('at') or 0)} UTC)")
+
+
 def main():
     ap = argparse.ArgumentParser(description="운영 현황 한 장(원장·진입 판정·체결 실측)")
     ap.add_argument("--data", default="data", help="데이터 디렉터리(기본 data)")
@@ -194,6 +212,7 @@ def main():
     ledger(os.path.join(a.data, "trades.db"), a.mode)
     entry(os.path.join(a.data, "entry_log.jsonl"))
     fills(os.path.join(a.data, "fill_log.jsonl"))
+    api_weight_section(os.path.join(a.data, "api_weight"))
     print()
 
 

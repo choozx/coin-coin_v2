@@ -14,6 +14,7 @@ import tempfile
 _tmp = tempfile.mkdtemp()
 os.environ.setdefault("ENTRY_LOG_PATH", os.path.join(_tmp, "entry_log.jsonl"))
 os.environ.setdefault("FILL_LOG_PATH", os.path.join(_tmp, "fill_log.jsonl"))
+os.environ.setdefault("API_WEIGHT_DIR", os.path.join(_tmp, "api_weight"))
 
 # control/settings/state 도 여기서 격리한다. 이 경로들은 **모듈 로드 시점**에 확정돼 함수
 # 기본인자로 묶이므로(나중에 상수를 바꿔도 안 먹는다) engine.* 이 임포트되기 전에 심어야 한다.

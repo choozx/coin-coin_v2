@@ -20,6 +20,8 @@ services:
     command: >
       sh -c "python -m engine.live \"$PRESET\" ${TRADE_MODE:---paper} --interval \"$INTERVAL\" --equity \"$EQUITY\""
     environment:
+      SERVICE_NAME: trader                # api_weight 기록 파일명(누가 얼마나 썼나)
+      API_WEIGHT_DIR: /app/data/api_weight
       PRESET: ${PRESET:-presets/examples/rsi-oversold-long.json}
       INTERVAL: ${INTERVAL:-60}
       EQUITY: ${EQUITY:-10000}
@@ -79,6 +81,8 @@ services:
     mem_reservation: 120m
     command: python -m engine.dashboard --port 8080
     environment:
+      SERVICE_NAME: dashboard                # api_weight 기록 파일명(누가 얼마나 썼나)
+      API_WEIGHT_DIR: /app/data/api_weight
       STATE_PATH: /app/data/state.json      # trader가 기록한 상태를 읽음
       CONTROL_PATH: /app/data/control.json  # 멈춤/재개 제어 파일
       LEDGER_PATH: /app/data/trades.db      # 매매 원장 읽기(이력·통계·거래별 차트)
@@ -105,6 +109,8 @@ services:
     command: >
       sh -c "python -m engine.collector $COLLECT_SYMBOLS --loop \"$INTERVAL\" --start-running"
     environment:
+      SERVICE_NAME: collector                # api_weight 기록 파일명(누가 얼마나 썼나)
+      API_WEIGHT_DIR: /app/data/api_weight
       COLLECT_SYMBOLS: ${COLLECT_SYMBOLS:-BTCUSDC}
       INTERVAL: ${INTERVAL:-60}
       CONTROL_PATH: /app/data/control.json  # 대시보드의 멈춤/재개 신호를 읽음
@@ -122,6 +128,8 @@ services:
     mem_reservation: 80m
     command: python -m engine.discord_bot
     environment:
+      SERVICE_NAME: discordbot                # api_weight 기록 파일명(누가 얼마나 썼나)
+      API_WEIGHT_DIR: /app/data/api_weight
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}          # 봇 토큰(없으면 기동 실패 — 켜려면 필수)
       DISCORD_GUILD_ID: ${DISCORD_GUILD_ID:-}            # 이 서버에만 명령 등록 → 즉시 반영
       DISCORD_ALLOWED_USER_IDS: ${DISCORD_ALLOWED_USER_IDS:-}   # 콤마구분 유저ID(비면 전원 거부)
@@ -148,6 +156,8 @@ services:
     mem_reservation: 32m
     command: python -m engine.watchdog
     environment:
+      SERVICE_NAME: watchdog                # api_weight 기록 파일명(누가 얼마나 썼나)
+      API_WEIGHT_DIR: /app/data/api_weight
       STATE_PATH: /app/data/state.json      # trader 가 남기는 상태 — 이 updatedAt 을 감시
       WATCHDOG_STALE_SEC: ${WATCHDOG_STALE_SEC:-600}       # 무갱신 몇 초면 '멈춤'(기본 10분)
       WATCHDOG_INTERVAL_SEC: ${WATCHDOG_INTERVAL_SEC:-120} # 확인 주기

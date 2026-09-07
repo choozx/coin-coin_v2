@@ -18,6 +18,8 @@ import re
 import time
 from dataclasses import dataclass, field
 
+from . import api_weight
+
 
 class RateLimited(Exception):
     """바이낸스가 IP 를 레이트리밋으로 밴했다. until_ms 까지는 **요청을 보내면 안 된다.**
@@ -73,7 +75,22 @@ class _Guarded:
                     self._b._banned_until = until
                     raise RateLimited(until, str(e))
                 raise
+            finally:
+                # ★ 성공이든 실패든 헤더는 온다. 오히려 **밴 직전의 응답**이 제일 알고 싶은
+                #   값이라 finally 에서 읽는다. 요청 수는 우리 추정이고 이건 거래소의 정답이다.
+                self._record_weight()
         return call
+
+    def _record_weight(self) -> None:
+        """ccxt 가 보관한 마지막 응답 헤더에서 IP 누적 weight 를 건진다.
+
+        ccxt 버전에 따라 이 속성이 없을 수 있고, 관찰이 매매를 막으면 안 되므로 전부 삼킨다.
+        """
+        try:
+            api_weight.observe(api_weight.header_weight(
+                getattr(self._ex, "last_response_headers", None)))
+        except Exception:
+            pass
 
 
 class ReduceOnlyFlat(Exception):

@@ -14,6 +14,7 @@ import urllib.error
 
 import numpy as np
 
+from . import api_weight
 from .candles import Candles, MINUTE_MS
 
 BASE = "https://fapi.binance.com/fapi/v1/klines"
@@ -36,6 +37,9 @@ def _get(symbol: str, interval: str, start_ms: int, end_ms: int, limit: int, ret
         req = urllib.request.Request(url, headers={"User-Agent": "auto-trading/0.1"})
         try:
             with urllib.request.urlopen(req, timeout=20) as resp:
+                # ★ 밴 판정에 쓰이는 IP 누적 weight 를 여기서 건진다(api_weight 주석 참조).
+                #   컬렉터는 ccxt 를 안 쓰므로 이 경로가 유일한 관측점이다.
+                api_weight.observe(api_weight.header_weight(resp.headers))
                 return json.loads(resp.read())
         except urllib.error.HTTPError as e:
             # 429=레이트리밋, 418=밴. Retry-After 존중하고 백오프.
