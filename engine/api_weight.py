@@ -17,6 +17,23 @@ collector · dashboard · discordbot 이 함께 쓴다. 게다가 컬렉터는 c
 한 통에 섞어 담았는데, 그러면 1407 이라는 숫자가 어느 호스트 것인지 알 수 없어 계측을
 넣은 의미가 사라진다(컬렉터 20 vs 트레이더 1407 이 모순처럼 보이던 이유가 이것이다).
 
+⚠️ **비공개 엔드포인트의 weight 값은 IP 누계가 아니다(2026-09-08 증명).** 같은 분 안에서
+연달아 재보니 이렇게 나왔다:
+
+    fetch_time      2      ← 공개. 1씩 정상 증가
+    fetch_balance   621    ← 비공개
+    fetch_time      3
+    fetch_positions 591    ← 621 보다 **작다**
+    fetch_time      5
+
+**1분 누계 카운터는 줄어들 수 없다.** 621 다음 591 은 그 값이 우리 IP 의 누계가 아니라는
+증거다(테스트넷 비공개 엔드포인트가 공유 카운터 비슷한 걸 돌려준다). 공개 엔드포인트 계열
+2→3→5 가 진짜이고, 즉 **우리 실제 사용량은 한도 2400 의 0.2% 다.**
+
+그래서 이제 신뢰 판정을 사람이 안 한다 — **불가능한 감소를 관측하면 그 계열을 자동으로
+미검증 처리한다**(`_impossible_drop`). 오늘 이 판단을 두 번 뒤집었고, 두 번 다 근거가
+"그럴 것 같다"였다. 반증 가능한 성질 하나를 코드가 직접 검사하게 두는 편이 낫다.
+
 ⚠️ **ccxt 경로의 값은 믿지 않는다(2026-09-07 실측).** ccxt 의 `last_response_headers` 에서
 읽은 테스트넷 값이 1282~1806/2400 이라 '위험'을 계속 띄웠는데, 같은 시각 EC2 에서 직접
 친 `curl testnet.binancefuture.com/fapi/v1/time` 의 헤더는 **1~2** 였다. 즉 IP 는 놀고
@@ -36,12 +53,17 @@ import time
 
 # USDⓈ-M 선물 IP 한도(2026 기준). 넘으면 429 → 계속되면 418(밴).
 LIMIT_1M = 2400
+# 주문 개수는 **별도 한도**다(분당 1200). weight 가 멀쩡해도 여기서 밴이 난다 —
+# maker 추격은 '지정가 넣고 취소'를 반복하므로 체결 1회에 주문이 5~8건씩 나간다.
+# -1003 은 둘 중 무엇이 넘쳐도 같은 코드로 오기 때문에, 안 보면 원인을 영영 못 가른다.
+ORDER_LIMIT_1M = 1200
 WARN_RATIO = 0.5             # 이 비율을 넘으면 '위험'으로 표시한다(여유를 두고 본다)
 
 DEFAULT_DIR = os.environ.get("API_WEIGHT_DIR", "data/api_weight")
 WRITE_EVERY_S = 10.0         # 매 요청마다 파일을 쓰면 그게 또 부하다 — 피크 갱신 or 주기적으로만
 
 _HEADER = "x-mbx-used-weight-1m"
+_ORDER_HEADER = "x-mbx-order-count-1m"
 
 MAINNET = "mainnet"
 TESTNET = "testnet"
@@ -56,11 +78,11 @@ def service_name() -> str:
     return os.environ.get("SERVICE_NAME") or "unknown"
 
 
-def header_weight(headers) -> int:
-    """응답 헤더에서 누적 weight 를 뽑는다. 없으면 0.
+def _header_int(headers, name: str) -> int:
+    """헤더에서 정수 하나. 없으면 0 = '이번엔 모른다'이지 '0 을 썼다'가 아니다.
 
-    헤더 이름의 대소문자는 서버·클라이언트마다 다르다(urllib 은 원본, ccxt 는 제각각) →
-    항상 소문자로 맞춰 찾는다. 못 찾으면 0 = '이번엔 모른다'이지 '0 을 썼다'가 아니다.
+    이름의 대소문자는 클라이언트마다 다르다(urllib 은 원본, ccxt 는 CaseInsensitiveDict) →
+    소문자로 맞춰 찾는다.
     """
     if not headers:
         return 0
@@ -69,7 +91,7 @@ def header_weight(headers) -> int:
     except AttributeError:
         return 0
     for k, v in items:
-        if str(k).lower() == _HEADER:
+        if str(k).lower() == name:
             try:
                 return int(v)
             except (TypeError, ValueError):
@@ -77,35 +99,72 @@ def header_weight(headers) -> int:
     return 0
 
 
+def header_weight(headers) -> int:
+    return _header_int(headers, _HEADER)
+
+
+def header_order_count(headers) -> int:
+    """분당 주문 개수 누계. **주문 엔드포인트에서만** 온다(조회 응답엔 없다)."""
+    return _header_int(headers, _ORDER_HEADER)
+
+
+def _impossible_drop(prev: int, new: int, elapsed_s: float) -> bool:
+    """1분 누계 카운터가 **줄어들 수 없는데 줄었는가.**
+
+    분이 바뀌면 0 근처로 리셋되므로 그건 감소가 아니다 — 리셋이면 new 가 아주 작다.
+    짧은 간격에 '조금' 줄었다면 그 값은 애초에 우리 누계가 아니다(2026-09-08: 621 → 591).
+    """
+    return prev > 0 and new < prev and elapsed_s < 5.0 and new > prev * 0.5
+
+
 HTTP = "http"                # 응답 헤더 직독 — 실측과 일치, 신뢰
 CCXT = "ccxt"                # ccxt last_response_headers — 실측과 불일치, 미검증
 
 
-def observe(weight: int, *, scope: str = MAINNET, service: str = None, source: str = HTTP,
-            dir_path: str = None, now: float = None) -> dict:
-    """weight 한 건 관측. 0 이하는 '모름'이라 무시한다(피크를 0 으로 덮지 않게).
+def _blank() -> dict:
+    return {"last": 0, "peak": 0, "peakAt": 0, "at": 0,
+            "orderLast": 0, "orderPeak": 0, "orderPeakAt": 0,
+            "sane": True}          # 불가능한 감소를 보면 False → 판정에서 빠진다
+
+
+def observe(weight: int, *, orders: int = 0, scope: str = MAINNET, service: str = None,
+            source: str = HTTP, dir_path: str = None, now: float = None) -> dict:
+    """weight·주문수 관측. 0 이하는 '모름'이라 무시한다(피크를 0 으로 덮지 않게).
 
     scope = 어느 호스트의 카운터인가. 섞으면 숫자가 무의미해진다(모듈 주석 참조).
     """
-    st = _states.setdefault(scope, {"last": 0, "peak": 0, "peakAt": 0, "at": 0})
-    w = int(weight or 0)
-    if w <= 0:
+    st = _states.setdefault(scope, _blank())
+    w, oc = int(weight or 0), int(orders or 0)
+    if w <= 0 and oc <= 0:
         return dict(st)
     now = time.time() if now is None else now
-    st["last"] = w
-    st["at"] = int(now * 1000)
-    fresh_peak = w > st["peak"]
-    if fresh_peak:
-        st["peak"] = w
-        st["peakAt"] = st["at"]
-    if fresh_peak or (now - _last_write.get(scope, 0.0)) >= WRITE_EVERY_S:
+    at = int(now * 1000)
+    changed = False
+    if w > 0:
+        # ★ 줄어들 수 없는 값이 줄면 그 계열은 우리 누계가 아니다 → 스스로 미검증 처리.
+        if _impossible_drop(st["last"], w, (at - st["at"]) / 1000.0 if st["at"] else 1e9):
+            if st["sane"]:
+                print(f"  [weight] 불가능한 감소 {st['last']}→{w} ({scope}) — "
+                      f"이 계열은 IP 누계가 아닙니다. 판정에서 제외합니다.", flush=True)
+                changed = True          # ★ 상태 전이는 즉시 기록. 안 그러면 파일이 계속
+                #                          sane=True 라 판정에서 안 빠진다(잡을 이유가 없어진다).
+            st["sane"] = False
+        st["last"], st["at"] = w, at
+        if w > st["peak"]:
+            st["peak"], st["peakAt"], changed = w, at, True
+    if oc > 0:
+        st["orderLast"], st["at"] = oc, at
+        if oc > st["orderPeak"]:
+            st["orderPeak"], st["orderPeakAt"], changed = oc, at, True
+    if changed or (now - _last_write.get(scope, 0.0)) >= WRITE_EVERY_S:
         _last_write[scope] = now
         _write(service or service_name(), scope, source, dir_path or DEFAULT_DIR)
     return dict(st)
 
 
-def charge(label: str, weight: int, *, scope: str = MAINNET, service: str = None,
-           source: str = HTTP, dir_path: str = None, now: float = None) -> int:
+def charge(label: str, weight: int, *, orders: int = 0, scope: str = MAINNET,
+           service: str = None, source: str = HTTP, dir_path: str = None,
+           now: float = None) -> int:
     """엔드포인트 하나의 **비용**을 귀속시킨다. 반환: 직전 관측 대비 증가분.
 
     weight 헤더는 1분 누계라 값 하나로는 '누가 썼나'를 못 가른다. 우리 호출 **직전/직후의
@@ -130,7 +189,8 @@ def charge(label: str, weight: int, *, scope: str = MAINNET, service: str = None
         e["sum"] += delta
     # ★ 귀속을 **먼저** 갱신하고 나서 observe 한다. observe 안에서 파일을 쓰므로 순서가
     #   반대면 기록이 늘 한 박자 뒤처져, 방금 비싼 호출이 파일에 안 들어간다.
-    observe(weight, scope=scope, service=service, source=source, dir_path=dir_path, now=now)
+    observe(weight, orders=orders, scope=scope, service=service, source=source,
+            dir_path=dir_path, now=now)
     return delta
 
 
@@ -139,7 +199,7 @@ def endpoints(scope: str = MAINNET) -> dict:
 
 
 def snapshot(scope: str = MAINNET) -> dict:
-    return dict(_states.get(scope) or {"last": 0, "peak": 0, "peakAt": 0, "at": 0})
+    return dict(_states.get(scope) or _blank())
 
 
 def reset() -> None:
@@ -157,7 +217,7 @@ def _write(service: str, scope: str, source: str, dir_path: str) -> None:
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump({"service": service, "scope": scope, "source": source,
-                       "limit": LIMIT_1M,
+                       "limit": LIMIT_1M, "orderLimit": ORDER_LIMIT_1M,
                        **_states[scope],
                        # 비싼 순 상위 8개만 — 파일이 커지면 매 10초 쓰기가 그 자체로 부하다.
                        "endpoints": dict(sorted((_endpoints.get(scope) or {}).items(),
@@ -198,7 +258,8 @@ def by_scope(rows, trusted_only: bool = True) -> dict:
     """
     out = {}
     for r in rows:
-        if trusted_only and r.get("source") == CCXT:
+        # source=ccxt 는 경로가 미검증, sane=False 는 데이터가 스스로 증명한 불신.
+        if trusted_only and (r.get("source") == CCXT or r.get("sane") is False):
             continue
         sc = r.get("scope") or MAINNET
         out[sc] = max(out.get(sc, 0), int(r.get("peak") or 0))
@@ -212,14 +273,21 @@ def verdict(rows) -> list:
     더하면 이중 계산이다. 다른 scope 끼리도 더하지 않는다 — 카운터도 한도도 별개다.
     """
     peaks = by_scope(rows)
-    if not peaks:
-        untrusted = [r for r in rows if r.get("source") == CCXT]
-        if untrusted:
-            return ["신뢰 가능한 관측 없음 — ccxt 경로 값은 실측과 어긋나 판정에서 제외한다"]
-        return ["관측 없음 — 아직 헤더를 한 번도 못 읽었다"]
     lines = []
+    if not peaks:
+        # weight 계열이 전부 미검증이어도 **주문수는 따로 센다** — 다른 헤더, 다른 한도이고
+        # 이쪽이 오히려 밴의 유력 후보다. 여기서 같이 return 해버리면 그걸 놓친다.
+        lines.append("신뢰 가능한 weight 관측 없음"
+                     if rows else "관측 없음 — 아직 헤더를 한 번도 못 읽었다")
     for sc, peak in sorted(peaks.items(), key=lambda kv: -kv[1]):
         pct = peak / LIMIT_1M * 100
         mark = "⚠️ 위험" if peak >= LIMIT_1M * WARN_RATIO else "여유"
         lines.append(f"{sc:8} 최대 {peak}/{LIMIT_1M} weight ({pct:.0f}%) · {mark}")
+    # 주문수는 **별도 한도**라 따로 본다. weight 가 여유여도 여기서 밴이 난다.
+    # 출처와 무관하게 센다 — 주문 헤더는 주문 엔드포인트에서만 오고, 그 값이 곧 사실이다.
+    oc = max([int(r.get("orderPeak") or 0) for r in rows] or [0])
+    if oc > 0:
+        pct = oc / ORDER_LIMIT_1M * 100
+        mark = "⚠️ 위험" if oc >= ORDER_LIMIT_1M * WARN_RATIO else "여유"
+        lines.append(f"{'주문수':8} 최대 {oc}/{ORDER_LIMIT_1M} 건/분 ({pct:.0f}%) · {mark}")
     return lines

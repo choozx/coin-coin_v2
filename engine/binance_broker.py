@@ -97,11 +97,17 @@ class _Guarded:
         try:
             # scope 는 **이 브로커가 붙은 네트워크**다. 캔들(메인넷 urllib)과 카운터가
             # 별개라 섞으면 두 숫자 다 못 읽는 값이 된다.
+            h = getattr(self._ex, "last_response_headers", None)
             api_weight.charge(
                 name,
-                api_weight.header_weight(getattr(self._ex, "last_response_headers", None)),
+                api_weight.header_weight(h),
+                # 주문수는 **주문 엔드포인트에서만** 오는 별도 한도(분당 1200)다.
+                # maker 추격은 '지정가 넣고 취소'를 반복해 체결 1회에 5~8건이 나간다 —
+                # weight 가 멀쩡해도 여기서 -1003 이 날 수 있고, 지금껏 안 보고 있었다.
+                orders=api_weight.header_order_count(h),
                 scope=api_weight.TESTNET if self._b.testnet else api_weight.MAINNET,
-                # ★ 이 값은 실측과 어긋난다(2026-09-07) — 기록만 하고 경보엔 안 쓴다.
+                # ★ weight 는 미검증 경로다(비공개 엔드포인트 값이 감소한다 — 모듈 주석).
+                #   주문수는 그 문제와 무관하므로 판정에 쓴다.
                 source=api_weight.CCXT)
         except Exception as e:
             global _weight_warned

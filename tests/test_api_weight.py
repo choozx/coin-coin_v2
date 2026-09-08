@@ -254,7 +254,7 @@ def test_ccxt_rows_are_still_kept_for_debugging():
     """판정에서 뺀다고 지우지는 않는다 — 원인 규명이 아직 남아 있다."""
     rows = [{"scope": "testnet", "peak": 1806, "source": api_weight.CCXT}]
     assert api_weight.by_scope(rows, trusted_only=False) == {"testnet": 1806}
-    assert "신뢰 가능한 관측 없음" in "".join(api_weight.verdict(rows))
+    assert "신뢰 가능한 weight 관측 없음" in "".join(api_weight.verdict(rows))
 
 
 def test_guarded_marks_its_readings_as_ccxt():
@@ -271,3 +271,77 @@ def test_guarded_marks_its_readings_as_ccxt():
             assert json.load(f)["source"] == api_weight.CCXT
     finally:
         api_weight.DEFAULT_DIR = orig
+
+
+# ---- 불가능한 감소: 계측이 스스로 신뢰도를 판정한다 ----
+
+def test_impossible_drop_marks_the_series_insane():
+    """★ 2026-09-08 실측: 621 → 591. **1분 누계는 줄어들 수 없다.**
+
+    줄었다면 그 값은 우리 IP 누계가 아니다(테스트넷 비공개 엔드포인트가 공유 카운터를
+    돌려준다). 이 판단을 하루에 두 번 뒤집었고 두 번 다 근거가 '그럴 것 같다'였다 —
+    반증 가능한 성질 하나를 코드가 직접 검사하게 둔다.
+    """
+    api_weight.reset()
+    d = tempfile.mkdtemp()
+    api_weight.observe(621, scope="testnet", service="t", dir_path=d, now=1000.0)
+    api_weight.observe(591, scope="testnet", service="t", dir_path=d, now=1002.0)
+    assert api_weight.snapshot("testnet")["sane"] is False
+
+
+def test_minute_rollover_is_not_a_drop():
+    """분이 바뀌면 0 근처로 리셋된다 — 그건 감소가 아니다(정상 계열을 죽이면 안 된다)."""
+    api_weight.reset()
+    d = tempfile.mkdtemp()
+    api_weight.observe(2000, scope="mainnet", service="t", dir_path=d, now=1000.0)
+    api_weight.observe(3, scope="mainnet", service="t", dir_path=d, now=1002.0)
+    assert api_weight.snapshot("mainnet")["sane"] is True
+
+
+def test_insane_series_is_persisted_immediately():
+    """★ 상태 전이를 바로 안 쓰면 파일이 계속 sane=True 라 판정에서 안 빠진다."""
+    api_weight.reset()
+    d = tempfile.mkdtemp()
+    api_weight.observe(621, scope="testnet", service="t", dir_path=d, now=1000.0)
+    api_weight.observe(591, scope="testnet", service="t", dir_path=d, now=1002.0)
+    with open(os.path.join(d, "t-testnet.json"), encoding="utf-8") as f:
+        assert json.load(f)["sane"] is False
+
+
+def test_insane_series_is_excluded_from_verdict():
+    rows = [{"scope": "testnet", "peak": 4444, "source": api_weight.HTTP, "sane": False},
+            {"scope": "mainnet", "peak": 30, "source": api_weight.HTTP, "sane": True}]
+    v = "\n".join(api_weight.verdict(rows))
+    assert "4444" not in v and "30" in v
+
+
+# ---- 주문수: weight 와 별개 한도 ----
+
+def test_order_count_is_tracked_separately():
+    """weight 가 여유여도 주문수에서 밴이 난다 — maker 추격은 넣고 취소를 반복한다."""
+    api_weight.reset()
+    d = tempfile.mkdtemp()
+    api_weight.observe(10, orders=800, scope="testnet", service="t", dir_path=d)
+    st = api_weight.snapshot("testnet")
+    assert st["peak"] == 10 and st["orderPeak"] == 800
+
+
+def test_order_count_appears_in_verdict_with_its_own_limit():
+    v = "\n".join(api_weight.verdict([{"scope": "mainnet", "peak": 30, "orderPeak": 700}]))
+    assert f"700/{api_weight.ORDER_LIMIT_1M}" in v and "위험" in v
+
+
+def test_order_count_counted_even_from_untrusted_source():
+    """★ weight 경로가 미검증이어도 주문수는 센다 — 주문 헤더는 그 문제와 무관하다."""
+    v = "\n".join(api_weight.verdict(
+        [{"scope": "testnet", "peak": 4444, "source": api_weight.CCXT, "orderPeak": 900}]))
+    assert "4444" not in v and "900" in v
+
+
+def test_guarded_records_order_count():
+    api_weight.reset()
+    from engine.binance_broker import _Guarded
+    ex = _FakeCCXT(12)
+    ex.last_response_headers["X-MBX-ORDER-COUNT-1M"] = "455"
+    _Guarded(ex, _FakeBrokerShell(True)).fetch_balance()
+    assert api_weight.snapshot(api_weight.TESTNET)["orderPeak"] == 455
