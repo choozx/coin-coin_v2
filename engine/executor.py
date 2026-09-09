@@ -54,10 +54,13 @@ class PaperExecutor(Executor):
     """페이퍼 트레이딩 — 로컬 잔고/포지션 시뮬레이션. 백테스트와 동일한 수수료·손익 공식."""
 
     def __init__(self, equity: float = 10_000.0,
-                 taker_fee: float = bm.DEFAULT_TAKER_FEE, maker_fee: float = bm.DEFAULT_MAKER_FEE):
+                 taker_fee: float = bm.DEFAULT_TAKER_FEE, maker_fee: float = bm.DEFAULT_MAKER_FEE,
+                 maker_fill_ratio: float = bm.DEFAULT_MAKER_FILL_RATIO):
         self._equity = float(equity)
         self.taker_fee = taker_fee
         self.maker_fee = maker_fee
+        # is_maker=True 는 '그렇게 걸었다'는 뜻이지 '그렇게 채워졌다'가 아니다 — 실측 3%.
+        self.maker_fill_ratio = maker_fill_ratio
         self.position = None
         self.trades: list[ClosedTrade] = []
 
@@ -74,7 +77,8 @@ class PaperExecutor(Executor):
         if pos is None:
             raise RuntimeError("청산할 포지션 없음")
         exit_fee = bm.trade_fee(exit_price, pos.qty, taker=not is_maker,
-                                taker_fee=self.taker_fee, maker_fee=self.maker_fee)
+                                taker_fee=self.taker_fee, maker_fee=self.maker_fee,
+                                maker_fill_ratio=self.maker_fill_ratio)
         gross = pos.side * (exit_price - pos.entry_price) * pos.qty
         fees = pos.entry_fee + exit_fee
         pnl = gross - fees + pos.funding_accum      # 진입+청산 수수료, 펀딩 누적 반영

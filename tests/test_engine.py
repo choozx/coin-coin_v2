@@ -145,7 +145,10 @@ def test_maker_limit_entry():
             d["execution"] = execution
         return Preset.from_dict(d, validate=False)
 
-    cfg = BacktestConfig(initial_equity=10000, taker_fee=0.0005, maker_fee=0.0, funding_rate=0.0)
+    # ★ maker_fill_ratio=1.0 = '지정가가 전부 maker 로 채워진다'는 **가정**. 이 테스트가
+    #   검증하는 건 수수료 모델이지 체결 확률이 아니라서 명시적으로 1.0 을 준다.
+    cfg = BacktestConfig(initial_equity=10000, taker_fee=0.0005, maker_fee=0.0, funding_rate=0.0,
+                         maker_fill_ratio=1.0)
     taker = run(base, preset(None), cfg)
     maker = run(base, preset({"entryType": "makerLimit"}), cfg)
     assert taker.num_trades > 0
@@ -154,6 +157,44 @@ def test_maker_limit_entry():
     # maker 진입 수수료 0 → 총 수수료는 taker보다 작고 수익은 더 좋음
     assert maker.total_fees < taker.total_fees
     assert maker.total_return_pct >= taker.total_return_pct
+
+
+def test_maker_fill_ratio_defaults_to_all_taker():
+    """★ 기본값은 '지정가로 걸었어도 taker 로 채워진다' 다.
+
+    실측(fill_log 15건)이 maker 3% 였다. 그런데 엔진은 entryType=makerLimit 이면 maker
+    수수료(BTCUSDC 0bp)로 계산해 **왕복 0bp** 로 손익을 냈다 — 없는 수익이다.
+    K 실험이 이 가정 하나로 결론이 63%p 흔들리는 걸 보여줬다(+34% vs −29%).
+    검증 못 한 가정을 유리한 쪽으로 잡아두지 않는다.
+    """
+    from engine.candles import Candles
+
+    n = 400
+    ot = (np.arange(n) * 60_000).astype(np.int64)
+    px = 100 + np.sin(np.arange(n) / 12.0) * 2
+    base = Candles(ot, px, px + 0.4, px - 0.4, px, np.full(n, 100.0), 1)
+
+    def preset(execution):
+        d = {"schemaVersion": "1.0", "name": "t",
+             "market": {"exchange": "binance-futures", "symbol": "BTCUSDT",
+                        "timeframe": "1m", "direction": "long"},
+             "entry": {"left": {"source": "close"}, "cmp": ">",
+                       "right": {"indicator": "SMA", "period": 5}},
+             "exit": {"takeProfit": {"type": "percent", "value": 0.5},
+                      "stopLoss": {"type": "percent", "value": 0.5}},
+             "sizing": {"leverage": 2, "marginMode": "isolated",
+                        "size": {"type": "equityPercent", "value": 10}}}
+        if execution:
+            d["execution"] = execution
+        return Preset.from_dict(d, validate=False)
+
+    cfg = BacktestConfig(initial_equity=10000, taker_fee=0.0005, maker_fee=0.0, funding_rate=0.0)
+    assert cfg.maker_fill_ratio == 0.0
+    taker = run(base, preset(None), cfg)
+    maker = run(base, preset({"entryType": "makerLimit"}), cfg)
+    assert maker.num_trades == taker.num_trades > 0
+    # 기본값에서는 maker 를 '가정'해도 수수료가 안 깎인다 — 그게 실측이다.
+    assert abs(maker.total_fees - taker.total_fees) < 1e-9
 
 
 def test_supertrend_flip_exit_side_aware():

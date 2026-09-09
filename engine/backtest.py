@@ -35,6 +35,9 @@ class BacktestConfig:
     funding_schedule: dict = None     # {funding_time_ms: rate} 실제 펀딩 히스토리. None이면 상수 근사.
     taker_fee: float = bm.DEFAULT_TAKER_FEE
     maker_fee: float = bm.DEFAULT_MAKER_FEE
+    # maker 지정가가 **실제로 maker 로 채워지는 비율**(0 = 전부 taker 로 계산).
+    # 실측 근거와 왜 0 인지는 binance_math.DEFAULT_MAKER_FILL_RATIO 주석 참조.
+    maker_fill_ratio: float = bm.DEFAULT_MAKER_FILL_RATIO
     bracket: bm.MarginBracket = None
     max_leverage: int = 125           # 레버리지 하드 상한 (초과 설정은 이 값으로 클램프)
     max_account_fraction: float = 1.0  # 한 진입 증거금이 잔고의 이 비율을 못 넘음(1.0=100%, 현행)
@@ -399,7 +402,8 @@ def run(base: Candles, preset: Preset, cfg: BacktestConfig = None) -> Metrics:
     # (import를 함수 안에서: executor 가 metrics 를 쓰고 backtest 도 metrics 를 써서
     #  모듈 최상단에서 서로 물리면 순환이 된다.)
     from .executor import PaperExecutor
-    ex = PaperExecutor(equity=cfg.initial_equity, taker_fee=cfg.taker_fee, maker_fee=cfg.maker_fee)
+    ex = PaperExecutor(equity=cfg.initial_equity, taker_fee=cfg.taker_fee, maker_fee=cfg.maker_fee,
+                       maker_fill_ratio=cfg.maker_fill_ratio)
 
     trades = ex.trades                                    # Stepper가 청산할 때마다 append
     equity_curve = [(int(base.open_time[0]), cfg.initial_equity)]
@@ -537,7 +541,8 @@ def _open_position(preset, sizing, ex, price, ot, sb, side, lev, equity, cfg, at
             return None                     # 청산가가 너무 가까움 → 진입 스킵
 
     entry_fee = bm.trade_fee(price, qty, taker=not entry_maker,
-                             taker_fee=cfg.taker_fee, maker_fee=cfg.maker_fee)
+                             taker_fee=cfg.taker_fee, maker_fee=cfg.maker_fee,
+                             maker_fill_ratio=cfg.maker_fill_ratio)
     return _Position(
         side=side, entry_time=ot, entry_price=price, qty=qty, leverage=lev,
         margin=margin, liq_price=liq, stop_price=stop_price, tp_price=tp_price,

@@ -106,8 +106,41 @@ def funding_fee(mark_price: float, qty: float, side: int, funding_rate: float) -
     return -side * notional * funding_rate
 
 
+# maker 지정가로 걸었을 때 **실제로 maker 로 채워지는 비율**. 0 = 전부 taker 로 본다.
+#
+# 왜 기본이 0 인가: 엔진은 entryType=makerLimit 이면 maker 수수료(BTCUSDC 는 0bp)로 손익을
+# 계산해 왔다. 그런데 실측(2026-08~09, fill_log 15건)은 **3%** 였다 — 사실상 전량 taker 다.
+# 원장도 같은 말을 한다: 수수료 42.32 / 명목 98,226 = 4.31bp(taker 5bp 에 붙는다).
+# 그동안 백테스트는 왕복 0bp 로 계산해 **없는 수익을 만들어내고 있었다.**
+# K 실험이 이 가정 하나로 결론이 얼마나 흔들리는지 보여줬다: maker 0% 가정 +34% vs
+# 전부 taker −29%(63%p). 검증 못 한 가정을 유리한 쪽으로 잡아두지 않는다 —
+# **maker 로 채워졌다는 걸 보이기 전까지는 taker 로 센다.**
+#
+# 지정가로 걸어보는 정책 자체는 그대로다(걸어보는 건 공짜고, 채워지면 이득이다).
+# 바뀌는 건 회계뿐이다. 실거래 손익은 어차피 거래소가 준 실수수료를 쓴다.
+# 메인넷에서 실측하면 이 값을 올리면 된다 — 테스트넷 3% 는 상대가 없어서 나온 수치라
+# 메인넷 값이 아니다.
+DEFAULT_MAKER_FILL_RATIO = 0.0
+
+
+def effective_fee_rate(maker: bool, taker_fee: float, maker_fee: float,
+                       maker_fill_ratio: float = DEFAULT_MAKER_FILL_RATIO) -> float:
+    """maker 를 '가정'한 체결의 실효 수수료율. ratio 만큼만 maker 로 채워진다고 본다."""
+    if not maker:
+        return taker_fee
+    r = min(1.0, max(0.0, float(maker_fill_ratio)))
+    return r * maker_fee + (1.0 - r) * taker_fee
+
+
 def trade_fee(price: float, qty: float, taker: bool = True,
-              taker_fee: float = DEFAULT_TAKER_FEE, maker_fee: float = DEFAULT_MAKER_FEE) -> float:
-    """체결 수수료(양수). 명목가치 기준."""
-    rate = taker_fee if taker else maker_fee
+              taker_fee: float = DEFAULT_TAKER_FEE, maker_fee: float = DEFAULT_MAKER_FEE,
+              maker_fill_ratio: float = 1.0) -> float:
+    """체결 수수료(양수). 명목가치 기준.
+
+    maker_fill_ratio 기본이 1.0 인 이유: 이 함수는 **실제 체결 유형을 아는** 곳에서도
+    쓰인다(LiveExecutor 가 거래소가 준 maker_qty/taker_qty 로 나눠 부를 때). 거기서는
+    taker=False 가 '가정'이 아니라 사실이므로 깎으면 안 된다. 가정을 쓰는 쪽
+    (백테스트·페이퍼)만 cfg 의 비율을 명시적으로 넘긴다.
+    """
+    rate = effective_fee_rate(not taker, taker_fee, maker_fee, maker_fill_ratio)
     return price * qty * rate
