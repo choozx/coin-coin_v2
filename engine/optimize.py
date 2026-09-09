@@ -1,4 +1,4 @@
-"""파라미터 최적화 (그리드 서치 + IS/OOS 과최적화 방어 + 멀티프로세싱 병렬).
+"""파라미터 최적화 (그리드 서치 + IS/OOS + **귀무모델 게이트** + 멀티프로세싱 병렬).
 
 핵심 방어책:
 - In-Sample(앞 70%)에서 최적값 탐색 → Out-of-Sample(뒤 30%)에서 재검증.
@@ -6,6 +6,10 @@
 - 최소 트레이드 수 미달 조합은 후보에서 제외 (통계적으로 무의미).
 - 목적함수 기본 Calmar(수익÷MDD) — 총수익률보다 과최적화에 강함.
 - 순위표에서 OOS 성과를 나란히 보여줘 견고성(넓은 봉우리) 판단.
+- ★ **귀무모델 게이트(OOS 기준)**: IS/OOS 는 "다른 구간에서도 되나"만 묻는다.
+  정작 물어야 할 건 **"우연보다 나은가"** 다. 지금 라이브 프리셋이 그 차이의 산물이다 —
+  이름부터 '최적화' 이고 IS/OOS 는 통과했지만, K 에서 귀무 p95 에 한참 못 미쳐 기각됐다.
+  격자 크기만큼 다중검정 보정도 한다(engine/null_model.py 참조).
 
 병렬화:
 - 조합 IS 평가를 ProcessPoolExecutor로 코어 수만큼 동시 실행.
@@ -18,6 +22,7 @@ import itertools
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
+from . import null_model as nm
 from .candles import Candles
 from .backtest import run
 
@@ -121,7 +126,7 @@ def resolve_workers(n_combos, workers=None):
 
 def optimize(base, build_preset_fn, fixed_params, sweep_specs, cfg,
              objective="calmar", min_trades=15, is_frac=0.7, top_k=20, max_combos=3000,
-             workers=None, progress_cb=None):
+             workers=None, progress_cb=None, null_samples=2000, timeframe=None):
     """그리드 서치 (병렬).
 
     build_preset_fn: params dict → 프리셋 dict (server._build_preset 재사용, 프로세스 간 pickle 가능해야 함)
@@ -189,12 +194,19 @@ def optimize(base, build_preset_fn, fixed_params, sweep_specs, cfg,
                     top[fut_idx[fut]]["oos"] = fut.result()
         for r in top:
             r["robust"] = bool(r["is"]["return"] > 0 and r["oos"]["return"] > 0)
+
+        # ── 귀무 게이트 — **OOS 기준**으로만 건다 ──
+        # IS 는 우리가 뒤진 구간이라 거기서 귀무를 넘는 건 당연하다(그러라고 고른 값이다).
+        # 정직한 질문은 "안 본 구간에서, 같은 조건의 무근거 진입보다 나았나" 하나다.
+        _null_gate(base_oos, top, cfg, build_preset_fn, fixed_params, names,
+                   timeframe, len(combos), null_samples)
     for r in top:
         r.pop("combo", None)
 
     out = {
         "objective": objective,
         "totalCombos": total,
+        "nullGate": "OOS 기준 · 격자 크기 보정" if do_oos else "없음(OOS 미분할)",
         "evaluated": len(combos),
         "truncated": truncated,
         "passed": len(results),
@@ -217,3 +229,28 @@ def optimize(base, build_preset_fn, fixed_params, sweep_specs, cfg,
         out["heatmap"] = {"xLabel": names[1], "yLabel": names[0],
                           "xVals": value_lists[1], "yVals": value_lists[0], "grid": grid}
     return out
+
+
+def _null_gate(base_oos, top, cfg, build_preset_fn, fixed_params, names,
+               timeframe, n_combos, samples):
+    """상위 후보에 귀무 판정을 붙인다. 실패해도 최적화 전체를 죽이지 않는다(관찰 항목)."""
+    if base_oos is None or not top:
+        return
+    from .preset import Preset
+    for r in top:
+        try:
+            params = dict(fixed_params)
+            params.update({n: r["combo"][i] for i, n in enumerate(names)})
+            preset = Preset.from_dict(build_preset_fn(params), validate=False)
+            tf = timeframe or preset.timeframe
+            m = run(base_oos, preset, cfg)
+            mp = nm.matched_params(m, tf, cfg.initial_equity)
+            if mp["n_trades"] <= 0:
+                continue
+            dist = nm.simulate(base_oos, mp["tf_min"], mp["n_trades"], mp["hold_bars"],
+                               mp["side"], leverage=mp["leverage"],
+                               size_fraction=mp["size_fraction"], samples=samples,
+                               taker_fee=cfg.taker_fee)
+            r["null"] = nm.gate(m.total_return_pct, dist, n_combos=n_combos)
+        except Exception as e:      # 판정 실패가 순위표를 못 내게 하면 안 된다
+            r["null"] = {"error": f"{type(e).__name__}: {e}"}

@@ -18,6 +18,7 @@ from __future__ import annotations
 import numpy as np
 
 from engine import binance_math as bm
+from engine import null_model as nm
 from engine import candle_store as cs
 from engine.backtest import BacktestConfig, run
 from engine.candles import TIMEFRAME_MINUTES, resample
@@ -91,40 +92,15 @@ def show(tag: str, m):
 def null_model(base, timeframe: str, n_trades: int, hold_bars: int, side: str,
                leverage: int = 1, size_fraction: float = 0.10,
                samples: int = 2000, seed: int = 0, fee: float = None):
-    """랜덤 진입 몬테카를로 → 총수익률(%) 분포. fee=편도 수수료(기본 taker).
+    """랜덤 진입 몬테카를로 → 총수익률(%) 분포.
 
-    전략과 '같은 조건'(트레이드수·보유봉수·방향·레버리지·명목비율)의 아무 근거 없는
-    진입이 우연히 내는 수익 분포. 전략의 실제 수익률이 이 분포 대비 어디인지가 판정.
-
-    모델(근사): 각 트레이드 = 상위TF 봉 무작위 진입 → hold_bars 뒤 청산.
-      per-trade 수익(자본 대비) = side*lev*frac*(exit/entry-1) - 왕복 taker 수수료.
-      equity 복리. side: 'long'|'short'.  frac: equityPercent/100.
+    ★ 구현은 engine/null_model.py 에 있다. 최적화기(engine/optimize.py)도 같은 판정을
+    쓰기 때문이다 — 두 곳에 각각 구현해 두면 언젠가 갈라지고, 그때 어느 쪽이 맞는지
+    알 수 없게 된다(백테스트↔라이브에서 이미 겪은 일이라 판정도 한 구현으로 모은다).
     """
-    tf_min = TIMEFRAME_MINUTES[timeframe]
-    c = resample(base, tf_min).close.astype(np.float64)
-    n = len(c)
-    if n <= hold_bars + 1 or n_trades <= 0:
-        return np.zeros(1)
-    # fee 를 주면 그걸 쓴다 — 전략 쪽 수수료를 바꿔 돌릴 땐 귀무도 같은 값이어야 공정하다.
-    taker = _taker_placeholder()[1] if fee is None else fee
-    rt_fee = 2 * taker * leverage * size_fraction        # 왕복 (진입+청산)
-    sgn = 1.0 if side == "long" else -1.0
-    rng = np.random.default_rng(seed)
-    hi = n - hold_bars - 1
-    entries = rng.integers(0, hi, size=(samples, n_trades))
-    entry_px = c[entries]
-    exit_px = c[entries + hold_bars]
-    ret = exit_px / entry_px - 1.0                        # 봉 가격수익률
-    per_trade = 1.0 + sgn * leverage * size_fraction * ret - rt_fee
-    per_trade = np.clip(per_trade, 0.0, None)             # 청산(자본소진) 바닥
-    final = per_trade.prod(axis=1)                        # 복리
-    return (final - 1.0) * 100.0
-
-
-def _taker_placeholder():
-    # null_model 은 심볼을 모르므로 기본 taker 를 쓴다. 심볼별로 정밀히 하려면
-    # null_model 에 taker 인자를 넘기도록 확장(대부분 결론은 안 바뀜 — 수수료 지배가 크므로).
-    return bm.DEFAULT_MAKER_FEE, bm.DEFAULT_TAKER_FEE
+    return nm.simulate(base, TIMEFRAME_MINUTES[timeframe], n_trades, hold_bars, side,
+                       leverage=leverage, size_fraction=size_fraction,
+                       samples=samples, seed=seed, taker_fee=fee)
 
 
 def verdict(strategy_return_pct: float, null_dist: np.ndarray, pct: float = 95.0) -> dict:
