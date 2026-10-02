@@ -22,6 +22,7 @@
     python3 tools/fill_audit.py                                  # data/trades.db, mode=paper
     python3 tools/fill_audit.py --db /path/trades.db --preset presets/examples/live-strategy.json
     python3 tools/fill_audit.py --timeout 3                      # 미체결 판정 대기(분)
+    python3 tools/fill_audit.py --db /app/data/trades.db --mode testnet   # 테스트넷 실거래 대조
 
 EC2 원장을 로컬로 받아서 보려면:
     scp -i ~/.ssh/key.pem ec2-user@<EIP>:~/auto_trading/data/trades.db /tmp/trades.db
@@ -36,8 +37,8 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from engine import candle_store, ledger                      # noqa: E402
-from engine.backtest import BacktestConfig, run              # noqa: E402
+from engine import candle_store, jsonl_log, ledger           # noqa: E402
+from engine.backtest import TIMEFRAME_MINUTES, BacktestConfig, run  # noqa: E402
 from engine import binance_math as bm                        # noqa: E402
 from engine.preset import load_preset_file                   # noqa: E402
 
@@ -149,13 +150,134 @@ def replay_backtest(rows, preset):
     cfg = BacktestConfig(initial_equity=equity0, maker_fee=mk, taker_fee=tk,
                          funding_schedule=candle_store.funding_schedule(symbol, start, end))
     m = run(base, preset, cfg)
-    return [t for t in m.trades if t.entry_time >= audit_start]
+    # 실거래 진입 시각은 봉 시각보다 체결 지연만큼 늦다 — 한 봉 여유를 두지 않으면 첫 거래의
+    # 백테스트 짝이 잘려 나가 '실거래에만 있는 거래'로 오판된다.
+    slack = TIMEFRAME_MINUTES[preset.timeframe] * MINUTE_MS
+    return [t for t in m.trades if t.entry_time >= audit_start - slack]
+
+
+def _bp(a, b):
+    """a 가 b 보다 몇 bp 큰가."""
+    return (a / b - 1.0) * 10_000.0 if b else float("nan")
+
+
+def _ret_bp(side, entry, exit_, fees, funding, qty):
+    """거래 하나의 명목 대비 순수익(bp). 잔고·사이징 궤적과 무관하게 비교하려고 쓴다."""
+    notional = entry * qty
+    if not notional:
+        return float("nan")
+    gross = side * (exit_ - entry) * qty
+    return (gross - fees + funding) / notional * 10_000.0
+
+
+def _match(rows, bt, tol_ms):
+    """원장 거래 ↔ 백테스트 거래를 진입 시각으로 짝짓는다(tol_ms 이내 최근접, 1:1).
+
+    실거래는 진입 시각이 봉 시각이 아니라 체결 시각일 수 있어 정확일치로는 다 놓친다.
+    """
+    pairs, used = [], set()
+    bts = sorted(bt, key=lambda t: t.entry_time)
+    times = np.array([t.entry_time for t in bts], dtype=np.int64)
+    for r in rows:
+        if not len(times):
+            break
+        i = int(np.searchsorted(times, r["entry_time"]))
+        best = None
+        for j in (i - 1, i):
+            if 0 <= j < len(bts) and j not in used:
+                d = abs(int(times[j]) - int(r["entry_time"]))
+                if d <= tol_ms and (best is None or d < best[1]):
+                    best = (j, d)
+        if best is not None:
+            used.add(best[0])
+            pairs.append((r, bts[best[0]]))
+    matched_rows = {id(r) for r, _ in pairs}
+    only_live = [r for r in rows if id(r) not in matched_rows]
+    only_bt = [t for k, t in enumerate(bts) if k not in used]
+    return pairs, only_live, only_bt
+
+
+def compare_trades(pairs):
+    """짝지은 거래의 차이를 '어디서 갈렸나'로 분해한다. 전부 명목 대비 bp, +가 실거래에 유리."""
+    if not pairs:
+        print("짝지은 거래 없음 — 비교 불가.")
+        return
+    reason_diff = [(r, t) for r, t in pairs if r["reason"] != t.exit_reason]
+    side_diff = [(r, t) for r, t in pairs if r["side"] != t.side]
+    ent, ext, fee, fnd, tot = [], [], [], [], []
+    for r, t in pairs:
+        s = r["side"]
+        ent.append(-s * _bp(r["entry_price"], t.entry_price))       # 롱이면 비싸게 산 만큼 −
+        ext.append(s * _bp(r["exit_price"], t.exit_price))          # 롱이면 싸게 판 만큼 −
+        ln = r["entry_price"] * r["qty"]
+        bn = t.entry_price * t.qty
+        fee.append(-(r["fees"] / ln - t.fees / bn) * 10_000.0 if ln and bn else float("nan"))
+        fnd.append(((r["funding"] or 0.0) / ln - t.funding / bn) * 10_000.0 if ln and bn else float("nan"))
+        tot.append(_ret_bp(s, r["entry_price"], r["exit_price"], r["fees"], r["funding"] or 0.0, r["qty"])
+                   - _ret_bp(t.side, t.entry_price, t.exit_price, t.fees, t.funding, t.qty))
+
+    def _line(label, xs):
+        a = np.array(xs, dtype=float)
+        a = a[~np.isnan(a)]
+        if not len(a):
+            print(f"  {label:<10} (데이터 없음)"); return
+        print(f"  {label:<10} 평균 {a.mean():+7.2f}  중앙 {np.median(a):+7.2f}  "
+              f"최악 {a.min():+8.2f}  합 {a.sum():+9.1f}")
+
+    print(f"짝 {len(pairs)}건 — 거래당 차이(bp, 명목 대비, +=실거래가 백테스트보다 유리)")
+    _line("진입가", ent)
+    _line("청산가", ext)
+    _line("수수료", fee)
+    _line("펀딩", fnd)
+    _line("= 순수익", tot)
+    print("  (순수익 ≈ 진입가+청산가+수수료+펀딩. 사이징·잔고 차이는 bp 정규화로 제거됨)")
+    if side_diff:
+        print(f"  ⚠️ 방향이 다른 짝 {len(side_diff)}건 — 짝짓기 오류이거나 판정이 갈렸다")
+    if reason_diff:
+        print(f"  ⚠️ 청산 사유가 다른 짝 {len(reason_diff)}건:")
+        for r, t in reason_diff[:5]:
+            print(f"     {_fmt_ts(r['entry_time'])} 실거래 {r['reason']} vs 백테스트 {t.exit_reason}  "
+                  f"청산시각 차 {(r['exit_time'] - t.exit_time) / MINUTE_MS:+.0f}분")
+    worst = sorted(zip(tot, pairs), key=lambda x: x[0])[:3]
+    print("  가장 크게 갈린 거래:")
+    for d, (r, t) in worst:
+        print(f"     {_fmt_ts(r['entry_time'])} {'롱' if r['side'] == 1 else '숏'} {r['reason']}  "
+              f"진입 {r['entry_price']:.2f}/{t.entry_price:.2f}  청산 {r['exit_price']:.2f}/{t.exit_price:.2f}  "
+              f"차 {d:+.1f}bp")
+
+
+def fill_report(path, start_ms, end_ms):
+    """체결 로그 요약 — 기대가 대비 슬리피지, 실제 수수료율, maker 의도 vs 실제."""
+    recs = jsonl_log.tail(path, 10**7) if path and os.path.exists(path) else []
+    recs = [x for x in recs if start_ms - 10 * MINUTE_MS <= int(x.get("at") or 0) <= end_ms + 10 * MINUTE_MS]
+    if not recs:
+        print(f"체결 로그 없음({path}) — 감사 구간 안 기록이 없다.")
+        return
+    nets = {x.get("network") for x in recs}
+    print(f"{path}: {len(recs)}건  network={sorted(n for n in nets if n)}")
+    by = {}
+    for x in recs:
+        by.setdefault((x.get("kind"), x.get("reason") or "-"), []).append(x)
+    print(f"  {'종류/사유':<24}{'건':>4}{'슬립 평균bp':>12}{'최악bp':>9}{'수수료bp':>10}{'maker%':>8}{'의도maker':>10}")
+    for (k, rsn), xs in sorted(by.items(), key=lambda kv: (str(kv[0][0]), str(kv[0][1]))):
+        sl = [x["slipPct"] * 100 for x in xs if x.get("slipPct") is not None]
+        fb = [x["feeBps"] for x in xs if x.get("feeBps") is not None]
+        mr = [x["makerRatio"] for x in xs if x.get("makerRatio") is not None]
+        im = sum(1 for x in xs if x.get("intendedMaker"))
+        print(f"  {str(k) + '/' + str(rsn):<24}{len(xs):>4}"
+              f"{(np.mean(sl) if sl else float('nan')):>12.2f}{(max(sl) if sl else float('nan')):>9.2f}"
+              f"{(np.mean(fb) if fb else float('nan')):>10.2f}{(np.mean(mr) if mr else float('nan')):>8.1f}"
+              f"{im:>7}/{len(xs)}")
+    print("  슬립 +=불리(기대가보다 나쁘게 체결). 기대가는 신호 시점 가격 = 백테스트가 가정한 체결가.")
 
 
 def main():
     ap = argparse.ArgumentParser(description="페이퍼 원장 감사 — 백테스트 대조 + 체결 현실성")
     ap.add_argument("--db", default=ledger.LEDGER_PATH, help="원장 파일(기본: data/trades.db)")
-    ap.add_argument("--mode", default="paper", choices=["paper", "live"])
+    ap.add_argument("--mode", default="paper", choices=["paper", "testnet", "live"],
+                    help="원장 버킷. 테스트넷 실거래는 mode=testnet 으로 기록된다")
+    ap.add_argument("--fills", default=None,
+                    help="체결 로그(fill_log.jsonl). 기본: 원장과 같은 폴더의 fill_log.jsonl")
     ap.add_argument("--strategy", default=None, help="전략(프리셋 경로)로 필터")
     ap.add_argument("--preset", default=None, help="대조에 쓸 프리셋(기본: 원장의 strategy 값)")
     ap.add_argument("--timeout", type=int, default=3, help="지정가 미체결 판정 대기(분, 기본 3)")
@@ -173,7 +295,7 @@ def main():
     print(f"전략    : {preset.name}  [{sym} {preset.timeframe}]  ({preset_path})")
     print(f"기간    : {_fmt_ts(rows[0]['entry_time'])} ~ {_fmt_ts(rows[-1]['exit_time'])} UTC")
     paper_pnl = sum(r["pnl"] for r in rows)
-    print(f"페이퍼  : 손익 {paper_pnl:+.2f}  (승 {sum(1 for r in rows if r['pnl'] > 0)} / "
+    print(f"{args.mode:<8}: 손익 {paper_pnl:+.2f}  (승 {sum(1 for r in rows if r['pnl'] > 0)} / "
           f"패 {sum(1 for r in rows if r['pnl'] <= 0)})")
 
     # ---- 1) 백테스트 재현 대조 ----
@@ -181,27 +303,32 @@ def main():
         print("\n── 재현 대조 (같은 기간 백테스트) " + "─" * 28)
         try:
             bt = replay_backtest(rows, preset)
-            print(f"백테스트: {len(bt)}건 / 페이퍼: {len(rows)}건  (감사 구간 안, 워밍업 제외)")
-            # 진입 시각으로 짝짓기 — 수량·손익은 잔고 궤적 차이로 갈릴 수 있어 비교하지 않는다.
-            bt_by_entry = {int(t.entry_time): t for t in bt}
-            paper_entries = {int(r["entry_time"]) for r in rows}
-            matched = paper_entries & set(bt_by_entry)
-            only_paper = sorted(paper_entries - set(bt_by_entry))
-            only_bt = sorted(set(bt_by_entry) - paper_entries)
-            print(f"진입 시각 일치 {len(matched)}건 / 페이퍼에만 {len(only_paper)}건 / "
-                  f"백테스트에만 {len(only_bt)}건")
-            if not only_paper and not only_bt:
-                print("→ 완전 일치. 판정은 같은 코드(Stepper)라 예상된 결과.")
-            else:
-                print("→ ⚠️ 전략이 아니라 운영 쪽 원인일 가능성이 크다 —")
+            print(f"백테스트: {len(bt)}건 / {args.mode}: {len(rows)}건  (감사 구간 안, 워밍업 제외)")
+            tf_ms = TIMEFRAME_MINUTES[preset.timeframe] * MINUTE_MS
+            pairs, only_live, only_bt = _match(rows, bt, tol_ms=tf_ms)
+            print(f"진입 짝 {len(pairs)}건 (±{tf_ms // MINUTE_MS}분 이내) / "
+                  f"{args.mode}에만 {len(only_live)}건 / 백테스트에만 {len(only_bt)}건")
+            if only_live or only_bt:
+                print("→ ⚠️ 짝 없는 거래는 전략이 아니라 운영 쪽 원인일 가능성이 크다 —")
                 print("   봇 멈춤 구간 / 재시작(부트스트랩은 플랫으로 시작) / 데이터 갭 /")
-                print("   프리셋·봇설정 변경 이력을 확인할 것.")
-                for label, ts in (("페이퍼에만", only_paper[:5]), ("백테스트에만", only_bt[:5])):
-                    if ts:
-                        print(f"   {label}: " + ", ".join(_fmt_ts(t) for t in ts)
-                              + (" …" if len(ts) == 5 else ""))
+                print("   프리셋·봇설정 변경 이력 / 가드레일 진입 차단을 확인할 것.")
+                if only_live:
+                    print(f"   {args.mode}에만: " + ", ".join(_fmt_ts(r['entry_time']) for r in only_live[:5])
+                          + (" …" if len(only_live) > 5 else ""))
+                if only_bt:
+                    print("   백테스트에만: " + ", ".join(_fmt_ts(t.entry_time) for t in only_bt[:5])
+                          + (" …" if len(only_bt) > 5 else ""))
+                    print(f"   (백테스트에만 있는 거래의 백테스트 손익 합 {sum(t.pnl for t in only_bt):+.2f})")
+            print("\n── 짝지은 거래 차이 분해 " + "─" * 36)
+            compare_trades(pairs)
         except Exception as e:
             print(f"재현 실패: {type(e).__name__}: {e}")
+
+    # ---- 1b) 체결 로그 ----
+    if args.mode != "paper":
+        print("\n── 체결 로그 (기대가 대비 실제) " + "─" * 30)
+        fills = args.fills or os.path.join(os.path.dirname(os.path.abspath(args.db)), "fill_log.jsonl")
+        fill_report(fills, rows[0]["entry_time"], rows[-1]["exit_time"])
 
     # ---- 2) 체결 현실성 감사 ----
     print(f"\n── 지정가 체결 감사 (대기 {args.timeout}분, fill-if-touched 근사) " + "─" * 8)
