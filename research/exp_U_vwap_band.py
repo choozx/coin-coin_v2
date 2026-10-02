@@ -18,6 +18,7 @@
 
     python3 -u -m research.exp_U_vwap_band
     python3 -u -m research.exp_U_vwap_band --zero-fee
+    python3 -u -m research.exp_U_vwap_band --tfs 5m,15m [--zero-fee]
 """
 from __future__ import annotations
 
@@ -38,6 +39,8 @@ from research.exp_T_supertrend_search import _ym, segments     # noqa: E402
 SYMBOL = "BTCUSDT"
 ZERO_FEE = "--zero-fee" in sys.argv
 TFS = ("3m", "5m", "15m")
+if "--tfs" in sys.argv:                 # 예: --tfs 5m,15m (3m 은 부하가 크면 2시간 제한에 걸린다)
+    TFS = tuple(sys.argv[sys.argv.index("--tfs") + 1].split(","))
 KS = (1.5, 2.0, 2.5, 3.0)
 STOPS = (None, 0.5, 1.0)              # 퍼센트 손절(가격 기준)
 TIME_STOPS = (None, 24)               # 봉 수
