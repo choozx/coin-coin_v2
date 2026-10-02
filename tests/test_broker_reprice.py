@@ -246,3 +246,41 @@ if __name__ == "__main__":
             traceback.print_exc()
     print(f"\n{passed}/{len(fns)} passed")
     sys.exit(0 if passed == len(fns) else 1)
+
+
+class FeeCCXT(FakeCCXT):
+    """체결내역(my_trades)에 수수료까지 싣는 대역 — 실수수료가 합산까지 살아남는지 본다."""
+
+    def __init__(self, *a, fee_rate=0.0002, **k):
+        super().__init__(*a, **k)
+        self.fee_rate = fee_rate
+        self.trades = []
+
+    def create_order(self, symbol, type, side, qty, price, params):
+        o = super().create_order(symbol, type, side, qty, price, params)
+        if o["filled"] > 0:
+            px = o["average"]
+            self.trades.append({"order": o["id"], "amount": o["filled"], "price": px,
+                                "takerOrMaker": "maker" if type == "limit" else "taker",
+                                "fee": {"currency": "USDT", "cost": o["filled"] * px * self.fee_rate}})
+        return o
+
+    def fetch_my_trades(self, symbol, limit=50):
+        return list(self.trades)
+
+
+def test_empty_attempt_does_not_erase_real_fee():
+    """빈 회차(0 체결 후 취소)가 끼어도 거래소 실수수료가 None 이 되면 안 된다.
+
+    실측(테스트넷): 지정가 추격 체결 45/48 건이 fee=None — 빈 회차의 None 이 _merge 로 번졌다.
+    """
+    fake = FeeCCXT(books=(100.0, 101.0), limit_fills=[0.0, 1.0])
+    fill = _Broker(fake).limit_then_market("buy", 1.0, TIMEOUT, max_attempts=3)
+    assert _near(fill.qty, 1.0) and _near(fill.maker_qty, 1.0)
+    assert fill.fee is not None and _near(fill.fee, 1.0 * 100.0 * 0.0002)
+
+
+def test_empty_attempts_then_taker_keeps_fee():
+    fake = FeeCCXT(books=(100.0, 101.0), limit_fills=[0.0, 0.0], market_px=101.0)
+    fill = _Broker(fake).limit_then_market("buy", 1.0, TIMEOUT, max_attempts=2)
+    assert fill.fee is not None and _near(fill.fee, 1.0 * 101.0 * 0.0002)

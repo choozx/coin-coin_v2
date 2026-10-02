@@ -516,6 +516,10 @@ class BinanceBroker:
                     ts=int(order.get("timestamp") or time.time() * 1000))
         if filled <= 0:
             fill.price = 0.0
+            # 체결이 없으면 수수료는 '모름'이 아니라 확실히 0 이다. None 으로 두면 지정가 추격의
+            # 빈 회차가 _merge 에서 전체를 None 으로 오염시킨다 — 테스트넷 체결 48건 중 45건이
+            # 그렇게 거래소 실수수료를 잃고 공식 근사로 떨어졌다(시장가 한 번인 수동청산 3건만 정상).
+            fill.fee = 0.0
             return fill
         maker_q = taker_q = 0.0
         fee_sum, fee_ok = 0.0, True
