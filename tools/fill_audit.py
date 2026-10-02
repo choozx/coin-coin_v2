@@ -50,6 +50,17 @@ def _fmt_ts(ms):
     return datetime.datetime.fromtimestamp(ms / 1000, datetime.timezone.utc).strftime("%m-%d %H:%M")
 
 
+def _parse_utc(s):
+    import datetime
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            d = datetime.datetime.strptime(s, fmt).replace(tzinfo=datetime.timezone.utc)
+            return int(d.timestamp() * 1000)
+        except ValueError:
+            continue
+    raise SystemExit(f"--since 형식 오류: {s!r} (예: 2026-09-07 또는 '2026-09-07 00:00')")
+
+
 def _load_rows(db, mode, strategy):
     rows = ledger.load(db, mode=mode, strategy=strategy)
     if not rows:
@@ -326,6 +337,8 @@ def main():
     ap.add_argument("--db", default=ledger.LEDGER_PATH, help="원장 파일(기본: data/trades.db)")
     ap.add_argument("--mode", default="paper", choices=["paper", "testnet", "live"],
                     help="원장 버킷. 테스트넷 실거래는 mode=testnet 으로 기록된다")
+    ap.add_argument("--since", default=None,
+                    help="이 시각(UTC, 'YYYY-MM-DD' 또는 'YYYY-MM-DD HH:MM') 이후 진입한 거래만 감사")
     ap.add_argument("--fills", default=None,
                     help="체결 로그(fill_log.jsonl). 기본: 원장과 같은 폴더의 fill_log.jsonl")
     ap.add_argument("--strategy", default=None, help="전략(프리셋 경로)로 필터")
@@ -335,6 +348,11 @@ def main():
     args = ap.parse_args()
 
     rows = _load_rows(args.db, args.mode, args.strategy)
+    if args.since:
+        since_ms = _parse_utc(args.since)
+        rows = [r for r in rows if r["entry_time"] >= since_ms]
+        if not rows:
+            raise SystemExit(f"{args.since} 이후 진입한 거래가 없다.")
     preset_path = args.preset or rows[-1]["strategy"]
     if not os.path.exists(preset_path):
         raise SystemExit(f"프리셋을 찾을 수 없음: {preset_path} — --preset 으로 지정할 것.")
