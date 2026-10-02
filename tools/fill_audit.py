@@ -126,7 +126,8 @@ def audit_fills(rows, preset, timeout_min):
                                                        r["exit_time"], timeout_min)
             if touch is not None:
                 exits.append({**r, "touch": touch, "through": through,
-                              "waited": waited, "away_bp": away})
+                              "waited": waited, "away_bp": away,
+                              "at": r["exit_time"], "px": r["exit_price"]})
     return entries, exits, maker_entry
 
 
@@ -195,6 +196,52 @@ def _match(rows, bt, tol_ms):
     only_live = [r for r in rows if id(r) not in matched_rows]
     only_bt = [t for k, t in enumerate(bts) if k not in used]
     return pairs, only_live, only_bt
+
+
+SPAN_GAP_H = 24
+
+
+def _spans(trades, gap_ms):
+    """거래를 진입시각 기준으로 묶는다 — 이웃 간격이 gap_ms 를 넘으면 새 구간. [(시작, 끝, 거래들)]"""
+    out = []
+    for t in sorted(trades, key=lambda x: x.entry_time):
+        if out and t.entry_time - out[-1][1] <= gap_ms:
+            a, _, xs = out[-1]
+            xs.append(t)
+            out[-1] = (a, t.entry_time, xs)
+        else:
+            out.append((t.entry_time, t.entry_time, [t]))
+    return out
+
+
+def fee_report(rows, symbol):
+    """원장 수수료가 그럴듯한가 — 왕복 명목 대비 bp 를 maker/taker 이론값과 비교한다.
+
+    거래소가 체결 수수료를 안 돌려주면(fill.fee=None) 원장에 0 이 들어갈 수 있다. 그러면
+    손익이 실제보다 좋게 기록되는데, 대조에선 '실거래가 수수료를 덜 냈다'로만 보인다.
+    """
+    mk, tk = bm.fees_for_symbol(symbol)
+    lo, hi = 2 * mk * 10_000.0, 2 * tk * 10_000.0
+    bps = []
+    for r in rows:
+        n = r["entry_price"] * r["qty"]
+        if n:
+            bps.append((r["fees"] or 0.0) / n * 10_000.0)
+    if not bps:
+        print("수수료를 계산할 거래 없음"); return
+    a = np.array(bps)
+    zero = int((a <= 1e-9).sum())
+    below = int((a < lo - 0.05).sum())
+    print(f"원장 수수료(왕복, 진입명목 대비): 평균 {a.mean():.2f}bp  중앙 {np.median(a):.2f}bp  "
+          f"최소 {a.min():.2f}  최대 {a.max():.2f}")
+    print(f"  이론값: 양쪽 maker {lo:.2f}bp ~ 양쪽 taker {hi:.2f}bp  ({symbol} maker {mk*100:.3f}% · taker {tk*100:.3f}%)")
+    print(f"  0 으로 기록 {zero}건 / 이론 하한 미만 {below}건 / taker 왕복 이상 {int((a >= hi - 0.05).sum())}건 "
+          f"(전체 {len(a)})")
+    if zero and mk == 0:
+        print(f"  ⚠️ 수수료 0 기록 {zero}건 — {symbol} 은 maker 0% 라 양쪽 다 maker 체결이면 정상이다.")
+        print("     체결 로그의 maker% 와 비교할 것: maker% 가 낮은데 0 이 많으면 수수료가 누락된 것이다.")
+    elif zero:
+        print(f"  ⚠️ 수수료 0 기록 {zero}건 — 거래소가 수수료를 안 돌려줬을 가능성. 손익이 그만큼 좋게 적혔다.")
 
 
 def compare_trades(pairs):
@@ -269,6 +316,9 @@ def fill_report(path, start_ms, end_ms):
               f"{(np.mean(fb) if fb else float('nan')):>10.2f}{(np.mean(mr) if mr else float('nan')):>8.1f}"
               f"{im:>7}/{len(xs)}")
     print("  슬립 +=불리(기대가보다 나쁘게 체결). 기대가는 신호 시점 가격 = 백테스트가 가정한 체결가.")
+    nofee = sum(1 for x in recs if x.get("fee") is None)
+    if nofee:
+        print(f"  ⚠️ 수수료 미수신(fee=None) {nofee}/{len(recs)}건 — 이 체결들의 수수료는 원장에 제대로 안 들어갔을 수 있다.")
 
 
 def main():
@@ -313,12 +363,17 @@ def main():
                 print("   봇 멈춤 구간 / 재시작(부트스트랩은 플랫으로 시작) / 데이터 갭 /")
                 print("   프리셋·봇설정 변경 이력 / 가드레일 진입 차단을 확인할 것.")
                 if only_live:
-                    print(f"   {args.mode}에만: " + ", ".join(_fmt_ts(r['entry_time']) for r in only_live[:5])
-                          + (" …" if len(only_live) > 5 else ""))
+                    print(f"   {args.mode}에만 {len(only_live)}건 (진입시각 / 청산사유 / 손익):")
+                    for r in only_live:
+                        print(f"     {_fmt_ts(r['entry_time'])} {'롱' if r['side'] == 1 else '숏'} "
+                              f"@{r['entry_price']:.2f}  {r['reason']}  {r['pnl']:+.2f}")
                 if only_bt:
-                    print("   백테스트에만: " + ", ".join(_fmt_ts(t.entry_time) for t in only_bt[:5])
-                          + (" …" if len(only_bt) > 5 else ""))
+                    print(f"   백테스트에만 {len(only_bt)}건 — 구간으로 묶음(간격 {SPAN_GAP_H}시간 초과면 끊음):")
+                    for a, b, xs in _spans(only_bt, SPAN_GAP_H * 3_600_000):
+                        print(f"     {_fmt_ts(a)} ~ {_fmt_ts(b)}  {len(xs):>3}건  "
+                              f"백테스트 손익 {sum(t.pnl for t in xs):+9.2f}")
                     print(f"   (백테스트에만 있는 거래의 백테스트 손익 합 {sum(t.pnl for t in only_bt):+.2f})")
+                    print("   → 이 구간들을 봇 멈춤(control.json)·재시작·가드레일 발동 시각과 맞춰볼 것.")
             print("\n── 짝지은 거래 차이 분해 " + "─" * 36)
             compare_trades(pairs)
         except Exception as e:
@@ -330,8 +385,17 @@ def main():
         fills = args.fills or os.path.join(os.path.dirname(os.path.abspath(args.db)), "fill_log.jsonl")
         fill_report(fills, rows[0]["entry_time"], rows[-1]["exit_time"])
 
+    print("\n── 원장 수수료 점검 " + "─" * 42)
+    fee_report(rows, sym)
+
     # ---- 2) 체결 현실성 감사 ----
-    print(f"\n── 지정가 체결 감사 (대기 {args.timeout}분, fill-if-touched 근사) " + "─" * 8)
+    real = args.mode != "paper"
+    if real:
+        print(f"\n── 체결가가 메인넷 캔들 안에 있었나 (대기 {args.timeout}분) " + "─" * 18)
+        print("실거래 주문은 실제로 체결됐다. 여기서 '미체결'은 체결가가 메인넷 1분봉 범위 밖이었다는 뜻 —")
+        print("테스트넷이면 테스트넷 호가가 메인넷과 따로 놀았다는 신호다(그만큼 가격 비교를 못 믿는다).")
+    else:
+        print(f"\n── 지정가 체결 감사 (대기 {args.timeout}분, fill-if-touched 근사) " + "─" * 8)
     entries, exits, maker_entry = audit_fills(rows, preset, args.timeout)
     if not maker_entry:
         print("진입이 taker(시장가) 설정 — 진입 체결은 항상 성사. 미체결 리스크는 청산만 해당.")
@@ -349,10 +413,11 @@ def main():
         maybe = [x for x in items if x["touch"] and not x["through"]]
         if miss:
             lost = sum(x["pnl"] for x in miss)
-            print(f"  ✗ 확실한 미체결 {len(miss)}건 (가격이 닿지도 않음) — 원장 손익 {lost:+.2f}")
+            what = "체결가가 메인넷 범위 밖" if real else "확실한 미체결"
+            print(f"  ✗ {what} {len(miss)}건 (가격이 닿지도 않음) — 원장 손익 {lost:+.2f}")
             for x in sorted(miss, key=lambda y: -(y["away_bp"] or 0))[:3]:
-                print(f"     {_fmt_ts(x['entry_time'])} {'롱' if x['side']==1 else '숏'} "
-                      f"@{x['entry_price']:.2f} 놓친폭 {x['away_bp']:.1f}bp pnl {x['pnl']:+.2f}")
+                print(f"     {_fmt_ts(x.get('at', x['entry_time']))} {'롱' if x['side']==1 else '숏'} "
+                      f"@{x.get('px', x['entry_price']):.2f} 놓친폭 {x['away_bp']:.1f}bp pnl {x['pnl']:+.2f}")
         if maybe:
             print(f"  ? 경계 {len(maybe)}건 (가격이 닿았지만 관통 안 함 — 대기열 앞이었어야 체결) "
                   f"원장 손익 {sum(x['pnl'] for x in maybe):+.2f}")
@@ -360,7 +425,7 @@ def main():
         if waits:
             print(f"  체결까지: 즉시(같은 분) {waits.count(0)}건 / 1분+ {len([w for w in waits if w])}건")
 
-    if entries:
+    if entries and not real:
         opt = sum(x["pnl"] for x in entries if not x["touch"])            # 확실한 미체결만 제외
         pes = sum(x["pnl"] for x in entries if not x["through"])          # 경계까지 미체결로 간주
         print(f"\n결론: 진입 미체결분을 빼면 손익 {paper_pnl:+.2f} → "
