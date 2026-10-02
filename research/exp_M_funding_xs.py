@@ -42,20 +42,34 @@ HOLDS = (1, 3, 9, 21)
 KS = (5, 11)
 
 
-def load():
-    """(심볼, 펀딩시각, 가격행렬 P[S×N], 펀딩행렬 F[S×N]) — 펀딩 시각 격자에 맞춘다."""
+def load(legacy_overwrite: bool = False, with_volume: bool = False):
+    """(심볼, 펀딩시각, 가격행렬 P[S×N], 펀딩행렬 F[S×N][, 7일 거래대금 V[S×N]]) — 8h 격자.
+
+    ★ 버그 수정(2026-10-02): 바이낸스는 펀딩이 과열된 심볼의 정산 주기를 4h·1h 로 줄인다.
+    예전엔 8h 칸에 **대입**해서 같은 칸의 정산이 마지막 하나만 남았다(TRB 9,377 중 3,166건 유실,
+    10개 심볼). 그런 심볼이 정확히 M 이 고르는 극단 펀딩 종목이다. 이제 칸 안의 정산을 **합산**한다.
+    legacy_overwrite=True 는 옛 결과 재현용.
+
+    V[s, t] = 시각 t **이전** 168시간 거래대금(close×volume 합) — 유동성 필터용, 룩어헤드 없음.
+    """
     conn = sqlite3.connect(cs.DB_PATH)
     syms = sorted(r[0] for r in conn.execute(
         "SELECT DISTINCT symbol FROM candle WHERE symbol LIKE '%\\_1H' ESCAPE '\\'"))
     syms = [s[:-3] for s in syms]
     fund = {}
     for s, t, r in conn.execute("SELECT symbol, funding_time, rate FROM funding"):
-        fund.setdefault(s, {})[int(t) // FUND_MS * FUND_MS] = float(r)
-    px = {}
+        b = int(t) // FUND_MS * FUND_MS
+        d = fund.setdefault(s, {})
+        d[b] = float(r) if legacy_overwrite else d.get(b, 0.0) + float(r)
+    px, qv = {}, {}
     for s in syms:
-        rows = conn.execute("SELECT open_time, close FROM candle WHERE symbol=? ORDER BY open_time",
-                            (s + "_1H",)).fetchall()
-        px[s] = {int(t): float(c) for t, c in rows}
+        rows = conn.execute("SELECT open_time, close, volume FROM candle WHERE symbol=? "
+                            "ORDER BY open_time", (s + "_1H",)).fetchall()
+        px[s] = {int(t): float(c) for t, c, _ in rows}
+        if with_volume:
+            ts = np.array([int(t) for t, _, _ in rows], dtype=np.int64)
+            cq = np.concatenate([[0.0], np.cumsum([float(c) * float(v or 0) for _, c, v in rows])])
+            qv[s] = (ts, cq)
     conn.close()
     # 모든 심볼이 펀딩·가격을 함께 갖는 시각만 쓴다(결측 있으면 순위가 왜곡된다)
     syms = [s for s in syms if s in fund and len(fund[s]) > 1000]
@@ -63,10 +77,27 @@ def load():
     times = [t for t in times if all(t in px[s] for s in syms)]
     P = np.array([[px[s][t] for t in times] for s in syms])
     F = np.array([[fund[s][t] for t in times] for s in syms])
-    return syms, np.array(times, dtype=np.int64), P, F
+    times = np.array(times, dtype=np.int64)
+    if not with_volume:
+        return syms, times, P, F
+    V = np.zeros_like(P)
+    for i, s in enumerate(syms):
+        ts, cq = qv[s]
+        hi = np.searchsorted(ts, times, side="left")            # t 미만
+        lo = np.searchsorted(ts, times - 168 * 3_600_000, side="left")
+        V[i] = cq[hi] - cq[lo]
+    return syms, times, P, F, V
 
 
-def simulate(P, F, lb, hold, k, taker=TAKER):
+def universe_mask(V, top_n):
+    """각 시각 거래대금 상위 top_n 만 True. top_n=None 이면 전부."""
+    if not top_n:
+        return np.ones(V.shape, bool)
+    rank = np.argsort(np.argsort(-V, axis=0), axis=0)
+    return rank < top_n
+
+
+def simulate(P, F, lb, hold, k, taker=TAKER, U=None):
     """전략: 최근 lb 주기 평균 펀딩 하위 k 롱 / 상위 k 숏, hold 주기 보유.
 
     수익 = 가격손익(롱-숏) + 펀딩수취(숏의 펀딩 - 롱의 펀딩, 보유기간 합) - 거래비용.
@@ -76,7 +107,12 @@ def simulate(P, F, lb, hold, k, taker=TAKER):
     prevL = prevS = None
     for t in range(lb, N - hold - 1, hold):
         sig = F[:, t - lb:t].mean(axis=1)
-        order = np.argsort(sig)
+        if U is not None:                                    # 유니버스 밖은 순위에서 뺀다
+            sig = np.where(U[:, t], sig, np.nan)
+            cand = int(U[:, t].sum())
+            order = np.argsort(sig)[:cand]                   # NaN 은 argsort 끝으로 간다
+        else:
+            order = np.argsort(sig)
         long_i, short_i = order[:k], order[-k:]              # 낮은 펀딩 롱 / 높은 펀딩 숏
         pr = P[long_i, t + hold] / P[long_i, t] - 1.0
         sr = P[short_i, t + hold] / P[short_i, t] - 1.0
@@ -94,7 +130,7 @@ def simulate(P, F, lb, hold, k, taker=TAKER):
             fsum * 100.0, psum * 100.0)
 
 
-def null_dist(P, F, lb, hold, k, taker=TAKER, samples=SAMPLES, seed=0):
+def null_dist(P, F, lb, hold, k, taker=TAKER, samples=SAMPLES, seed=0, U=None):
     """랜덤 '선택' 귀무 — 같은 시각·같은 개수를 무작위로. **펀딩 순위 정보만** 제거된다.
 
     귀무도 펀딩을 받는다(무작위 롱숏이라 기대 스프레드는 ~0). 비용도 같은 식으로 문다 —
@@ -106,7 +142,10 @@ def null_dist(P, F, lb, hold, k, taker=TAKER, samples=SAMPLES, seed=0):
     rows = np.arange(samples)[:, None]
     prevL = prevS = None
     for t in range(lb, N - hold - 1, hold):
-        pick = np.argsort(rng.random((samples, S)), axis=1)[:, :2 * k]
+        r = rng.random((samples, S))
+        if U is not None:                                    # 같은 유니버스 안에서 무작위
+            r = np.where(U[:, t][None, :], r, 2.0)
+        pick = np.argsort(r, axis=1)[:, :2 * k]
         li, si = pick[:, :k], pick[:, k:]
         gp = P[:, t + hold] / P[:, t] - 1.0
         gf = F[:, t + 1:t + hold + 1].sum(axis=1)          # 전략과 같은 규칙(t 정산분 제외)
@@ -151,7 +190,35 @@ def scan(P, F, times, taker, label):
     return common
 
 
+def _seg_mask(times, a, b):
+    lo = int(datetime.fromisoformat(a).replace(tzinfo=timezone.utc).timestamp() * 1000)
+    hi = int(datetime.fromisoformat(b).replace(tzinfo=timezone.utc).timestamp() * 1000)
+    return (times >= lo) & (times < hi)
+
+
+def recheck():
+    """펀딩 합산 수정 전/후 — BACKLOG 의 핵심 숫자를 같은 설정으로 나란히."""
+    cfgs = [("전체 56 · k=11", None, 11), ("상위 30 · k=7", 30, 7)]
+    costs = (0.0005, 0.0015, 0.0030)
+    lb, h = 21, 3
+    for legacy in (True, False):
+        syms, times, P, F, V = load(legacy_overwrite=legacy, with_volume=True)
+        print(f"\n== {'수정 전(덮어쓰기)' if legacy else '수정 후(합산)'} · {len(syms)}심볼 · lb={lb} h={h}")
+        for name, top, k in cfgs:
+            U = universe_mask(V, top)
+            for c in costs:
+                cells = []
+                for seg, a, b in SEGMENTS:
+                    m = _seg_mask(times, a, b)
+                    r, turn, fs, ps = simulate(P[:, m], F[:, m], lb, h, k, c, U[:, m])
+                    p95 = float(np.percentile(null_dist(P[:, m], F[:, m], lb, h, k, c, U=U[:, m]), 95))
+                    cells.append(f"{r:+8.1f}% (펀딩 {fs:+5.0f}%p, p95 {p95:+6.1f}) {'✅' if r > p95 and r > 0 else '❌'}")
+                print(f"  {name:14} 편도 {c*1e4:4.0f}bp | " + " | ".join(cells), flush=True)
+
+
 def main():
+    if "--recheck" in __import__("sys").argv:
+        return recheck()
     syms, times, P, F = load()
     f = lambda t: datetime.fromtimestamp(t / 1000, timezone.utc)
     print(f"M · 펀딩 횡단면 · {len(syms)}심볼 × {len(times):,}개 펀딩시각(8h) · "
