@@ -138,7 +138,8 @@ class LiveTrader:
         #   동작을 바꾸지 않기 위해 기본값과 큰 쪽을 쓴다.
         need_bars = required_warmup_bars(preset.data.get("entry"),
                                          *[r.get("when") for r in (preset.data.get("entryRules") or [])],
-                                         (preset.exit or {}).get("condition"))
+                                         (preset.exit or {}).get("condition"),
+                                         *((preset.exit or {}).get("conditionBySide") or {}).values())
         need_days = need_bars * self.tf_min / (24 * 60)
         if need_days > self.warmup_days:
             print(f"  [워밍업] {preset.timeframe} · 지표 수렴에 {need_bars}봉 필요 → "

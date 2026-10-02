@@ -325,6 +325,9 @@ class Stepper:
         if pos is not None:
             st_exit = ex_block.get("supertrendExit")
             cond = ex_block.get("condition")
+            by_side = ex_block.get("conditionBySide")
+            if by_side:                              # 롱·숏 청산이 비대칭이면 방향별 조건이 우선
+                cond = by_side.get("long" if pos.side > 0 else "short")
             time_stop = ex_block.get("timeStop")
             if st_exit is not None and _supertrend_flip_exit(resolver, st_exit, pos.side, sb):
                 st_reason = {"stopLoss": "stop_loss", "exit": "supertrend"}.get(

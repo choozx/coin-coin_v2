@@ -18,6 +18,11 @@
 레버리지 1·명목 100% 로 잰다. 레버리지는 엣지를 만들지 않고 결과와 파산 확률만 키운다.
 
     python3 -u -m research.exp_T_supertrend_search
+    python3 -u -m research.exp_T_supertrend_search --scalp            # 3m·5m·15m 만(스캘핑)
+    python3 -u -m research.exp_T_supertrend_search --scalp --zero-fee # 수수료 0 = 신호 자체에 정보가 있나
+
+--scalp: 사용자 제약 "스캘핑이니 15분봉 이하". 1m 은 한 번에 ~190초·구간1 에서 2.4만 거래라 뺐다.
+--zero-fee: maker 0%(BTCUSDC) 로 전부 체결된다는 상한. 귀무에도 같은 0 이 들어간다(F 의 교훈).
 """
 from __future__ import annotations
 
@@ -39,7 +44,9 @@ from research.exp_K_live_preset import (hold_bars_of, live_preset,  # noqa: E402
                                          mixed_null, one_way_fee)
 
 SYMBOL = "BTCUSDT"
-TFS = ("15m", "1h", "4h")
+SCALP = "--scalp" in sys.argv
+ZERO_FEE = "--zero-fee" in sys.argv
+TFS = ("3m", "5m", "15m") if SCALP else ("15m", "1h", "4h")
 PERIODS = (7, 10, 14, 20, 30)
 MULTS = (1.5, 2.0, 2.5, 3.0, 4.0)
 FILTERS = (True, False)                 # 현행 HawkEye+QQE 필터 유지 / SuperTrend 단독
@@ -83,7 +90,8 @@ def build(tf, period, mult, filt, side) -> dict:
     return d
 
 
-def _init(seg_idx):
+def _init(seg_idx, zero_fee=False):
+    _W["fee"] = 0.0 if zero_fee else None
     segs = segments()
     _W["data"] = {i: lib.load(SYMBOL, start_ms=segs[i][0], end_ms=segs[i][1]) for i in seg_idx}
 
@@ -91,7 +99,8 @@ def _init(seg_idx):
 def _run(args):
     combo, i = args
     base, fs = _W["data"][i]
-    m = lib.backtest(base, build(*combo), SYMBOL, funding_schedule=fs)
+    f = _W.get("fee")
+    m = lib.backtest(base, build(*combo), SYMBOL, funding_schedule=fs, maker_fee=f, taker_fee=f)
     return combo, i, m
 
 
@@ -114,14 +123,16 @@ def _ym(ms):
 def main() -> int:
     segs = segments()
     workers = max(1, (os.cpu_count() or 2) - 1)
-    print(f"T · SuperTrend 탐색 · {SYMBOL} · 격자 {len(GRID)} · 워커 {workers}")
+    fee = 0.0 if ZERO_FEE else None
+    print(f"T · SuperTrend 탐색 · {SYMBOL} · TF {'/'.join(TFS)} · 격자 {len(GRID)} · "
+          f"수수료 {'0 (상한)' if ZERO_FEE else '전부 taker'} · 워커 {workers}")
     for i, (a, b) in enumerate(segs):
         print(f"  구간{i+1}: {_ym(a)} ~ {_ym(b)}{'  (홀드아웃 — 선택 후 1회)' if i == 2 else ''}")
 
     # ── 선택: 구간 1·2 ──
     res = {}
     jobs = [(c, i) for c in GRID for i in (0, 1)]
-    with ProcessPoolExecutor(workers, initializer=_init, initargs=((0, 1),)) as ex:
+    with ProcessPoolExecutor(workers, initializer=_init, initargs=((0, 1), ZERO_FEE)) as ex:
         for k, (c, i, m) in enumerate(ex.map(_run, jobs, chunksize=4), 1):
             res[(c, i)] = m
             if k % 100 == 0:
@@ -134,6 +145,15 @@ def main() -> int:
         rets = [res[(c, i)].total_return_pct for c in GRID]
         print(f"\n  구간{i+1} 분포: BTC 보유 {bh:+.0f}% · 조합 중앙 {np.median(rets):+.1f}% · "
               f"양수 {sum(r > 0 for r in rets)}/{len(rets)} · 최고 {max(rets):+.1f}%")
+
+    for tf in TFS:
+        sub = [c for c in GRID if c[0] == tf]
+        r0 = [res[(c, 0)].total_return_pct for c in sub]
+        r1 = [res[(c, 1)].total_return_pct for c in sub]
+        tr = [res[(c, 0)].num_trades for c in sub]
+        print(f"  {tf:>3}: 중앙 {np.median(r0):+7.1f}% / {np.median(r1):+7.1f}%  최고 {max(r0):+7.1f}% / "
+              f"{max(r1):+7.1f}%  두 구간 양수 {sum(a > 0 and b > 0 for a, b in zip(r0, r1))}/{len(sub)}  "
+              f"거래 중앙 {int(np.median(tr))}")
 
     both_pos = [c for c in GRID if res[(c, 0)].total_return_pct > 0 and res[(c, 1)].total_return_pct > 0]
     print(f"\n  두 구간 모두 양수: {len(both_pos)}/{len(GRID)}")
@@ -152,8 +172,9 @@ def main() -> int:
 
     # 현행 라이브 설정의 자리
     cur = ("15m", 14, 2.5, True, "both")
-    print(f"\n  현행(라이브) {_label(cur)}: 구간1 {res[(cur, 0)].total_return_pct:+.1f}% · "
-          f"구간2 {res[(cur, 1)].total_return_pct:+.1f}%  (레버리지 1 기준)")
+    if (cur, 0) in res:
+        print(f"\n  현행(라이브) {_label(cur)}: 구간1 {res[(cur, 0)].total_return_pct:+.1f}% · "
+              f"구간2 {res[(cur, 1)].total_return_pct:+.1f}%  (레버리지 1 기준)")
 
     if not passed:
         print("\n  ★ 결론: 사전 규칙 ①을 통과한 조합이 없다 → 홀드아웃을 열지 않는다.")
@@ -163,7 +184,7 @@ def main() -> int:
     pick = passed[0]
     print(f"\n  ★ 선택: {_label(pick)} → 홀드아웃 1회")
     base3, fs3 = lib.load(SYMBOL, start_ms=segs[2][0], end_ms=segs[2][1])
-    m3 = lib.backtest(base3, build(*pick), SYMBOL, funding_schedule=fs3)
+    m3 = lib.backtest(base3, build(*pick), SYMBOL, funding_schedule=fs3, maker_fee=fee, taker_fee=fee)
     g3 = _null(m3, base3, pick[0], 1)
     bh3 = (base3.close[-1] / base3.close[0] - 1) * 100
     lib.show("  홀드아웃", m3)

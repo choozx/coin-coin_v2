@@ -77,6 +77,15 @@
           "$ref": "#/$defs/condition",
           "description": "지표 기반 청산 (예: RSI>70). 조건 만족 시 청산."
         },
+        "conditionBySide": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "방향별 지표 청산. 롱·숏의 청산 조건이 대칭이 아닐 때(예: 롱=종가<SMA22, 숏=종가>SMA22). 있으면 condition 보다 우선.",
+          "properties": {
+            "long":  { "$ref": "#/$defs/condition" },
+            "short": { "$ref": "#/$defs/condition" }
+          }
+        },
         "timeStop": {
           "type": "object",
           "additionalProperties": false,
@@ -288,7 +297,7 @@
               "type": "string",
               "enum": ["SMA", "EMA", "RSI", "MACD", "MACD_signal", "MACD_hist",
                        "BB_upper", "BB_lower", "BB_mid", "ATR", "ADX", "PLUS_DI", "MINUS_DI", "STOCH_K", "STOCH_D",
-                       "STOCHRSI_K", "STOCHRSI_D", "CCI", "MFI", "RVOL", "VWAP",
+                       "STOCHRSI_K", "STOCHRSI_D", "CCI", "MFI", "RVOL", "VWAP", "VWAP_Z", "SMA_SLOPE", "MA_GAP", "MA_CROSSES", "BODY_ATR",
                        "TAKER_DELTA", "TAKER_DELTA_RATIO", "CVD", "CVD_EMA", "HAWKEYE",
                        "QQE_MOD", "QQE_RSI", "QQE_LINE",
                        "SUPERTREND", "SUPERTREND_DIR",

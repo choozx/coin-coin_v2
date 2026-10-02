@@ -85,6 +85,18 @@ class SeriesResolver:
             return ind.mfi(c.high, c.low, c.close, c.volume, period or 14)
         if name == "VWAP":
             return ind.vwap(c.high, c.low, c.close, c.volume)
+        if name == "SMA_SLOPE":
+            return ind.sma_slope(c.close, period or 200, int(params.get("lookback", 10)))
+        if name == "MA_GAP":
+            return ind.ma_gap(c.close, int(params.get("fast", 22)), int(params.get("slow", period or 200)),
+                              int(params.get("window", 1)))
+        if name == "MA_CROSSES":
+            return ind.ma_crosses(c.close, int(params.get("fast", 22)), int(params.get("slow", period or 200)),
+                                  int(params.get("window", 20)))
+        if name == "BODY_ATR":
+            return ind.body_atr(c.open, c.high, c.low, c.close, period or 14)
+        if name == "VWAP_Z":
+            return ind.session_vwap_z(c.open_time, c.high, c.low, c.close, c.volume)
         if name in ("TAKER_DELTA", "TAKER_DELTA_RATIO", "CVD", "CVD_EMA"):
             if c.taker_buy is None:                 # 오더플로우 데이터 없음 → 항상 false
                 return np.full(len(c), np.nan)
@@ -314,7 +326,8 @@ def explain_lines(exp: dict, depth: int = 0) -> list:
 # HAWKEYE(200) 가 NaN, 1d 는 SUPERTREND(14) 마저 NaN.
 
 # 기간처럼 쓰이는 params 키(값이 클수록 더 긴 과거가 필요하다).
-_LOOKBACK_PARAMS = ("slow", "signal", "bb_length", "rsi_length", "smoothing", "smooth_k", "smooth_d")
+_LOOKBACK_PARAMS = ("slow", "signal", "bb_length", "rsi_length", "smoothing", "smooth_k", "smooth_d",
+                    "lookback", "window")
 
 # 재귀 지표(EMA·ADX·QQE·SuperTrend)는 기간만큼만 있으면 값이 나오지만 **수렴하지 않는다**
 # (TA-Lib 의 unstable period). 넉넉히 배수를 준다 — 창을 늘리는 비용보다 안 맞는 게 비싸다.

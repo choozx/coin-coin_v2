@@ -161,6 +161,84 @@ def vwap(high, low, close, volume) -> np.ndarray:
     return np.where(cum_v > 0, cum_pv / cum_v, np.nan)
 
 
+def session_vwap_z(open_time, high, low, close, volume, session_ms: int = 86_400_000,
+                   warmup_ms: int = 3_600_000) -> np.ndarray:
+    """세션(기본 UTC 일) VWAP 대비 이탈을 σ 단위로. z = (close − VWAP) / σ_VWAP.
+
+    σ 는 세션 안 거래량가중 분산(Σv·tp² / Σv − VWAP²)의 제곱근 — 흔히 쓰는 VWAP 표준편차 밴드와 같다.
+    세션마다 리셋하므로 **데이터 창의 시작점과 무관**하다. 누적 VWAP(vwap())는 백테스트 시작일에
+    따라 값이 달라져 라이브와 어긋나므로 스캘핑 판정엔 이걸 쓴다. 분산이 0(세션 첫 봉 등)이면 NaN.
+
+    warmup_ms: 세션 시작 후 이 시간 동안은 NaN. 봉이 몇 개 없으면 σ 가 0 에 가까워 z 가 폭발한다
+    (실측: 진입 시점 z = 58,081). 그건 신호가 아니라 계산 인공물이다. 봉 수가 아니라 **시간**으로
+    자르는 건 타임프레임과 무관하게 같은 구간을 비우려는 것이다.
+    """
+    ot = np.asarray(open_time, dtype=np.int64)
+    tp = (_d(high) + _d(low) + _d(close)) / 3.0
+    v = _d(volume)
+    sess = ot // session_ms
+    out = np.full(len(tp), np.nan)
+    if not len(tp):
+        return out
+    starts = np.r_[0, np.flatnonzero(np.diff(sess)) + 1, len(tp)]
+    for a, b in zip(starts[:-1], starts[1:]):
+        cv = np.cumsum(v[a:b])
+        with np.errstate(invalid="ignore", divide="ignore"):
+            vw = np.cumsum(tp[a:b] * v[a:b]) / cv
+            var = np.cumsum(tp[a:b] ** 2 * v[a:b]) / cv - vw ** 2
+            sd = np.sqrt(np.where(var > 0, var, np.nan))
+            out[a:b] = (_d(close)[a:b] - vw) / sd
+    out[(ot - sess * session_ms) < warmup_ms] = np.nan
+    return out
+
+
+# ---- 이동평균 두 개(빠른·느린)로 읽는 방향·수렴·횡보 — 'SMA200 방향 + SMA22 타점' 기법용 ----
+def sma_slope(close, period: int, lookback: int) -> np.ndarray:
+    """SMA(period) 의 lookback 봉 변화율(%). +면 우상향('머리가 위'), −면 우하향."""
+    m = sma(close, period)
+    out = np.full(len(m), np.nan)
+    if lookback < len(m):
+        prev = m[:-lookback]
+        with np.errstate(invalid="ignore", divide="ignore"):
+            out[lookback:] = (m[lookback:] / prev - 1.0) * 100.0
+    return out
+
+
+def ma_gap(close, fast: int, slow: int, window: int = 1) -> np.ndarray:
+    """|SMA(fast) − SMA(slow)| / 종가 (%) 의 직전 window 봉 최소값. 작을수록 두 선이 모였다(스퀴즈)."""
+    c = _d(close)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        g = np.abs(sma(c, fast) - sma(c, slow)) / c * 100.0
+    if window <= 1:
+        return g
+    return talib.MIN(g, timeperiod=int(window))
+
+
+def ma_crosses(close, fast: int, slow: int, window: int) -> np.ndarray:
+    """직전 window 봉 동안의 교차 횟수 — 가격×빠른선 · 빠른선×느린선 · 가격×느린선 셋을 합친다.
+
+    추세 중엔 거의 안 생기는 교차가 몰리면 횡보다('4단 교차'). 지표가 NaN 인 구간의 부호 변화는 세지 않는다.
+    """
+    c = _d(close)
+    f, s = sma(c, fast), sma(c, slow)
+    n = np.zeros(len(c))
+    for a, b in ((c, f), (f, s), (c, s)):
+        d = np.sign(a - b)
+        flip = np.zeros(len(c))
+        ok = ~np.isnan(d[1:]) & ~np.isnan(d[:-1]) & (d[1:] != 0) & (d[:-1] != 0)
+        flip[1:] = ((d[1:] != d[:-1]) & ok).astype(float)
+        n += flip
+    out = talib.SUM(n, timeperiod=int(window))
+    out[np.isnan(s)] = np.nan
+    return out
+
+
+def body_atr(open_, high, low, close, period: int = 14) -> np.ndarray:
+    """캔들 몸통 |종가−시가| 를 ATR 배수로. '몸통이 엄청 긴 캔들' 돌파 판정용."""
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.abs(_d(close) - _d(open_)) / atr(high, low, close, period)
+
+
 # ---- 오더플로우: 테이커 매수/매도 델타 & CVD ----
 # klines의 taker_buy(테이커가 공격적으로 산 체결량)로 봉당 매수/매도 압력을 계산.
 # taker_sell = volume - taker_buy → delta = taker_buy - taker_sell = 2*taker_buy - volume.
