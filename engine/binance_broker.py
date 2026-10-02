@@ -254,6 +254,12 @@ class BinanceBroker:
         그건 '주문 못 낼 정도로 작다'는 뜻이므로 OrderError(진입 스킵)로 번역한다.
         """
         ex, m = self.client(), self.market()
+        # float 잡음부터 걷어낸다. ccxt 는 repr 문자열을 그대로 절사하므로 0.04+0.018 =
+        # 0.057999999999999996 이 0.057 이 된다. 실측(테스트넷 09-21): 진입 잔량 0.059-0.04 가
+        # 0.018 로 잘려 0.058 만 체결됐고, 청산 0.058 이 다시 0.057 로 잘려 0.001 이 거래소에
+        # 남았다 → 동기화가 그 잔량을 새 포지션으로 인계해 원장에 거래가 두 건이 됐다.
+        # 12자리 반올림은 스텝(≥1e-8)보다 한참 아래라 진짜 수량을 바꾸지 않는다.
+        qty = round(float(qty), 12)
         try:
             return float(ex.amount_to_precision(m["symbol"], qty))
         except Exception as e:
