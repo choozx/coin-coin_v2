@@ -20,6 +20,7 @@
     python3 -u -m research.exp_T_supertrend_search
     python3 -u -m research.exp_T_supertrend_search --scalp            # 3m·5m·15m 만(스캘핑)
     python3 -u -m research.exp_T_supertrend_search --scalp --zero-fee # 수수료 0 = 신호 자체에 정보가 있나
+    python3 -u -m research.exp_T_supertrend_search --zero-fee --tfs 5m,15m
 
 --scalp: 사용자 제약 "스캘핑이니 15분봉 이하". 1m 은 한 번에 ~190초·구간1 에서 2.4만 거래라 뺐다.
 --zero-fee: maker 0%(BTCUSDC) 로 전부 체결된다는 상한. 귀무에도 같은 0 이 들어간다(F 의 교훈).
@@ -47,6 +48,8 @@ SYMBOL = "BTCUSDT"
 SCALP = "--scalp" in sys.argv
 ZERO_FEE = "--zero-fee" in sys.argv
 TFS = ("3m", "5m", "15m") if SCALP else ("15m", "1h", "4h")
+if "--tfs" in sys.argv:                 # 예: --tfs 5m,15m (3m 은 느려서 2시간 제한에 걸린다)
+    TFS = tuple(sys.argv[sys.argv.index("--tfs") + 1].split(","))
 PERIODS = (7, 10, 14, 20, 30)
 MULTS = (1.5, 2.0, 2.5, 3.0, 4.0)
 FILTERS = (True, False)                 # 현행 HawkEye+QQE 필터 유지 / SuperTrend 단독
