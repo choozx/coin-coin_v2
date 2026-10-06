@@ -117,6 +117,12 @@ def signal_close_index(base: Candles, target_min: int):
     백테스트와 다른 시점에 매매했다. 데이터에 결측이 있을 때도 마지막 '남아있는' 분을
     마감으로 오인했다. 진짜 마감 = 그 분이 끝나는 순간이 상위봉 경계와 같을 때.
     """
+    # 마감 판정(open_time+1분)과 엔진의 체결 시각(ot+1분)은 베이스가 1분봉이라는 전제다. 1h 봉을 넣으면
+    # 마감이 한 번도 안 서서 **오류 없이 거래 0건**이 된다(2026-10-06 알트 4h 검증에서 실제로 당했다).
+    # 조용히 틀린 결과를 내느니 여기서 멈춘다.
+    if base.timeframe_min != 1:
+        raise ValueError(f"베이스는 1분봉이어야 한다(받은 것: {base.timeframe_min}m) — "
+                         "상위 봉만 있으면 각 봉을 그 구간의 마지막 1분으로 옮겨 1분봉으로 표현할 것")
     bucket_ms = target_min * MINUTE_MS
     bucket = (base.open_time // bucket_ms) * bucket_ms
     uniq, inv = np.unique(bucket, return_inverse=True)

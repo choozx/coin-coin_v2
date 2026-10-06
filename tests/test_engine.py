@@ -45,6 +45,18 @@ def test_signal_close_index():
     assert is_close[4] and is_close[9]        # 5번째, 10번째 1분봉이 종료점
 
 
+def test_signal_close_index_rejects_non_minute_base():
+    # 1h 베이스를 넣으면 마감이 한 번도 안 서서 조용히 거래 0 이 됐다 — 이제는 멈춘다
+    rows = [[i * 60 * MIN, 1, 1, 1, 1, 1] for i in range(8)]
+    c = _candles(rows, tf=60)
+    try:
+        signal_close_index(c, 240)
+    except ValueError as e:
+        assert "1분봉" in str(e)
+    else:
+        raise AssertionError("1분봉이 아닌 베이스를 받아들였다")
+
+
 # ---- 지표 ------------------------------------------------------------------
 def test_sma_ema_basic():
     x = np.arange(1, 11, dtype=float)
