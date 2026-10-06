@@ -99,3 +99,64 @@ def test_research_lib_shares_the_engine_implementation():
     a = L.null_model(b, "15m", 30, 8, "long", samples=200, seed=9)
     c = nm.simulate(b, 15, 30, 8, "long", samples=200, seed=9)
     assert np.allclose(a, c)
+
+
+# ---- 정밀 귀무(거래별 보유·방향 보존) ---------------------------------------------
+class _T:
+    def __init__(self, side, hold_min, lev=1, px=100.0, qty=1.0):
+        self.side, self.leverage = side, lev
+        self.entry_time, self.exit_time = 0, hold_min * 60_000
+        self.entry_price, self.qty = px, qty
+
+
+def _rising(n=3000):
+    px = 100.0 + np.arange(n, dtype=float)               # 1분마다 +1 — 롱은 늘 벌고 숏은 늘 잃는다
+    ot = (np.arange(n) * 60_000).astype(np.int64)
+    return Candles(ot, px, px, px, px, np.full(n, 1.0), 1)
+
+
+def test_simulate_trades_keeps_each_trade_side():
+    """방향을 섞어 버리면 '롱 전략 vs 롱숏 랜덤'이 돼 드리프트를 신호로 오독한다."""
+    b = _rising()
+    up = nm.simulate_trades(b, 1, [_T(1, 10)], leverage=1, size_fraction=1.0, samples=300, taker_fee=0.0)
+    dn = nm.simulate_trades(b, 1, [_T(-1, 10)], leverage=1, size_fraction=1.0, samples=300, taker_fee=0.0)
+    assert (up > 0).all() and (dn < 0).all()
+
+
+def test_simulate_trades_keeps_each_trade_hold():
+    """★ 평균 보유 하나로 뭉개지 않는다 — 보유가 길면 그만큼 움직임도 크다."""
+    b = _rising()
+    h10 = np.median(nm.simulate_trades(b, 1, [_T(1, 10)], 1, 1.0, samples=300, taker_fee=0.0))
+    h40 = np.median(nm.simulate_trades(b, 1, [_T(1, 40)], 1, 1.0, samples=300, taker_fee=0.0))
+    assert 3.0 < h40 / h10 < 5.0
+
+
+def test_judge_returns_none_without_trades_and_labels_method():
+    b = _base()
+
+    class Empty:
+        trades = []
+        total_return_pct = 0.0
+
+    assert nm.judge(Empty(), b, "15m", 1000.0) is None
+
+    class M:
+        trades = [_T(1, 45), _T(-1, 90), _T(1, 30)]
+        total_return_pct = 1.0
+
+    g = nm.judge(M(), b, "15m", 1000.0, samples=200)
+    assert g["method"] == "precise" and g["nTrades"] == 3 and g["samples"] == 200
+    assert {"nullP95", "percentile", "beatsNull", "negative", "bestOfNP95"} <= set(g)
+
+
+def test_research_precise_null_is_the_engine_one():
+    """연구(lib.precise_null)와 엔진(simulate_trades)이 같은 숫자를 낸다 — 판정 구현은 하나."""
+    import research.lib as L
+
+    class M:
+        trades = [_T(1, 45), _T(-1, 90)]
+
+    b = _base()
+    a = L.precise_null(M(), b, 15, 0.0005, samples=200, seed=4)
+    c = nm.simulate_trades(b, 15, M.trades, leverage=1, size_fraction=1.0, samples=200, seed=4, taker_fee=0.0005)
+    assert np.allclose(a, c)

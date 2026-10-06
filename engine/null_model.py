@@ -47,6 +47,50 @@ def simulate(base, tf_min: int, n_trades: int, hold_bars: int, side: str,
     return (per_trade.prod(axis=1) - 1.0) * 100.0
 
 
+def simulate_trades(base, tf_min: int, trades, leverage: float = 1, size_fraction: float = 0.10,
+                    samples: int = 2000, seed: int = 0, taker_fee: float = None) -> np.ndarray:
+    """**정밀 귀무** — 전략의 거래마다 실제 보유 길이·방향을 그대로 두고 진입 시각만 무작위.
+
+    simulate() 는 보유를 평균 하나로 근사한다. 보유가 몇 시간~몇 주로 들쭉날쭉한 추세추종에선
+    긴 보유 몇 개가 분산을 키우는데 평균이 그걸 지워 p95 가 지나치게 낮아진다 — 실제로 결론이
+    갈렸다(4h SuperTrend+HawkEye+QQE: 근사 p95 +20% 로 통과 → 정밀 +107% 로 미달, BACKLOG N0).
+    그래서 판정 기본값은 이쪽이다. 노출(레버리지×명목비율)은 matched_params 의 평균을 쓴다.
+    """
+    c = resample(base, tf_min).close.astype(np.float64)
+    n = len(c)
+    taker = bm.DEFAULT_TAKER_FEE if taker_fee is None else taker_fee
+    expo = leverage * size_fraction
+    rt_fee = 2 * taker * expo
+    rng = np.random.default_rng(seed)
+    tot = np.ones(samples)
+    for t in trades:
+        h = max(1, int(round((t.exit_time - t.entry_time) / (tf_min * 60_000))))
+        if h >= n - 1:
+            continue
+        i = rng.integers(0, n - h - 1, size=samples)
+        tot *= np.clip(1.0 + t.side * expo * (c[i + h] / c[i] - 1.0) - rt_fee, 0.0, None)
+    return (tot - 1.0) * 100.0
+
+
+def judge(metrics, base, timeframe: str, initial_equity: float, taker_fee: float = None,
+          n_combos: int = 1, samples: int = 2000, seed: int = 0):
+    """백테스트 결과 하나에 '우연보다 나은가' 판정을 붙인다. 거래가 없으면 None.
+
+    백테스트 스튜디오(단일)와 최적화기(격자, n_combos 보정)가 **같은 함수**를 쓴다.
+    """
+    mp = matched_params(metrics, timeframe, initial_equity)
+    if mp["n_trades"] <= 0:
+        return None
+    dist = simulate_trades(base, mp["tf_min"], metrics.trades, leverage=mp["leverage"],
+                           size_fraction=mp["size_fraction"], samples=samples, seed=seed,
+                           taker_fee=taker_fee)
+    g = gate(metrics.total_return_pct, dist, n_combos=n_combos)
+    g["method"] = "precise"          # 거래별 보유·방향 보존
+    g["samples"] = int(samples)
+    g["nTrades"] = mp["n_trades"]
+    return g
+
+
 def matched_params(metrics, timeframe: str, initial_equity: float) -> dict:
     """전략의 **실제** 트레이드에서 귀무 조건을 뽑는다.
 

@@ -15,6 +15,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .backtest import BacktestConfig, run
+from . import null_model
 from . import binance_math as bm
 from . import control
 from .candles import resample, TIMEFRAME_MINUTES
@@ -420,6 +421,12 @@ def _run_backtest(p: dict) -> dict:
     cfg = BacktestConfig(initial_equity=float(p["equity"]), funding_rate=fr_rate,
                          maker_fee=maker_fee, taker_fee=taker_fee)
     m = run(base, preset, cfg)
+    # '우연보다 나은가' — 같은 거래들(보유·방향 그대로)을 아무 시각에나 넣은 2000번과 비교.
+    # 수익률만 보여주면 좋아 보이는 전략이 대부분 이 문턱 아래였다(research/BACKLOG). 최적화기와 같은 함수.
+    try:
+        verdict = null_model.judge(m, base, p["timeframe"], cfg.initial_equity, taker_fee=cfg.taker_fee)
+    except Exception as e:            # 판정 실패가 백테스트 결과를 못 내게 하면 안 된다
+        verdict = {"error": f"{type(e).__name__}: {e}"}
 
     from collections import Counter
     import math
@@ -464,6 +471,7 @@ def _run_backtest(p: dict) -> dict:
             "totalFees": round(m.total_fees, 2),
         },
         "exitReasons": dict(reasons),
+        "verdict": verdict,
         "equityCurve": _downsample([[t, round(e, 2)] for t, e in m.equity_curve]),
     }
 

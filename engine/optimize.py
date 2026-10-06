@@ -206,7 +206,7 @@ def optimize(base, build_preset_fn, fixed_params, sweep_specs, cfg,
     out = {
         "objective": objective,
         "totalCombos": total,
-        "nullGate": "OOS 기준 · 격자 크기 보정" if do_oos else "없음(OOS 미분할)",
+        "nullGate": "OOS 기준 · 정밀 귀무 · 격자 크기 보정" if do_oos else "없음(OOS 미분할)",
         "evaluated": len(combos),
         "truncated": truncated,
         "passed": len(results),
@@ -244,13 +244,11 @@ def _null_gate(base_oos, top, cfg, build_preset_fn, fixed_params, names,
             preset = Preset.from_dict(build_preset_fn(params), validate=False)
             tf = timeframe or preset.timeframe
             m = run(base_oos, preset, cfg)
-            mp = nm.matched_params(m, tf, cfg.initial_equity)
-            if mp["n_trades"] <= 0:
-                continue
-            dist = nm.simulate(base_oos, mp["tf_min"], mp["n_trades"], mp["hold_bars"],
-                               mp["side"], leverage=mp["leverage"],
-                               size_fraction=mp["size_fraction"], samples=samples,
-                               taker_fee=cfg.taker_fee)
-            r["null"] = nm.gate(m.total_return_pct, dist, n_combos=n_combos)
+            # 정밀 귀무(거래별 보유·방향 보존) + 격자 크기 보정. 평균 보유 근사는 추세추종에서
+            # p95 를 지나치게 낮춰 가짜 통과를 냈다(BACKLOG N0) — 그래서 judge 를 쓴다.
+            g = nm.judge(m, base_oos, tf, cfg.initial_equity, taker_fee=cfg.taker_fee,
+                         n_combos=n_combos, samples=samples)
+            if g is not None:
+                r["null"] = g
         except Exception as e:      # 판정 실패가 순위표를 못 내게 하면 안 된다
             r["null"] = {"error": f"{type(e).__name__}: {e}"}

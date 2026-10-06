@@ -117,21 +117,10 @@ def verdict(strategy_return_pct: float, null_dist: np.ndarray, pct: float = 95.0
 
 
 def precise_null(m, base, tf_min: int, fee: float, samples: int = 2000, seed: int = 0) -> np.ndarray:
-    """정밀 귀무 — 전략의 거래마다 **실제 보유 길이·방향을 그대로** 두고 진입 시각만 무작위.
+    """정밀 귀무(1배·자본 100%) — 구현은 engine/null_model.simulate_trades. 연구와 엔진이 같은 판정을 쓴다.
 
-    null_model 은 평균 보유 하나로 근사한다. 보유가 몇 시간~몇 주로 들쭉날쭉한 추세추종에선
-    긴 보유 몇 개가 분산을 키우는데 근사가 그걸 평균으로 지워 p95 가 지나치게 낮아진다
-    (4h ST 재확인에서 근사 p95 +20% vs 정밀 +107% — 결론이 갈렸다, BACKLOG N0). 보유 가변
-    전략은 이걸로 판정할 것. 회계: 1배·자본 100%·복리·왕복 fee.
+    거래마다 실제 보유·방향을 그대로 두고 진입 시각만 무작위. 보유 가변 전략(추세추종)은 이걸로 판정할 것
+    — 평균 보유 근사(null_model)는 p95 를 지나치게 낮춘다(BACKLOG N0).
     """
-    c = resample(base, tf_min).close.astype(np.float64)
-    n = len(c)
-    rng = np.random.default_rng(seed)
-    tot = np.ones(samples)
-    for t in m.trades:
-        h = max(1, int(round((t.exit_time - t.entry_time) / (tf_min * 60_000))))
-        if h >= n - 1:
-            continue
-        i = rng.integers(0, n - h - 1, size=samples)
-        tot *= np.clip(1.0 + t.side * (c[i + h] / c[i] - 1.0) - 2 * fee, 0.0, None)
-    return (tot - 1.0) * 100.0
+    return nm.simulate_trades(base, tf_min, m.trades, leverage=1, size_fraction=1.0,
+                              samples=samples, seed=seed, taker_fee=fee)
