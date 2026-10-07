@@ -568,3 +568,22 @@ def test_funding_schedule_is_used_per_interval_not_averaged():
     #   실제 손해는 그 조건이 깨질 때 난다 — run.py 는 **포지션을 안 들고 있던 시간까지 포함한**
     #   전체 히스토리의 평균을 썼다. 그러면 안 겪은 구간의 펀딩이 겪은 구간에 배분된다.
     #   (실측: 120일 SuperTrend flip 에서 펀딩 합계가 -2.35 vs -9.61 로 4배 어긋났다.)
+
+
+def test_mdd_marks_open_position_to_market():
+    """보유 중 낙폭도 MDD 에 들어가야 한다 — 예전엔 청산·무포지션 때만 찍어 '들고 버틴' 낙폭이 빠졌다(B3)."""
+    n = 600
+    px = np.concatenate([np.full(100, 100.0), np.linspace(100, 70, 200), np.linspace(70, 110, 300)])
+    rows = [[i * MIN, p, p, p, p, 10] for i, p in enumerate(px[:n])]
+    c = _candles(rows)
+    always = {"left": {"source": "close"}, "cmp": ">", "right": 0}
+    preset = Preset.from_dict({
+        "schemaVersion": "1.0", "name": "hold", "market": {"exchange": "binance-futures", "symbol": "BTCUSDT",
+                                                            "timeframe": "5m", "direction": "long"},
+        "entry": always, "entryRules": [{"side": "long", "when": always}],
+        "exit": {"timeStop": {"maxBars": 110}},
+        "sizing": {"leverage": 1, "marginMode": "isolated", "size": {"type": "equityPercent", "value": 100.0}},
+    }, validate=True)
+    m = run(c, preset, BacktestConfig(initial_equity=1000.0, taker_fee=0.0, maker_fee=0.0))
+    assert m.total_return_pct > 0                 # 결국 회복해서 이익으로 끝나도
+    assert m.max_drawdown_pct > 25                # 가는 길의 −30% 가 MDD 에 보여야 한다

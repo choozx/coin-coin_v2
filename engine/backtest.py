@@ -418,9 +418,15 @@ def run(base: Candles, preset: Preset, cfg: BacktestConfig = None) -> Metrics:
 
     for t in range(len(base)):
         stepper.step(base, signal, bar_of, is_close, atr_series, resolver, t)
-        # 마킹: 무포지션 구간도 자산곡선에 점 남김(선택)
-        if ex.position is None and is_close[t]:
-            equity_curve.append((int(base.open_time[t]), ex.equity()))
+        # 마킹: 신호봉이 닫힐 때마다 자산곡선에 점. **보유 중이면 평가손익까지**(시가평가).
+        # 예전엔 무포지션일 때와 청산 때만 찍어서 보유 중 낙폭이 MDD 에서 빠졌다 — 며칠~몇 주 들고 가는
+        # 추세 전략(B3)에서 엔진 MDD 29% vs 시가평가 35% 로 드러났다. Calmar(최적화 목적함수)도 같이 틀렸다.
+        if is_close[t]:
+            pos = ex.position
+            eq = ex.equity()
+            if pos is not None:
+                eq += pos.side * (float(base.close[t]) - pos.entry_price) * pos.qty - pos.entry_fee + pos.funding_accum
+            equity_curve.append((int(base.open_time[t]), eq))
 
     # 종료 시 잔여 포지션 청산(마지막 종가 → 그 봉이 닫히는 순간). 백테스트에만 있는 꼬리 처리 —
     # 라이브는 데이터가 끝나지 않으므로 포지션을 그대로 들고 간다.
