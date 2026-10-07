@@ -39,7 +39,7 @@ _F: dict = {}
 
 
 def feats(b):
-    key = id(b)
+    key = evt.pin(b)
     if key not in _F:
         w = evt.day_bars_of(b)
         r = b.close / b.open - 1.0

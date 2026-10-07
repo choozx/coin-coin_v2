@@ -42,7 +42,7 @@ _F: dict = {}
 
 
 def donchian(b, L):
-    key = (id(b), L)
+    key = (evt.pin(b), L)
     if key not in _F:
         n = len(b.close)
         hh = np.full(n, np.nan)
@@ -84,7 +84,7 @@ WINDOW = 48                                           # 개장 범위 뒤 4시�
 
 def signal2(b, combo):
     _, S, R, mode, _ = combo
-    key = ("orb", id(b), S, R)
+    key = ("orb", evt.pin(b), S, R)
     if key not in _F:
         mins = b.open_time // 60_000
         tod = mins % 1440

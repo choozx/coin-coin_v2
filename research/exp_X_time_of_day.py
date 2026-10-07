@@ -35,9 +35,9 @@ _SLOT: dict = {}
 
 def end_slot(b):
     """봉 i 가 '끝나는' 시각의 슬롯(= 진입 시각). 캐시."""
-    if id(b) not in _SLOT:
-        _SLOT[id(b)] = ((b.open_time // 60_000 + b.timeframe_min) % 1440) // 15
-    return _SLOT[id(b)]
+    if evt.pin(b) not in _SLOT:
+        _SLOT[evt.pin(b)] = ((b.open_time // 60_000 + b.timeframe_min) % 1440) // 15
+    return _SLOT[evt.pin(b)]
 
 
 def signal(b, combo):

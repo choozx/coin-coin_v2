@@ -64,7 +64,7 @@ def trigger(b, tf, tr, hold):
 
 def ctx(b):
     """봉마다: 진입 시각(UTC 분) · 1h 추세(+1/−1, 직전 '완성된' 1시간봉 기준) · 거래량 배수."""
-    if id(b) not in _C:
+    if evt.pin(b) not in _C:
         tod = ((b.open_time // 60_000) + b.timeframe_min) % 1440
         h1 = resample(b, 60)
         ema = talib.EMA(h1.close, 50)
@@ -74,8 +74,8 @@ def ctx(b):
         k = np.searchsorted(h1.open_time + 3_600_000, end, side="right") - 1
         trend = np.where(k >= 0, up[np.clip(k, 0, None)], 0.0)
         vr = b.volume / evt.past_mean(b.volume, evt.day_bars_of(b))
-        _C[id(b)] = (tod, trend, vr)
-    return _C[id(b)]
+        _C[evt.pin(b)] = (tod, trend, vr)
+    return _C[evt.pin(b)]
 
 
 def signal(b, combo):

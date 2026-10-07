@@ -35,6 +35,7 @@ sys.path.insert(0, __file__.rsplit("/", 2)[0])
 from engine import indicators as ind                       # noqa: E402
 from engine import null_model as nm                        # noqa: E402
 from engine.candles import resample                        # noqa: E402
+from research import evt                                    # noqa: E402
 from research import lib                                   # noqa: E402
 from research.exp_T4_params import alt_bases               # noqa: E402
 from research.exp_T_supertrend_search import _ym, segments # noqa: E402
@@ -64,7 +65,7 @@ _CTX: dict = {}
 
 def ctx(b, st):
     """진입봉 b 에 대해: RSI, 4h 추세(진입 시각 기준 이미 닫힌 4h 봉). 캐시."""
-    key = (id(b), st)
+    key = (evt.pin(b), st)
     if key not in _CTX:
         h4 = resample(b, 240)
         _, d = ind.supertrend(h4.high, h4.low, h4.close, *st)

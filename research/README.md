@@ -68,6 +68,8 @@ scratchpad 에만 두어 날린 적이 있음).
   `timeframe_min=1` 로** 표현한다 — 버킷 불변, 마감·체결 시각이 실제 봉 끝에 선다(`exp_T4_params.alt_bases`).
 - `ProcessPoolExecutor` 를 쓰는 코드를 `python3 - <<EOF`(stdin)로 돌리면 macOS spawn 자식이 메인 모듈을 못 읽어
   **조용히 멈춘다.** 파일로 저장해 `if __name__ == "__main__":` 아래에서 돌릴 것.
+- **캐시 키에 `id(obj)` 를 그냥 쓰지 말 것.** 루프에서 객체를 만들고 버리면 다음 객체가 같은 id 를 받아 **다른 데이터의 캐시를 돌려받는다**
+  (SR·SRM 알트 검증이 이렇게 오염됐다). `evt.pin(b)` 로 객체를 붙잡아 두거나, 캐시 유무 결과가 같은지 한 번 대조할 것.
 - 시스템 파이썬은 3.9 — f-string 안에 같은 종류 따옴표·역슬래시를 못 넣는다(SyntaxError).
 - 맥 부하가 크면(load 50~110) 엔진 격자는 백그라운드 2시간 제한에 걸린다 — 작업을 쪼개거나(`--tfs`) `evt.py` 로.
 - **바이낸스 선물 웹소켓 경로가 갈려 있다(2026):** bookTicker·depth = `/public/stream`, aggTrade = `/market/stream`.

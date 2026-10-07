@@ -39,7 +39,7 @@ _F: dict = {}
 
 def levels(b, kind):
     """봉마다 '직전 블록' 고저. 블록 = UTC 일 또는 4시간."""
-    key = ("lv", id(b), kind)
+    key = ("lv", evt.pin(b), kind)
     if key not in _F:
         blk_min = 1440 if kind == "day" else 240
         blk = b.open_time // (blk_min * 60_000)
@@ -86,7 +86,7 @@ EXPIRY = 24
 
 
 def fvg(b, g):
-    key = ("fvg", id(b), g)
+    key = ("fvg", evt.pin(b), g)
     if key not in _F:
         cc = np.concatenate(([0.0], b.close[1:] / b.close[:-1] - 1.0))
         sd = evt.past_std(cc, evt.day_bars_of(b)) * b.close

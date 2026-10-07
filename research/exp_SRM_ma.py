@@ -21,6 +21,7 @@ import numpy as np
 sys.path.insert(0, __file__.rsplit("/", 2)[0])
 
 from engine.candles import resample                          # noqa: E402
+from research import evt                                    # noqa: E402
 from research import lib                                     # noqa: E402
 from research import exp_SR_st_rsi as SR                     # noqa: E402
 from research.exp_T4_params import alt_bases                 # noqa: E402
@@ -34,7 +35,7 @@ _MA: dict = {}
 
 def ma_side(b, ma):
     """봉마다 +1(종가 > SMA200) / −1(<) / 0(SMA 없음). 진입 시각에 이미 닫힌 MA 봉 기준."""
-    key = (id(b), ma)
+    key = (evt.pin(b), ma)
     if key not in _MA:
         if ma == "none":
             _MA[key] = None
