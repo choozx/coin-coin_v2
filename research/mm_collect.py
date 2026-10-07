@@ -10,6 +10,7 @@
 끊기면 다시 붙고, 끊긴 구간은 로그로 남긴다(분석 때 그 구간을 빼야 markout 이 안 오염된다).
 
     python3 -u -m research.mm_collect --secs 7000 ADAUSDC NEARUSDC ...
+    python3 -u -m research.mm_collect --secs 3600 --depth BTCUSDT ETHUSDT ...   # + 호가 깊이(시장가 체결 비용)
 """
 from __future__ import annotations
 
@@ -106,6 +107,35 @@ class WS:
             pass
 
 
+DEPTH_SIZES = (10_000, 50_000)             # 시장가 체결 비용을 잴 주문 크기($)
+
+
+def walk(levels, usd: float, mid: float, side: int) -> float:
+    """호가를 따라 usd 만큼 시장가로 먹었을 때 평균가의 mid 대비 비용(bp). 10단계로 모자라면 -1."""
+    left, cost_qty, got_usd = usd, 0.0, 0.0
+    for p, q in levels:
+        p, q = float(p), float(q)
+        take = min(left, p * q)
+        cost_qty += take / p
+        got_usd += take
+        left -= take
+        if left <= 1e-9:
+            avg = got_usd / cost_qty
+            return side * (avg - mid) / mid * 1e4
+    return -1.0
+
+
+def depth_row(x: dict) -> str:
+    """depth10 한 장 → T, $1만·$5만 매수/매도 비용(bp), 10단계 누적 호가($) 매수·매도."""
+    b, a = x["b"], x["a"]
+    mid = (float(b[0][0]) + float(a[0][0])) / 2
+    cells = [str(x["T"])]
+    for usd in DEPTH_SIZES:
+        cells += [f"{walk(a, usd, mid, 1):.3f}", f"{walk(b, usd, mid, -1):.3f}"]
+    cells += [f"{sum(float(p) * float(q) for p, q in b):.0f}", f"{sum(float(p) * float(q) for p, q in a):.0f}"]
+    return ",".join(cells)
+
+
 def pump(kind: str, path: str, files: dict, t_end: float, gaps, stats: dict):
     """연결 하나를 t_end 까지 붙들고 받아 적는다. 끊기면 재연결, 끊긴 구간은 gaps 에."""
     down = reason = None
@@ -130,6 +160,8 @@ def pump(kind: str, path: str, files: dict, t_end: float, gaps, stats: dict):
                     continue
                 if kind == "book":
                     f.write(f"{x['T']},{x['b']},{x['B']},{x['a']},{x['A']}\n")
+                elif kind == "depth":
+                    f.write(depth_row(x) + "\n")
                 else:
                     f.write(f"{x['T']},{x['p']},{x['q']},{1 if x['m'] else 0}\n")
                 stats[kind] += 1
@@ -144,6 +176,9 @@ def pump(kind: str, path: str, files: dict, t_end: float, gaps, stats: dict):
 def main() -> int:
     args = sys.argv[1:]
     secs = 7000.0
+    with_depth = "--depth" in args
+    if with_depth:
+        args.remove("--depth")
     if "--secs" in args:
         i = args.index("--secs")
         secs = float(args[i + 1])
@@ -160,30 +195,39 @@ def main() -> int:
         trade[s] = open(os.path.join(out, f"{s}_trade.csv"), "w")
         book[s].write("T,bid,bidq,ask,askq\n")
         trade[s].write("T,price,qty,m\n")
+    depth = {}
+    if with_depth:
+        for s in syms:
+            depth[s] = open(os.path.join(out, f"{s}_depth.csv"), "w")
+            depth[s].write("T," + ",".join(f"buy{u//1000}k,sell{u//1000}k" for u in DEPTH_SIZES) + ",bid10usd,ask10usd\n")
     gaps = open(os.path.join(out, "gaps.csv"), "w")
     gaps.write("kind,down_ms,up_ms,reason\n")
     # 2026 현재 바이낸스 선물 웹소켓은 경로가 갈려 있다: bookTicker 는 /public, aggTrade 는 /market
     # (옛 /stream 에선 aggTrade 가 조용히 안 온다 — 연결은 되는데 0건. 첫 시험에서 그렇게 걸렸다.)
     paths = {"book": "/public/stream?streams=" + "/".join(f"{s.lower()}@bookTicker" for s in syms),
              "trade": "/market/stream?streams=" + "/".join(f"{s.lower()}@aggTrade" for s in syms)}
+    if with_depth:                                   # depth 도 /public (500ms 마다 10단계 스냅샷)
+        paths["depth"] = "/public/stream?streams=" + "/".join(f"{s.lower()}@depth10@500ms" for s in syms)
+    files_of = {"book": book, "trade": trade, "depth": depth}
     print(f"수집 → {out}  ({len(syms)}심볼, {secs/3600:.1f}시간)", flush=True)
     t_end = time.time() + secs
-    stats = {"book": 0, "trade": 0}
-    th = [threading.Thread(target=pump, args=(k, paths[k], book if k == "book" else trade, t_end, gaps, stats),
-                           daemon=True) for k in paths]
+    stats = {k: 0 for k in paths}
+    th = [threading.Thread(target=pump, args=(k, paths[k], files_of[k], t_end, gaps, stats), daemon=True)
+          for k in paths]
     for t in th:
         t.start()
-    last = {"book": -1, "trade": -1}
+    last = {k: -1 for k in paths}
     while any(t.is_alive() for t in th):
         time.sleep(min(300, max(1, t_end - time.time())))
-        for f in list(book.values()) + list(trade.values()):
+        for f in list(book.values()) + list(trade.values()) + list(depth.values()):
             f.flush()
         stalled = [k for k in stats if stats[k] == last[k]]
         last = dict(stats)
         print(f"  {dt.datetime.utcnow():%H:%M:%S} 호가 {stats['book']:,} · 체결 {stats['trade']:,} · "
-              f"남은 {max(0, t_end - time.time()) / 60:.0f}분" + (f"  ⚠ 정체: {stalled}" if stalled else ""),
+              + (f"깊이 {stats['depth']:,} · " if with_depth else "")
+              + f"남은 {max(0, t_end - time.time()) / 60:.0f}분" + (f"  ⚠ 정체: {stalled}" if stalled else ""),
               flush=True)
-    for f in list(book.values()) + list(trade.values()):
+    for f in list(book.values()) + list(trade.values()) + list(depth.values()):
         f.close()
     gaps.close()
     print(f"끝 — 호가 {stats['book']:,} · 체결 {stats['trade']:,}  → {out}", flush=True)

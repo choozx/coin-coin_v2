@@ -472,6 +472,8 @@ def _run_backtest(p: dict) -> dict:
         },
         "exitReasons": dict(reasons),
         "verdict": verdict,
+        # 같은 기간 그냥 들고만 있었으면(1배·수수료 없음) — 판정 패널의 '보유 대비' 비교용
+        "buyHoldPct": round((float(base.close[-1]) / float(base.close[0]) - 1) * 100, 2),
         "equityCurve": _downsample([[t, round(e, 2)] for t, e in m.equity_curve]),
     }
 

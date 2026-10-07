@@ -852,28 +852,41 @@ $("run").onclick = async () => {
 
 function fmtDate(ms){ return new Date(ms).toISOString().slice(0,16).replace("T"," "); }
 
-// '우연보다 나은가' — 수익률 카드만 보면 좋아 보이는 전략이 대부분 이 문턱 아래였다(research/BACKLOG).
-// 같은 거래들(보유 시간·방향 그대로)을 아무 시각에나 넣은 랜덤 2,000번과 비교한 결과를 수익률 바로 밑에 둔다.
-function verdictBox(v, m) {
-  const pct = x => (x>0?"+":"") + x + "%";
-  if (!v) return '<div class="chartbox"><h3>운보다 나은가? — 거래가 없어 판정 불가</h3></div>';
-  if (v.error) return `<div class="chartbox"><h3>운보다 나은가? — 판정 실패</h3><div class="note">${v.error}</div></div>`;
+// '랜덤으로 사고팔아도 이만큼 벌까?' — 수익률 카드만 보면 좋아 보이는 전략이 대부분 이 문턱 아래였다(research/BACKLOG).
+// 랜덤 한 번은 운 좋게 어떤 전략이든 이길 수 있다 — 그래서 2,000번 돌려 '그중 몇 번이 이 전략보다 잘 벌었나'를 센다.
+// 같은 거래들(보유 시간·방향 그대로)을 아무 시각에나 넣는다. 옆에 '그냥 들고만 있었으면'도 같이 둔다.
+function verdictBox(v, m, buyHold, symbol) {
+  const pct = x => (x>0?"+":"") + (Math.round(x*10)/10) + "%";
+  const title = "랜덤으로 사고팔아도 이만큼 벌까?";
+  if (!v) return `<div class="chartbox"><h3>${title} — 거래가 없어 판정 불가</h3></div>`;
+  if (v.error) return `<div class="chartbox"><h3>${title} — 판정 실패</h3><div class="note">${v.error}</div></div>`;
+  const n = v.samples;
+  const better = Math.max(0, n - Math.round(v.percentile * n / 100));     // 이 전략보다 잘 번 랜덤 횟수
+  const share = Math.round(better / n * 1000) / 10;
   let icon, color, head, body;
   if (v.beatsNull && !v.negative) {
-    icon = "✅"; color = "var(--up)"; head = "랜덤 진입 상위 5% 안 — 우연보다 낫다는 첫 근거";
-    body = "다만 이 기간 하나의 결과야. 다른 기간·다른 코인에서도 되는지 확인하기 전엔 실돈 근거로 쓰지 마.";
+    icon = "✅"; color = "var(--up)"; head = `랜덤으로는 드문 성과 — ${n.toLocaleString()}번 중 ${better}번만 이보다 잘 벌었어`;
+    body = "이 기간 하나의 결과야. 다른 기간·다른 코인에서도 되는지 확인하기 전엔 실돈 근거로 쓰지 마.";
   } else if (v.beatsNull && v.negative) {
-    icon = "⚠️"; color = "#e0a030"; head = "랜덤보다 덜 잃었을 뿐, 손실이다";
-    body = "둘 다 잃는 구간에서 덜 잃은 건 엣지가 아니야.";
+    icon = "⚠️"; color = "#e0a030"; head = "랜덤보다 덜 잃었을 뿐, 손실이야";
+    body = "둘 다 잃는 구간에서 덜 잃은 건 실력이 아니야.";
   } else {
-    icon = "❌"; color = "var(--down)"; head = "랜덤으로도 흔히 나오는 성과 — 운과 구별이 안 돼";
-    body = "아무 때나 같은 횟수·같은 보유시간으로 들어가도 이만큼은 자주 나와. 수익률이 좋아 보여도 이 전략의 신호가 만든 건 아닐 수 있어.";
+    icon = "❌"; color = "var(--down)"; head = `랜덤으로도 ${n.toLocaleString()}번 중 ${better.toLocaleString()}번(${share}%)이 이보다 잘 벌었어`;
+    body = "아무 때나 같은 횟수·같은 보유시간으로 사고팔아도 이 정도는 흔해. 수익률이 좋아 보여도 이 전략의 신호가 만든 거라고 볼 근거가 없어."
+      + " (기준: 2,000번 중 100번(5%) 이하만 이 전략보다 잘 벌어야 ✅)";
   }
-  const few = v.nTrades < 30 ? ` · ⚠️ 거래 ${v.nTrades}건 — 표본이 적어 판정이 흔들릴 수 있어` : "";
-  return `<div class="chartbox" style="border-left:3px solid ${color}"><h3>운보다 나은가? ${icon} ${head}</h3>`
-    + `<div class="note">이 전략 <b>${pct(v.strategyPct)}</b> · 랜덤 중앙 ${pct(v.nullMedian)} · 랜덤 상위 5% 경계 <b>${pct(v.nullP95)}</b>`
-    + ` · 백분위 ${v.percentile} (랜덤 ${v.samples.toLocaleString()}번 중)${few}<br>`
-    + `${body}<br><span style="opacity:.7">비교 방법: 이 전략의 거래 ${v.nTrades}건을 보유 시간·방향은 그대로 두고 진입 시각만 무작위로 바꿔 ${v.samples.toLocaleString()}번 반복.</span></div></div>`;
+  const few = v.nTrades < 30 ? `<br>⚠️ 거래 ${v.nTrades}건 — 표본이 적어 결과가 흔들릴 수 있어` : "";
+  let hold = "";
+  if (buyHold != null) {
+    const diff = v.strategyPct - buyHold;
+    hold = `<br>그냥 들고만 있었으면(${symbol||""} 1배): <b>${pct(buyHold)}</b> → 이 전략이 보유보다 `
+      + (diff >= 0
+        ? `<b style="color:var(--up)">${pct(diff).replace("+","")}p ${v.strategyPct >= 0 ? "더 벌었어" : "덜 잃었어"}</b>`
+        : `<b style="color:var(--down)">${pct(-diff).replace("+","")}p ${v.strategyPct >= 0 ? "덜 벌었어" : "뒤처졌어"}</b>`);
+  }
+  return `<div class="chartbox" style="border-left:3px solid ${color}"><h3>${title} ${icon} ${head}</h3>`
+    + `<div class="note">이 전략 <b>${pct(v.strategyPct)}</b> · 랜덤 ${n.toLocaleString()}번의 보통(중앙) ${pct(v.nullMedian)} · 랜덤 상위 5% 경계 ${pct(v.nullP95)}`
+    + `${hold}${few}<br>${body}<br><span style="opacity:.7">랜덤 만드는 법: 이 전략의 거래 ${v.nTrades}건을 보유 시간·방향은 그대로 두고 진입 시각만 무작위로 바꿔 ${n.toLocaleString()}번 반복.</span></div></div>`;
 }
 
 function render(d) {
@@ -895,7 +908,7 @@ function render(d) {
   for (const [k,v,c] of cards)
     html += `<div class="metric"><div class="k">${k}</div><div class="v ${c}">${v}</div></div>`;
   html += '</div>';
-  html += verdictBox(d.verdict, m);
+  html += verdictBox(d.verdict, m, d.buyHoldPct, d.preset && d.preset.market && d.preset.market.symbol);
 
   const nTr = (d.trades||[]).length, detail = nTr <= 100;
   const nBar = (d.ohlc||[]).length, barMin = d.ohlcBarMin||0;
@@ -1303,12 +1316,12 @@ function renderOpt(d) {
     + `총 ${d.totalCombos}조합 중 ${d.passed}개 통과 (최소 ${d.minTrades}트레이드)`
     + `${d.truncated ? " · ⚠️상한 초과, 일부만" : ""}</h3>`;
   html += '<div class="note">IS=최적화(앞70%) · OOS=검증(뒤30%). '
-    + '<b>견고</b>=IS·OOS 둘 다 수익. <b>운보다 나음</b>=OOS 성과가, 같은 거래들(보유·방향 그대로)을 아무 때나 넣은 랜덤의 '
-    + `<b>"${d.totalCombos}개 중 최고"</b> 문턱(상위 5%)을 넘었나 — 조합을 많이 뒤질수록 운으로 좋은 게 걸리니까 문턱도 올라가. `
-    + '<b style="color:var(--up)">둘 다 ✅ 인 값만 의미가 있어.</b> 견고만 ✅ 인 값은 "다른 구간에서도 벌었지만 운과 구별 안 됨"이야.</div>';
+    + '<b>견고</b>=IS·OOS 둘 다 수익. <b>랜덤보다 나음</b>=OOS 에서 같은 거래들(보유·방향 그대로)을 아무 때나 사고판 랜덤 2,000번 중 '
+    + `이 값보다 잘 번 횟수. 조합을 ${d.totalCombos}개나 뒤졌으니 그중 하나는 운으로도 잘 나와 — 그래서 ✅ 문턱은 '랜덤 ${d.totalCombos}개를 뽑아 그중 최고'보다 높아야 해(칸에 마우스를 올리면 문턱이 보여). `
+    + '<b style="color:var(--up)">둘 다 ✅ 인 값만 의미가 있어.</b> 견고만 ✅ 인 값은 "다른 구간에서도 벌었지만 랜덤과 구별 안 됨"이야.</div>';
   html += '<div style="overflow-x:auto"><table class="opt-tab"><thead><tr><th>#</th>';
   names.forEach(n => html += `<th>${labelFor(n)}</th>`);
-  html += '<th>IS수익</th><th>IS Calmar</th><th>IS건</th><th>OOS수익</th><th>OOS Calmar</th><th>견고</th><th>운보다 나음</th><th></th></tr></thead><tbody>';
+  html += '<th>IS수익</th><th>IS Calmar</th><th>IS건</th><th>OOS수익</th><th>OOS Calmar</th><th>견고</th><th>랜덤보다 나음</th><th></th></tr></thead><tbody>';
   d.top.forEach((r, idx) => {
     const o = r.oos || {};
     const nl = r.null;
@@ -1319,9 +1332,11 @@ function renderOpt(d) {
     html += `<td>${r.is.return}%</td><td>${r.is.calmar}</td><td>${r.is.trades}</td>`;
     html += `<td>${o.return ?? "-"}%</td><td>${o.calmar ?? "-"}</td>`;
     html += `<td>${r.robust === undefined ? "-" : (r.robust ? "✅" : "❌")}</td>`;
+    const ns = nl && nl.samples ? nl.samples : 2000;
+    const better = nl && !nl.error ? Math.max(0, ns - Math.round(nl.percentile * ns / 100)) : 0;
     html += !nl ? '<td>-</td>' : nl.error ? `<td title="${nl.error}">오류</td>`
-      : `<td title="랜덤 중앙 ${nl.nullMedian}% · 단일 p95 ${nl.nullP95}% · ${d.totalCombos}개 중 최고 p95 ${nl.bestOfNP95}%">`
-        + `${lucky ? "✅" : "❌"} <span style="opacity:.7">백분위 ${nl.percentile} · 문턱 ${nl.bestOfNP95}%</span></td>`;
+      : `<td title="랜덤 보통(중앙) ${nl.nullMedian}% · 랜덤 상위 5% ${nl.nullP95}% · ✅ 문턱(랜덤 ${d.totalCombos}개 중 최고의 상위 5%) ${nl.bestOfNP95}%">`
+        + `${lucky ? "✅" : "❌"} <span style="opacity:.7">랜덤 ${ns.toLocaleString()}번 중 ${better.toLocaleString()}번이 더 잘 범</span></td>`;
     html += `<td><button class="apply" data-i="${idx}">적용</button></td></tr>`;
   });
   html += '</tbody></table></div></div>';
