@@ -392,7 +392,9 @@ class Stepper:
                 self.on_open(p, lev)
 
 
-def run(base: Candles, preset: Preset, cfg: BacktestConfig = None) -> Metrics:
+def run(base: Candles, preset: Preset, cfg: BacktestConfig = None, progress_cb=None) -> Metrics:
+    """progress_cb(done, total) — 선택. 1분봉 루프를 대략 1% 마다 알린다(백테스트 화면 진행률 바).
+    라이브·최적화 경로는 넘기지 않으니 동작이 같다."""
     cfg = cfg or BacktestConfig()
     tf_min = TIMEFRAME_MINUTES[preset.timeframe]
 
@@ -416,7 +418,11 @@ def run(base: Candles, preset: Preset, cfg: BacktestConfig = None) -> Metrics:
 
     stepper = Stepper(preset, cfg, ex, on_close=on_close)
 
-    for t in range(len(base)):
+    n_base = len(base)
+    tick = max(1, n_base // 100)
+    for t in range(n_base):
+        if progress_cb is not None and t % tick == 0:
+            progress_cb(t, n_base)
         stepper.step(base, signal, bar_of, is_close, atr_series, resolver, t)
         # 마킹: 신호봉이 닫힐 때마다 자산곡선에 점. **보유 중이면 평가손익까지**(시가평가).
         # 예전엔 무포지션일 때와 청산 때만 찍어서 보유 중 낙폭이 MDD 에서 빠졌다 — 며칠~몇 주 들고 가는

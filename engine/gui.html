@@ -837,15 +837,47 @@ $("run").onclick = async () => {
   if (!entryGroups.length) { $("err").innerHTML = '<div class="err">진입 조건을 하나 이상 추가해줘 (진입 섹션)</div>'; return; }
   const btn = $("run"); btn.disabled = true; btn.textContent = "실행 중...";
   $("err").innerHTML = "";
+  // 진행률 — 서버가 단계(캔들 → 백테스트 % → 랜덤 판정 → 차트)를 NDJSON 으로 흘린다(/api/backtest_stream).
+  // 몇 년치 1분봉 + 랜덤 2,000번이면 10~30초라, 버튼만 잠긴 채 기다리지 않게 한다.
+  const started = performance.now();
+  $("out").innerHTML = `<div class="chartbox"><h3>▶ 백테스트 진행</h3>`
+    + `<div class="progress"><div class="pfill" id="btProg" style="width:0%"></div></div>`
+    + `<div class="note" id="btProgText">요청 보내는 중...</div></div>`;
+  const tick = setInterval(() => {                     // 단계가 길어도 경과 시간은 계속 흐르게
+    const el = $("btProgText"); if (!el || !el.dataset.text) return;
+    el.textContent = `${el.dataset.text} · ${((performance.now() - started) / 1000).toFixed(0)}초`;
+  }, 500);
   try {
-    const res = await fetch("/api/backtest", {method:"POST", headers:{"Content-Type":"application/json"},
+    const res = await fetch("/api/backtest_stream", {method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify(collect())});
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-    render(data);
+    if (!res.ok || !res.body) throw new Error("서버 응답 오류 (" + res.status + ")");
+    const reader = res.body.getReader(), dec = new TextDecoder();
+    let buf = "", result = null;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
+        if (!line) continue;
+        const ev = JSON.parse(line);
+        if (ev.type === "error") throw new Error(ev.error);
+        if (ev.type === "progress") {
+          const bar = $("btProg"); if (bar) bar.style.width = ev.pct + "%";
+          const el = $("btProgText");
+          if (el) { el.dataset.text = `${ev.pct}% · ${ev.text}`;
+                    el.textContent = `${el.dataset.text} · ${((performance.now() - started) / 1000).toFixed(0)}초`; }
+        } else if (ev.type === "done") result = ev.result;
+      }
+    }
+    if (!result) throw new Error("결과를 받지 못했어 (연결이 끊겼을 수 있어)");
+    if (result.error) throw new Error(result.error);
+    render(result);
   } catch (e) {
     $("err").innerHTML = `<div class="err">에러: ${e.message}</div>`;
   } finally {
+    clearInterval(tick);
     btn.disabled = false; btn.textContent = "▶ 백테스트 실행";
   }
 };

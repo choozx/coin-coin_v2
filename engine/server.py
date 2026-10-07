@@ -413,14 +413,35 @@ def _chart_indicators(base, tf_min: int, preset_dict: dict, max_bars: int = 2000
     return result
 
 
-def _run_backtest(p: dict) -> dict:
+def _run_backtest(p: dict, emit=None) -> dict:
+    """백테스트 한 번. emit 이 있으면 진행 이벤트를 흘린다(/api/backtest_stream — 화면 진행률 바).
+
+    전체 진행률(pct) 배분: 캔들 0~5 · 백테스트 5~85 · 랜덤 판정 85~95 · 차트 95~100.
+    """
+    def stage(pct, text):
+        if emit:
+            emit({"type": "progress", "pct": pct, "text": text})
+
+    stage(0, "캔들 불러오는 중")
     base, fr_rate = _get_candles(p["symbol"], float(p["days"]))
     preset_dict = _build_preset(p)
     preset = Preset.from_dict(preset_dict, validate=True)  # 스키마 검증
     maker_fee, taker_fee = bm.fees_for_symbol(p["symbol"])
     cfg = BacktestConfig(initial_equity=float(p["equity"]), funding_rate=fr_rate,
                          maker_fee=maker_fee, taker_fee=taker_fee)
-    m = run(base, preset, cfg)
+    span_d = (int(base.open_time[-1]) - int(base.open_time[0])) / 86_400_000
+    run_text = f"백테스트 중 · 1분봉 {len(base):,}개 ({span_d:.0f}일)"
+    stage(5, run_text)
+    last = {"pct": -1}
+
+    def on_progress(done, total):
+        pct = 5 + int(80 * done / max(1, total))
+        if pct != last["pct"]:
+            last["pct"] = pct
+            stage(pct, run_text)
+
+    m = run(base, preset, cfg, progress_cb=on_progress if emit else None)
+    stage(85, f"랜덤 진입 2,000번과 비교 중 · 거래 {m.num_trades}건")
     # '우연보다 나은가' — 같은 거래들(보유·방향 그대로)을 아무 시각에나 넣은 2000번과 비교.
     # 수익률만 보여주면 좋아 보이는 전략이 대부분 이 문턱 아래였다(research/BACKLOG). 최적화기와 같은 함수.
     try:
@@ -435,6 +456,7 @@ def _run_backtest(p: dict) -> dict:
     def _px(x):   # nan → None, 그 외 round
         return None if x is None or (isinstance(x, float) and math.isnan(x)) else round(float(x), 2)
 
+    stage(95, "차트 준비 중")
     tf_min = TIMEFRAME_MINUTES[p["timeframe"]]
     ohlc, bar_min = _ohlc_for_chart(base, tf_min)
     chart_inds = _chart_indicators(base, tf_min, preset_dict)
@@ -704,6 +726,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, b"not found", "text/plain")
 
     def do_POST(self):
+        if self.path == "/api/backtest_stream":           # 백테스트 + 진행률(NDJSON)
+            self._ndjson_stream(lambda params, emit: emit({"type": "done", "result": _run_backtest(params, emit)}))
+            return
         if self.path == "/api/optimize":
             self._optimize_stream()
             return
@@ -820,6 +845,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def _optimize_stream(self):
         """NDJSON 스트리밍 — 조합이 완료되는 대로 한 줄씩 흘려보냄 (진행률 + 실시간 결과)."""
+        self._ndjson_stream(_run_optimize)
+
+    def _ndjson_stream(self, fn):
+        """fn(params, emit) 를 돌리며 emit(dict) 를 한 줄씩 흘려보낸다(최적화·백테스트 진행률 공용)."""
         length = int(self.headers.get("Content-Length", 0))
         try:
             params = json.loads(self.rfile.read(length))
@@ -837,7 +866,7 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.flush()
 
         try:
-            _run_optimize(params, emit)
+            fn(params, emit)
         except (BrokenPipeError, ConnectionResetError):
             pass   # 클라이언트가 중간에 끊음
         except Exception as e:
