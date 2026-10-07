@@ -74,6 +74,8 @@ scratchpad 에만 두어 날린 적이 있음).
   옛 `/stream` 은 연결은 되는데 aggTrade 가 **조용히 0건**이다(`mm_collect.py`).
 
 ## 데이터
+- 1분봉 캐시: BTCUSDT(2019-09~), **ETHUSDT·SOLUSDT(2021-01~, 2026-10-07 수집)** — 15m 이하 전략의 '다른 코인 검증'용.
+  알트 55개는 1h 만(`<SYM>_1H`, 2021-01~).
 캐시(`data/candles.db`, 1분봉). 없으면 `/collector` 또는
 `python3 -m engine.collector SYMBOL --seed-days N`. 오더플로우 실험은 taker_buy 백필 필요:
 `python3 -m engine.candle_store --backfill-taker SYMBOL`. 실펀딩은 `load(...)` 이 자동 로드.
