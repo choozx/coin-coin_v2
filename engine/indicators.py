@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import numpy as np
 import talib
+from numpy.lib.stride_tricks import sliding_window_view as swv
 
 
 def _d(x) -> np.ndarray:
@@ -214,15 +215,35 @@ def ma_gap(close, fast: int, slow: int, window: int = 1) -> np.ndarray:
     return talib.MIN(g, timeperiod=int(window))
 
 
-def ma_crosses(close, fast: int, slow: int, window: int) -> np.ndarray:
+def ma_angle(high, low, close, period: int = 75, sma_type: bool = True, lookback: int = 5,
+             atr_period: int = 14, scale: float = 4.5) -> np.ndarray:
+    """이평 '각도'(도, −90~90) — 차트 축척 대신 ATR 로 잰다: atan(봉당 이평 변화 ÷ ATR × scale).
+
+    차트의 각도는 확대·축소에 따라 바뀌어 그대로는 못 옮긴다. 봉당 변화를 ATR 로 나누면 코인·봉 크기와 무관하게
+    분포가 거의 같다(BTC·DOGE 1m~1h, SMA75: 상위 25% 0.08 · 상위 10% 0.12 ATR/봉). scale=4.5 면 봉당 0.22 ATR = 45°,
+    75이평 상위 25% ≈ 20°, 상위 10% ≈ 28° — 영상('20~30도 이상이면 매우 강한 추세')의 감각에 맞춘 기준.
+    """
+    c = _d(close)
+    m = sma(c, period) if sma_type else ema(c, period)
+    atr = talib.ATR(_d(high), _d(low), c, timeperiod=atr_period)
+    out = np.full(len(c), np.nan)
+    k = max(1, int(lookback))
+    if len(c) > k:
+        with np.errstate(invalid="ignore", divide="ignore"):
+            out[k:] = np.degrees(np.arctan((m[k:] - m[:-k]) / (k * atr[k:]) * scale))
+    return out
+
+
+def ma_crosses(close, fast: int, slow: int, window: int, ma_only: bool = False) -> np.ndarray:
     """직전 window 봉 동안의 교차 횟수 — 가격×빠른선 · 빠른선×느린선 · 가격×느린선 셋을 합친다.
+    ma_only=True 면 빠른선×느린선만 — '이평이 서로 엉킨다'(가격은 짧은 이평을 몇 봉마다 넘나들어 섞으면 늘 많다).
 
     추세 중엔 거의 안 생기는 교차가 몰리면 횡보다('4단 교차'). 지표가 NaN 인 구간의 부호 변화는 세지 않는다.
     """
     c = _d(close)
     f, s = sma(c, fast), sma(c, slow)
     n = np.zeros(len(c))
-    for a, b in ((c, f), (f, s), (c, s)):
+    for a, b in (((f, s),) if ma_only else ((c, f), (f, s), (c, s))):
         d = np.sign(a - b)
         flip = np.zeros(len(c))
         ok = ~np.isnan(d[1:]) & ~np.isnan(d[:-1]) & (d[1:] != 0) & (d[:-1] != 0)
@@ -368,6 +389,313 @@ def qqe_mod(source, rsi_length: int = 6, smoothing: int = 5, factor_primary: flo
     out = np.where(up, 1.0, np.where(down, -1.0, 0.0))
     warmup = np.isnan(rp) | np.isnan(rs) | np.isnan(upper)
     return np.where(warmup, np.nan, out)
+
+
+
+
+def atr_rank(high, low, close, period: int = 14, lookback: int = 2016, chunk: int = 4096) -> np.ndarray:
+    """변동성 순위 — 현재 NATR(ATR/종가) 이 직전 lookback 봉의 NATR 중 몇 백분위인가(0~100). 인과적.
+
+    봉 t 의 값 = 100 × (직전 lookback 봉 NATR 중 현재보다 작은 것의 비율). 창이 다 차기 전·ATR 워밍업은 NaN.
+    코인마다 변동성 수준이 달라 절대 임계값(예: ATR 0.3%)은 옮겨 쓸 수 없다 — 자기 최근 분포 대비 순위로 본다.
+    research/exp_VR_vol_filter: RSI+CVD 다이버전스가 고변동(상위 20%)에서만 거래당 bp 가 컸다.
+    """
+    natr = talib.NATR(_d(high), _d(low), _d(close), timeperiod=period)
+    n = len(natr)
+    out = np.full(n, np.nan)
+    if n <= lookback:
+        return out
+    win = swv(natr[:-1], lookback)                  # win[j] = natr[j : j+lookback] → 봉 j+lookback 의 과거
+    for a in range(0, len(win), chunk):
+        w = win[a:a + chunk]
+        cur = natr[a + lookback:a + lookback + len(w)]
+        valid = ~np.isnan(w).any(axis=1) & ~np.isnan(cur)
+        r = (w < cur[:, None]).mean(axis=1) * 100.0
+        out[a + lookback:a + lookback + len(w)] = np.where(valid, r, np.nan)
+    return out
+
+# ---- RSI 다이버전스 ----
+def _rsi_div_long(low, r, level, min_gap, window, strength, cvd=None, cvd_mode=0):
+    """강세 다이버전스 진입 봉 → (t, 저점2 가격) 목록. 봉 종가 기준·인과적(t 이후 데이터 안 봄).
+
+    ① RSI < level 인 봉에서 저점1 시작 — P1 = 그 뒤 최저 저가, R1 = 최저 RSI.
+    ② 저점1 뒤 min_gap 봉 이상 지나 저가가 P1(또는 이전 P2)보다 낮아지고 그 봉 RSI > R1 + strength → 저점2(P2).
+       더 낮은 저가에서 RSI 도 R1 이하면 다이버전스가 아니라 새 저점1. min_gap 안의 더 낮은 저가는 같은 저점.
+       가격은 안 낮아졌는데 RSI 가 R1 아래로 가면 R1 갱신·P2 무효.
+    ③ P2 봉 뒤, 저가 > P2 · RSI ≥ level · RSI 상승 마감인 첫 봉 = 진입 신호.
+    window 봉 안에 진입 못 하면 저점1 을 버린다. research/exp_DV_rsi_divergence.signals_long 과 같은 규칙.
+    반환 (t, P2, tP1, tR1, tP2) — 뒤 셋은 차트용: 가격 저점1 봉 · RSI 저점1 봉 · 저점2 봉.
+
+    cvd_mode — ②의 '저점2' 판정을 주문 흐름으로 바꾼다(research/exp_CV_cvd_divergence 의 A·B·C):
+      0 RSI 만(RSI > R1) · 1 RSI 그리고 CVD(저점2) > CVD(가격 저점1) · 2 CVD 만(RSI 조건 없음).
+      CVD(저점2) > CVD(저점1) = 두 저점 사이 시장가 매수가 매도보다 많았다(가격은 내렸는데 흡수).
+    """
+    out = []
+    t1 = None
+    P1 = R1 = P2 = None
+    tP1 = tR1 = tP2 = -1
+    for t in range(1, len(low)):
+        x = r[t]
+        if x != x:
+            continue
+        if t1 is not None and t - t1 > window:
+            t1 = None
+        if t1 is None:
+            if x < level:
+                t1, P1, R1, P2, tP1, tR1, tP2 = t, low[t], x, None, t, t, -1
+            continue
+        ref = P1 if P2 is None else P2
+        if low[t] < ref:
+            rsi_ok = x > R1 + strength
+            ok = rsi_ok if cvd_mode == 0 else (cvd[t] > cvd[tP1]) if cvd_mode == 2 else (rsi_ok and cvd[t] > cvd[tP1])
+            if t - t1 >= min_gap and ok:
+                P2, tP2 = low[t], t
+            elif t - t1 < min_gap:
+                if x < R1:
+                    tR1 = t
+                P1, R1, t1, tP1, P2 = low[t], min(R1, x), t, t, None
+            else:
+                if cvd_mode == 2 and x >= R1:                # CVD 만: RSI 바닥은 그대로 둔다
+                    P1, t1, tP1, P2 = low[t], t, t, None
+                else:
+                    P1, R1, t1, tP1, tR1, P2 = low[t], x, t, t, t, None
+            continue
+        if x < R1:
+            R1, t1, tR1 = x, t, t
+            if cvd_mode != 2:                                 # CVD 만이면 RSI 가 더 낮아져도 저점2 유지
+                P2 = None
+            continue
+        if P2 is not None and t > tP2 and x >= level and x > r[t - 1]:
+            out.append((t, P2, tP1, tR1, tP2))
+            t1 = None
+    return out
+
+
+def _cvd_lists(volume, taker_buy, cvd_mode):
+    """CVD(누적 시장가 매수 − 매도)와 그 거울(약세용). cvd_mode 0 이면 (None, None)."""
+    if not cvd_mode:
+        return None, None
+    cvd = np.cumsum(2.0 * _d(taker_buy) - _d(volume))
+    return cvd.tolist(), (-cvd).tolist()
+
+
+def rsi_divergence(high, low, close, period: int = 14, level: float = 30.0,
+                   min_gap: int = 5, window: int = 60, strength: float = 0.0,
+                   volume=None, taker_buy=None, cvd_mode: int = 0) -> np.ndarray:
+    """RSI 다이버전스 진입 신호. 봉마다 +1(강세 — 롱) · -1(약세 — 숏) · 0, RSI 워밍업은 NaN.
+
+    강세: RSI 가 level 아래(과매도)였고 → 가격 저점은 낮아지는데 RSI 저점은 높아졌고 →
+          봉 마감 RSI 가 level 위(이미 위면 첫 상승 마감)인 봉.
+    약세: 위를 위아래로 뒤집은 것(가격 고점↑·RSI 고점↓, 기준 100 − level).
+    손절 기준인 저점2 는 최근 봉 최저가와 같아서 프리셋 손절은 swing(전저점)으로 표현한다.
+    상태가 있는(경로 의존) 신호라 라이브 창이 짧으면 시작부가 다를 수 있다 — window 의 3배면 수렴.
+    cvd_mode 1·2 는 volume·taker_buy 가 필요하다(_rsi_div_long 참고). 약세는 CVD 도 뒤집어 본다
+    (CVD(고점2) < CVD(고점1) = 두 고점 사이 매도 우세).
+    """
+    r = rsi(close, period)
+    rl = r.tolist()
+    rm = [100.0 - v if v == v else v for v in rl]
+    cv, cvm = _cvd_lists(volume, taker_buy, int(cvd_mode))
+    out = np.where(np.isnan(r), np.nan, 0.0)
+    for t, *_ in _rsi_div_long(_d(low).tolist(), rl, level, int(min_gap), int(window), strength, cv, int(cvd_mode)):
+        out[t] = 1.0
+    for t, *_ in _rsi_div_long((-_d(high)).tolist(), rm, level, int(min_gap), int(window), strength, cvm,
+                               int(cvd_mode)):
+        out[t] = -1.0 if out[t] == 0 else 0.0          # 같은 봉에 양쪽이면 없음
+    return out
+
+
+def rsi_divergence_segments(high, low, close, period: int = 14, level: float = 30.0,
+                            min_gap: int = 5, window: int = 60, strength: float = 0.0,
+                            volume=None, taker_buy=None, cvd_mode: int = 0):
+    """차트용 — 신호마다 다이버전스를 이루는 두 저점(약세는 고점). rsi_divergence 와 같은 규칙.
+
+    반환 [{side, t, price: ((t1, p1), (t2, p2)), rsi: ((t1, r1), (t2, r2))}, ...] (t 는 봉 인덱스).
+    """
+    r = rsi(close, period)
+    rl = r.tolist()
+    rm = [100.0 - v if v == v else v for v in rl]
+    lo, hi = _d(low), _d(high)
+    cv, cvm = _cvd_lists(volume, taker_buy, int(cvd_mode))
+    out = []
+    for t, P2, tP1, tR1, tP2 in _rsi_div_long(lo.tolist(), rl, level, int(min_gap), int(window), strength,
+                                              cv, int(cvd_mode)):
+        out.append({"side": 1, "t": t, "price": ((tP1, float(lo[tP1])), (tP2, float(P2))),
+                    "rsi": ((tR1, rl[tR1]), (tP2, rl[tP2]))})
+    for t, P2, tP1, tR1, tP2 in _rsi_div_long((-hi).tolist(), rm, level, int(min_gap), int(window), strength,
+                                              cvm, int(cvd_mode)):
+        out.append({"side": -1, "t": t, "price": ((tP1, float(hi[tP1])), (tP2, -float(P2))),
+                    "rsi": ((tR1, rl[tR1]), (tP2, rl[tP2]))})
+    return sorted(out, key=lambda d: d["t"])
+
+# ---- 차트 패턴 (핀바 · 삼각형 수렴 돌파) — 영상 매매법 필터용 ----
+def _hold(sig: np.ndarray, within: int) -> np.ndarray:
+    """신호(+1/-1)를 발생 봉 포함 within 봉 동안 유지 — '최근 N봉 안에 나왔으면' 필터용. 더 최근 신호가 이긴다."""
+    sig = np.nan_to_num(np.asarray(sig, dtype=float))
+    if within <= 1:
+        return sig
+    out = np.zeros(len(sig))
+    last, age = 0.0, within
+    for i, v in enumerate(sig.tolist()):
+        if v != 0:
+            last, age = v, 0
+        else:
+            age += 1
+        out[i] = last if age < within else 0.0
+    return out
+
+
+def pin_bar(open_, high, low, close, wick: float = 66.0, body: float = 30.0, min_atr: float = 0.0,
+            within: int = 1) -> np.ndarray:
+    """핀바 — 한쪽 꼬리가 봉 길이(고가-저가)의 wick% 이상이고 몸통이 body% 이하. +1 아래꼬리(강세) · -1 위꼬리(약세).
+
+    min_atr>0 이면 봉 길이 ≥ ATR(14)×min_atr 인 것만(작은 봉의 꼬리는 잡음). within=N 이면 최근 N봉 안 핀바도 참.
+    """
+    o, h, l, c = _d(open_), _d(high), _d(low), _d(close)
+    rng = h - l
+    top, bot = np.maximum(o, c), np.minimum(o, c)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ok = (rng > 0) & (np.abs(c - o) <= body / 100.0 * rng)
+        bull = ok & ((bot - l) >= wick / 100.0 * rng)
+        bear = ok & ((h - top) >= wick / 100.0 * rng)
+        if min_atr > 0:
+            big = rng >= talib.ATR(h, l, c, timeperiod=14) * min_atr
+            bull &= big
+            bear &= big
+    return _hold(bull.astype(float) - bear.astype(float), int(within))
+
+
+def _pivots(x: np.ndarray, k: int, high: bool) -> np.ndarray:
+    """좌우 k 봉 안에서 최고(최저)인 봉 인덱스 — 봉 j 는 j+k 에 가서야 확정된다(호출부가 지연을 지킨다)."""
+    n = len(x)
+    if n < 2 * k + 1:
+        return np.array([], dtype=int)
+    w = swv(x, 2 * k + 1)
+    ext = w.max(axis=1) if high else w.min(axis=1)
+    mid = x[k:n - k]
+    # 같은 값이 창 안에 여럿이면 가장 왼쪽 하나만 — 평평한 고점이 피벗 여러 개로 쪼개지지 않게
+    first = (np.argmax(w, axis=1) if high else np.argmin(w, axis=1)) == k
+    return np.nonzero((mid == ext) & first)[0] + k
+
+
+def _triangle_events(high, low, close, pivot: int = 5, lookback: int = 100, tol: float = 10.0):
+    """삼각형 수렴 돌파 이벤트 [(t, side, (i1,h1,i2,h2), (j1,l1,j2,l2), U(t), L(t))]. 인과적.
+
+    봉 t 에서 이미 확정된(j+pivot ≤ t) 마지막 고점 둘·저점 둘로:
+      고점2 ≤ 고점1 + tol%×폭 (낮아지거나 평평) · 저점2 ≥ 저점1 − tol%×폭 (높아지거나 평평) · 폭이 줄었다(고점2−저점2 < 폭)
+      — 폭 = 고점1 − 저점1. '평평'을 가격 %로 재면 BTC 0.1%=60달러라 오르는 채널까지 삼각형이 됐다 → 패턴 폭 대비로.
+      · 네 피벗이 다 최근 lookback 봉 안 · 아직 두 선이 만나기 전(U(t) > L(t)).
+    두 고점을 이은 위 추세선 U, 두 저점을 이은 아래 추세선 L 을 t 까지 연장해
+    종가가 U 를 처음 위로 넘으면 +1, L 을 처음 아래로 깨면 −1. 한 패턴(피벗 넷)에 신호는 한 번.
+    """
+    h, l, c = _d(high), _d(low), _d(close)
+    n = len(c)
+    ph, pl = _pivots(h, pivot, True).tolist(), _pivots(l, pivot, False).tolist()
+    hi, lo = [], []                                   # 확정된 피벗(시간순)
+    a = b = 0
+    used = set()
+    out = []
+    for t in range(1, n):
+        while a < len(ph) and ph[a] + pivot <= t:
+            hi.append(ph[a]); a += 1
+        while b < len(pl) and pl[b] + pivot <= t:
+            lo.append(pl[b]); b += 1
+        if len(hi) < 2 or len(lo) < 2:
+            continue
+        i1, i2, j1, j2 = hi[-2], hi[-1], lo[-2], lo[-1]
+        if min(i1, j1) < t - lookback:
+            continue
+        h1, h2, l1, l2 = h[i1], h[i2], l[j1], l[j2]
+        w0 = h1 - l1
+        if not (w0 > 0 and h2 <= h1 + tol / 100.0 * w0 and l2 >= l1 - tol / 100.0 * w0 and (h2 - l2) < w0):
+            continue
+        key = (i1, i2, j1, j2)
+        if key in used:
+            continue
+        su, sl = (h2 - h1) / (i2 - i1), (l2 - l1) / (j2 - j1)
+        U, L = h2 + su * (t - i2), l2 + sl * (t - j2)
+        if U <= L:
+            continue                                  # 꼭짓점 지남 — 패턴 끝
+        Up, Lp = U - su, L - sl                        # 직전 봉의 선 값
+        if c[t] > U and c[t - 1] <= Up:
+            out.append((t, 1, (i1, h1, i2, h2), (j1, l1, j2, l2), U, L)); used.add(key)
+        elif c[t] < L and c[t - 1] >= Lp:
+            out.append((t, -1, (i1, h1, i2, h2), (j1, l1, j2, l2), U, L)); used.add(key)
+    return out
+
+
+def triangle_breakout(high, low, close, pivot: int = 5, lookback: int = 100, tol: float = 10.0,
+                      within: int = 1) -> np.ndarray:
+    """삼각형 수렴 돌파 신호 +1(위 돌파)/−1(아래 이탈)/0. 정의는 _triangle_events. within=N 이면 최근 N봉 안 돌파도 참."""
+    sig = np.zeros(len(close))
+    for t, side, *_ in _triangle_events(high, low, close, pivot, lookback, tol):
+        sig[t] = side
+    return _hold(sig, int(within))
+
+
+# ---- 윌리엄스 프랙탈 · 눌림 → 프랙탈 → 재돌파 (영상 '마하세븐' 이평선 눌림목) ----
+def fractal_points(high, low, n: int = 2):
+    """윌리엄스 프랙탈 (저점 중심 인덱스들, 고점 중심 인덱스들). 좌우 n 봉보다 낮은 저점 / 높은 고점.
+    중심 c 는 c+n 봉이 닫혀야 확정된다 — 신호로 쓸 때는 반드시 c+n 에서."""
+    return _pivots(_d(low), n, False), _pivots(_d(high), n, True)
+
+
+def fractal(high, low, n: int = 2) -> np.ndarray:
+    """프랙탈이 '확정되는 봉'에 +1(저점 프랙탈, 빨강) · −1(고점 프랙탈, 파랑). 같은 봉에 둘 다면 0."""
+    lows, highs = fractal_points(high, low, n)
+    out = np.zeros(len(high))
+    out[lows + n] += 1
+    out[highs + n] -= 1
+    return out
+
+
+def pullback_fractal(high, low, close, ma: np.ndarray, n: int = 2, window: int = 60) -> np.ndarray:
+    """눌림 → 프랙탈 → 재돌파. +1 롱 · −1 숏 · 0. 인과적.
+
+    롱: 종가가 이평 아래로 내려간 뒤(눌림 시작) → 그 눌림 안에서 저점 프랙탈이 확정되고 → 종가가 이평을 상향 돌파한 봉.
+    숏: 거울(이평 위로 반등 → 고점 프랙탈 → 하향 돌파). 프랙탈 확정 전에 이평을 다시 넘으면 그 눌림은 버린다.
+    눌림 시작부터 window 봉이 지나도 돌파가 없으면 버린다.
+    """
+    c, m = _d(close), _d(ma)
+    nb = len(c)
+    lows, highs = fractal_points(high, low, n)
+    lo_conf = np.full(nb, -1)
+    hi_conf = np.full(nb, -1)
+    ok = lows + n < nb
+    lo_conf[(lows + n)[ok]] = lows[ok]               # 확정 봉 → 프랙탈 중심 인덱스
+    ok = highs + n < nb
+    hi_conf[(highs + n)[ok]] = highs[ok]
+    out = np.zeros(nb)
+    cl, ml, lc, hc = c.tolist(), m.tolist(), lo_conf.tolist(), hi_conf.tolist()
+    d_lo = d_hi = None                                # 눌림(반등) 시작 봉
+    r_lo = r_hi = False                               # 그 안에서 프랙탈 확정됐나
+    for t in range(1, nb):
+        x, mv, xp, mp = cl[t], ml[t], cl[t - 1], ml[t - 1]
+        if mv != mv or mp != mp:
+            continue
+        # 롱 쪽
+        if d_lo is not None and t - d_lo > window:
+            d_lo, r_lo = None, False
+        if x < mv and d_lo is None:
+            d_lo = t
+        if d_lo is not None and lc[t] >= d_lo:
+            r_lo = True
+        if x > mv and xp <= mp:
+            if d_lo is not None and r_lo:
+                out[t] = 1
+            d_lo, r_lo = None, False
+        # 숏 쪽
+        if d_hi is not None and t - d_hi > window:
+            d_hi, r_hi = None, False
+        if x > mv and d_hi is None:
+            d_hi = t
+        if d_hi is not None and hc[t] >= d_hi:
+            r_hi = True
+        if x < mv and xp >= mp:
+            if d_hi is not None and r_hi:
+                out[t] = -1
+            d_hi, r_hi = None, False
+    return out
 
 
 # ---- 캔들스틱 반전 패턴 (TA-Lib CDL*) ----

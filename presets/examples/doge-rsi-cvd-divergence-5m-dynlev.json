@@ -1,0 +1,74 @@
+{
+  "schemaVersion": "1.0",
+  "name": "DOGE RSI + CVD 다이버전스 롱 (5m · 동적 레버리지)",
+  "description": "RSI+CVD 다이버전스 롱 프리셋을 DOGEUSDT 에 동적 레버리지(잔고 구간 티어, 증거금 10%)로. 엔진 백테스트 2020-07~2026-08 $1천 시작: 수수료 0 가정 +169.4%(연 +17.5%, MDD 53%, 강제청산 6) — 상한값. 실제 수수료(taker 0.05%)로는 +4.7%(연 +0.7%, MDD 58%, 청산 14). DOGE 는 9개 코인 중 최고라 골라낸 것(research/BACKLOG.md VR·VD).",
+  "market": {
+    "exchange": "binance-futures",
+    "symbol": "DOGEUSDT",
+    "timeframe": "5m",
+    "direction": "long"
+  },
+  "entry": {
+    "left": {
+      "indicator": "RSI_DIV",
+      "period": 14,
+      "params": {
+        "level": 30,
+        "min_gap": 5,
+        "window": 60,
+        "cvd": 1
+      }
+    },
+    "cmp": ">",
+    "right": 0
+  },
+  "exit": {
+    "stopLoss": {
+      "type": "swing",
+      "lookback": 20,
+      "bufferPercent": 0
+    },
+    "takeProfit": {
+      "type": "riskReward",
+      "value": 2.5
+    },
+    "timeStop": {
+      "maxBars": 48
+    }
+  },
+  "sizing": {
+    "leverage": 10,
+    "marginMode": "isolated",
+    "size": {
+      "type": "equityPercent",
+      "value": 10.0
+    },
+    "maxConcurrentPositions": 1,
+    "leverageTiers": [
+      {
+        "maxBalance": 1000.0,
+        "leverage": 50
+      },
+      {
+        "maxBalance": 5000.0,
+        "leverage": 25
+      },
+      {
+        "maxBalance": 10000.0,
+        "leverage": 20
+      },
+      {
+        "maxBalance": 50000.0,
+        "leverage": 10
+      }
+    ]
+  },
+  "filter": {
+    "cooldownBars": 0,
+    "avoidFundingWindowMinutes": 2
+  },
+  "execution": {
+    "entryType": "makerLimit",
+    "makerTimeoutSeconds": 60
+  }
+}

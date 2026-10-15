@@ -1,0 +1,236 @@
+{
+  "schemaVersion": "1.0",
+  "name": "ST 롱3.5 숏2.5 HawkEye QQE 15m",
+  "market": {
+    "exchange": "binance-futures",
+    "symbol": "BTCUSDC",
+    "timeframe": "15m",
+    "direction": "both"
+  },
+  "entry": {
+    "op": "OR",
+    "children": [
+      {
+        "op": "AND",
+        "children": [
+          {
+            "cross": "crossOver",
+            "left": {
+              "indicator": "SUPERTREND_DIR",
+              "period": 14,
+              "params": {
+                "multiplier": 3.5
+              }
+            },
+            "right": 0
+          },
+          {
+            "left": {
+              "indicator": "HAWKEYE",
+              "period": 200,
+              "params": {
+                "divisor": 1.5
+              }
+            },
+            "cmp": ">",
+            "right": 0
+          },
+          {
+            "left": {
+              "indicator": "QQE_MOD",
+              "period": 6,
+              "params": {
+                "smoothing": 5,
+                "factor_primary": 3,
+                "factor_secondary": 1.61,
+                "threshold": 5,
+                "bb_length": 50,
+                "bb_mult": 0.35
+              }
+            },
+            "cmp": ">",
+            "right": 0
+          }
+        ]
+      },
+      {
+        "op": "AND",
+        "children": [
+          {
+            "cross": "crossUnder",
+            "left": {
+              "indicator": "SUPERTREND_DIR",
+              "period": 14,
+              "params": {
+                "multiplier": 2.5
+              }
+            },
+            "right": 0
+          },
+          {
+            "left": {
+              "indicator": "HAWKEYE",
+              "period": 200,
+              "params": {
+                "divisor": 1.5
+              }
+            },
+            "cmp": "<",
+            "right": 0
+          },
+          {
+            "left": {
+              "indicator": "QQE_MOD",
+              "period": 6,
+              "params": {
+                "smoothing": 5,
+                "factor_primary": 3,
+                "factor_secondary": 1.61,
+                "threshold": 5,
+                "bb_length": 50,
+                "bb_mult": 0.35
+              }
+            },
+            "cmp": "<",
+            "right": 0
+          }
+        ]
+      }
+    ]
+  },
+  "entryRules": [
+    {
+      "side": "long",
+      "when": {
+        "op": "AND",
+        "children": [
+          {
+            "cross": "crossOver",
+            "left": {
+              "indicator": "SUPERTREND_DIR",
+              "period": 14,
+              "params": {
+                "multiplier": 3.5
+              }
+            },
+            "right": 0
+          },
+          {
+            "left": {
+              "indicator": "HAWKEYE",
+              "period": 200,
+              "params": {
+                "divisor": 1.5
+              }
+            },
+            "cmp": ">",
+            "right": 0
+          },
+          {
+            "left": {
+              "indicator": "QQE_MOD",
+              "period": 6,
+              "params": {
+                "smoothing": 5,
+                "factor_primary": 3,
+                "factor_secondary": 1.61,
+                "threshold": 5,
+                "bb_length": 50,
+                "bb_mult": 0.35
+              }
+            },
+            "cmp": ">",
+            "right": 0
+          }
+        ]
+      }
+    },
+    {
+      "side": "short",
+      "when": {
+        "op": "AND",
+        "children": [
+          {
+            "cross": "crossUnder",
+            "left": {
+              "indicator": "SUPERTREND_DIR",
+              "period": 14,
+              "params": {
+                "multiplier": 2.5
+              }
+            },
+            "right": 0
+          },
+          {
+            "left": {
+              "indicator": "HAWKEYE",
+              "period": 200,
+              "params": {
+                "divisor": 1.5
+              }
+            },
+            "cmp": "<",
+            "right": 0
+          },
+          {
+            "left": {
+              "indicator": "QQE_MOD",
+              "period": 6,
+              "params": {
+                "smoothing": 5,
+                "factor_primary": 3,
+                "factor_secondary": 1.61,
+                "threshold": 5,
+                "bb_length": 50,
+                "bb_mult": 0.35
+              }
+            },
+            "cmp": "<",
+            "right": 0
+          }
+        ]
+      }
+    }
+  ],
+  "exit": {
+    "supertrendExit": {
+      "period": 14,
+      "multiplier": 2.5,
+      "as": "exit"
+    }
+  },
+  "sizing": {
+    "leverage": 20,
+    "marginMode": "isolated",
+    "size": {
+      "type": "equityPercent",
+      "value": 10.0
+    },
+    "leverageTiers": [
+      {
+        "leverage": 50,
+        "maxBalance": 1000.0
+      },
+      {
+        "leverage": 25,
+        "maxBalance": 5000.0
+      },
+      {
+        "leverage": 20,
+        "maxBalance": 10000.0
+      },
+      {
+        "leverage": 10,
+        "maxBalance": 50000.0
+      }
+    ]
+  },
+  "execution": {
+    "entryType": "makerLimit"
+  },
+  "filter": {
+    "cooldownBars": 3,
+    "avoidFundingWindowMinutes": 2
+  },
+  "description": "랭킹 1등(2026-10-15): live-strategy 에서 롱 SuperTrend 배수만 2.5→3.5. BTCUSDC 15m 600일 백테스트 +33.0% MDD 27% 611건, 랜덤보다 나음."
+}

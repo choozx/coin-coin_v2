@@ -27,6 +27,8 @@ _HTML = os.path.join(os.path.dirname(__file__), "gui.html")
 _DASH_HTML = os.path.join(os.path.dirname(__file__), "dashboard.html")   # 매매 대시보드(같은 포트 /dashboard)
 _COLLECTOR_HTML = os.path.join(os.path.dirname(__file__), "collector.html")   # 데이터·수집기 관리(/collector)
 _SETTINGS_HTML = os.path.join(os.path.dirname(__file__), "settings.html")     # 글로벌 설정(/settings)
+_VIDEO_HTML = os.path.join(os.path.dirname(__file__), "video.html")           # 트레이딩 영상 분석(/video)
+_RANKING_HTML = os.path.join(os.path.dirname(__file__), "ranking.html")       # 백테스트 결과 랭킹(/ranking)
 STATE_PATH = os.environ.get("STATE_PATH", "data/state.json")
 # 차트 라이브러리(TradingView Lightweight Charts, Apache 2.0). 벤더링해서 오프라인에서도 동작.
 _CHARTS_JS = os.path.join(os.path.dirname(__file__), "vendor",
@@ -55,6 +57,13 @@ def _price_target(p: dict, prefix: str):
     if t in ("percent", "atrMultiple", "price", "riskReward"):
         v = float(p.get(prefix + "Value", 0) or 0)
         return {"type": t, "value": v} if v > 0 else None
+    if t == "indicator":                     # 진입 시점 지표 값(EMA50 등) ± 버퍼 — 손절 전용
+        d = {"type": t, "indicator": {"indicator": p.get(prefix + "Ind", "EMA") or "EMA",
+                                      "period": int(p.get(prefix + "IndPeriod", 50) or 50)}}
+        buf = float(p.get(prefix + "Buffer", 0) or 0)
+        if buf > 0:
+            d["bufferPercent"] = buf
+        return d
     if t in ("swing", "swingLow", "swingHigh"):
         d = {"type": t, "lookback": int(p.get(prefix + "Lookback", 20))}
         buf = float(p.get(prefix + "Buffer", 0) or 0)
@@ -143,6 +152,27 @@ def _build_preset(p: dict) -> dict:
             "cmp": p.get("exitCondCmp", ">"),
             "right": float(p["exitCondValue"]),
         }
+    # 직접 청산 조건(고급) — 화면 'exitCustom' 칸(JSON). {"long": 조건, "short": 조건} — 한쪽만 있어도 된다.
+    # 영상 분석 프리셋처럼 지표 복귀 청산(RSI 등 4종)으로 안 되는 조건(종가<SMA100, RSI 하향 교차 50 …)을 담는다.
+    # 지표 복귀 청산도 켜져 있으면 방향마다 OR 로 합친다(engine 은 conditionBySide 가 있으면 condition 을 안 본다).
+    xc = p.get("exitCustom")
+    if isinstance(xc, str):
+        xc = xc.strip()
+    if xc:
+        try:
+            d = json.loads(xc) if isinstance(xc, str) else xc
+        except json.JSONDecodeError as e:
+            raise ValueError(f"직접 청산 조건 JSON 오류: {e}")
+        if not isinstance(d, dict) or not ({"long", "short"} & set(d)):
+            raise ValueError('직접 청산 조건은 {"long": 조건, "short": 조건} 형태여야 해요')
+        common = exit_block.pop("condition", None)
+        by = {}
+        for side in ("long", "short"):
+            nodes = [n for n in (d.get(side), common) if n]
+            if nodes:
+                by[side] = nodes[0] if len(nodes) == 1 else {"op": "OR", "children": nodes}
+        if by:
+            exit_block["conditionBySide"] = by
     # 시간 청산
     if int(p.get("timeStopBars", 0) or 0) > 0:
         exit_block["timeStop"] = {"maxBars": int(p["timeStopBars"])}
@@ -200,6 +230,19 @@ def _downsample(curve, n=400):
     return [curve[int(i * step)] for i in range(n)] + [curve[-1]]
 
 
+def price_decimals(base) -> int:
+    """차트·거래 목록에 보낼 가격 소수 자릿수 — 최고가 기준 유효숫자 6자리, 최소 2.
+
+    BTC(~10만) 2 · DOGE(~0.4) 7 · 1000PEPE(~0.02) 8. 고정 2자리였을 땐 DOGE 캔들이 0.12·0.13 계단으로 뭉갰다.
+    """
+    import math
+    import numpy as np
+    mx = float(np.nanmax(base.close)) if len(base) else 0.0
+    if not (mx > 0):
+        return 2
+    return max(2, 6 - int(math.floor(math.log10(mx))))
+
+
 def _ohlc_for_chart(base, tf_min: int, max_bars: int = 200000):
     """차트용 캔들스틱 OHLC. 백테스트 타임프레임 그대로 리샘플(무압축)해 반환하되,
     max_bars 초과 시에만 연속 봉을 묶어 압축(응답 크기 방어).
@@ -208,15 +251,16 @@ def _ohlc_for_chart(base, tf_min: int, max_bars: int = 200000):
     cs = resample(base, tf_min)
     n = len(cs)
     k = 1 if n <= max_bars else math.ceil(n / max_bars)
+    dp = price_decimals(base)
     out = []
     for s in range(0, n, k):
         e = min(s + k, n)
         out.append([
             int(cs.open_time[s]),
-            round(float(cs.open[s]), 2),
-            round(float(cs.high[s:e].max()), 2),
-            round(float(cs.low[s:e].min()), 2),
-            round(float(cs.close[e - 1]), 2),
+            round(float(cs.open[s]), dp),
+            round(float(cs.high[s:e].max()), dp),
+            round(float(cs.low[s:e].min()), dp),
+            round(float(cs.close[e - 1]), dp),
         ])
     return out, (k * tf_min)   # (캔들목록, 캔들 1개가 나타내는 분)
 
@@ -231,6 +275,7 @@ _IND_PANE = {
     "RVOL": "rvol", "TAKER_DELTA": "taker", "TAKER_DELTA_RATIO": "taker",
     "CVD": "cvd", "CVD_EMA": "cvd", "HAWKEYE": "hawkeye",
     "QQE_MOD": "qqe", "QQE_RSI": "qqe", "QQE_LINE": "qqe", "SUPERTREND_DIR": "st_dir",
+    "RSI_DIV": "rsi_div", "ATR_RANK": "atr_rank", "MA_ANGLE": "ma_angle", "MA_CROSSES": "ma_crosses",
 }
 _IND_COLOR = {
     "EMA": "#e8a13a", "SMA": "#c77dff", "VWAP": "#4cc9f0", "SUPERTREND": "#26d07c",
@@ -240,7 +285,7 @@ _IND_COLOR = {
     "STOCHRSI_K": "#4cc9f0", "STOCHRSI_D": "#f0708a", "CCI": "#e8a13a", "MFI": "#3aa76d",
     "RVOL": "#c77dff", "TAKER_DELTA": "#4cc9f0", "TAKER_DELTA_RATIO": "#4cc9f0",
     "CVD": "#26d07c", "CVD_EMA": "#f0708a", "HAWKEYE": "#c77dff",
-    "QQE_MOD": "#4cc9f0", "QQE_RSI": "#e8a13a", "QQE_LINE": "#f0708a",
+    "QQE_MOD": "#4cc9f0", "QQE_RSI": "#e8a13a", "QQE_LINE": "#f0708a", "RSI_DIV": "#eb6834", "ATR_RANK": "#c77dff",
 }
 _IND_NAME = {
     "SUPERTREND": "SuperTrend", "BB_upper": "BB상단", "BB_mid": "BB중심", "BB_lower": "BB하단",
@@ -248,6 +293,7 @@ _IND_NAME = {
     "STOCH_D": "Stoch %D", "STOCHRSI_K": "StochRSI %K", "STOCHRSI_D": "StochRSI %D",
     "TAKER_DELTA_RATIO": "테이커델타비율", "TAKER_DELTA": "테이커델타", "CVD_EMA": "CVD EMA",
     "QQE_MOD": "QQE MOD", "QQE_RSI": "QQE RSI", "QQE_LINE": "QQE 라인", "HAWKEYE": "HawkEye",
+    "RSI_DIV": "RSI 다이버전스", "ATR_RANK": "변동성 순위", "MA_ANGLE": "이평 각도", "MA_CROSSES": "이평 교차 횟수",
 }
 
 
@@ -280,10 +326,12 @@ def _chart_indicators(base, tf_min: int, preset_dict: dict, max_bars: int = 2000
     n = len(cs)
     if n == 0:
         return []
+    dv = max(4, price_decimals(base))          # 가격 스케일 지표(SMA·밴드 등)도 싼 코인에서 안 뭉개지게
     k = 1 if n <= max_bars else math.ceil(n / max_bars)
     resolver = SeriesResolver(cs)
 
     operands = []
+    div_sides: dict = {}
 
     def walk(node):
         if not isinstance(node, dict):
@@ -296,6 +344,10 @@ def _chart_indicators(base, tf_min: int, preset_dict: dict, max_bars: int = 2000
             op = node.get(sd)
             if isinstance(op, dict) and "indicator" in op:
                 operands.append(op)
+        lo = node.get("left")
+        if isinstance(lo, dict) and lo.get("indicator") == "RSI_DIV":     # 조건이 쓰는 방향만 그린다
+            up = node.get("cmp") in (">", ">=") or node.get("cross") == "crossOver"
+            div_sides.setdefault(json.dumps(lo, sort_keys=True), set()).add(1 if up else -1)
 
     for r in preset_dict.get("entryRules") or []:
         walk(r.get("when"))
@@ -324,7 +376,7 @@ def _chart_indicators(base, tf_min: int, preset_dict: dict, max_bars: int = 2000
         for s in range(0, n, k):
             v = series[min(s + k, n) - 1]
             out.append([int(cs.open_time[s]),
-                        None if (v is None or (isinstance(v, float) and math.isnan(v))) else round(float(v), 4)])
+                        None if (v is None or (isinstance(v, float) and math.isnan(v))) else round(float(v), dv)])
         return out
 
     result = []
@@ -398,6 +450,94 @@ def _chart_indicators(base, tf_min: int, preset_dict: dict, max_bars: int = 2000
             result.append({"label": "QQE 라인(보조)", "overlay": False, "pane": "qqe",
                            "type": "line", "color": "#d0d0d0", "data": ln})
             continue
+        if name in ("FRACTAL", "PULLBACK_FRACTAL"):
+            # 프랙탈은 '중심 봉 → 확정 봉' 짧은 가로선(그 저점/고점 가격)으로 — 어디서 생겼고 언제 확정됐는지 보인다.
+            # 눌림 조건은 기준 이평도 같이 그린다.
+            from . import indicators as ind
+            pr = op.get("params") or {}
+            if name == "PULLBACK_FRACTAL":
+                nf, per = int(pr.get("n", 2)), op.get("period") or 20
+                ma_nm = "SMA" if pr.get("sma") else "EMA"
+                ma = (ind.sma if ma_nm == "SMA" else ind.ema)(cs.close, per)
+                result.append({"label": f"{ma_nm}({per})", "overlay": True, "pane": "price",
+                               "color": "#e8a13a", "data": subsample(ma)})
+            else:
+                nf = int(op.get("period") or 2)
+            lows, highs = ind.fractal_points(cs.high, cs.low, nf)
+            t_of = lambda i: int(cs.open_time[(i // k) * k])
+            for idxs, arr, lab, color in ((lows, cs.low, "프랙탈 저점", "#ff5c6c"), (highs, cs.high, "프랙탈 고점", "#4c9be8")):
+                pts = []
+                for c0 in idxs.tolist():
+                    if c0 + nf < n and t_of(c0) < t_of(c0 + nf):
+                        v = round(float(arr[c0]), dv)
+                        pts += [[t_of(c0), v], [t_of(c0 + nf), v], [t_of(c0 + nf) + 1, None]]
+                if pts:
+                    result.append({"label": lab, "overlay": True, "pane": "price", "color": color, "data": pts})
+            continue
+        if name == "PIN_BAR":
+            continue                       # 봉 모양 그 자체라 캔들에서 보인다 — ±1 신호를 선으로 그리면 바늘뿐
+        if name == "TRIANGLE_BREAK":
+            # 돌파마다 그 삼각형의 위·아래 추세선(첫 피벗 → 돌파 봉까지 연장)을 가격 차트에. 선분은 [점1, 점2, 끊기].
+            from . import indicators as ind
+            pr = op.get("params") or {}
+            evs = ind._triangle_events(cs.high, cs.low, cs.close, op.get("period") or 5,
+                                       int(pr.get("lookback", 100)), float(pr.get("tol", 10)))
+            t_of = lambda i: int(cs.open_time[(i // k) * k])
+            up, dn = [], []
+            for t, _side, (i1, h1, _i2, _h2), (j1, l1, _j2, _l2), U, L in evs:
+                up += [[t_of(i1), round(float(h1), dv)], [t_of(t), round(float(U), dv)], [t_of(t) + 1, None]]
+                dn += [[t_of(j1), round(float(l1), dv)], [t_of(t), round(float(L), dv)], [t_of(t) + 1, None]]
+            if up:
+                result.append({"label": "삼각형 위 추세선", "overlay": True, "pane": "price", "color": "#4cc9f0", "data": up})
+                result.append({"label": "삼각형 아래 추세선", "overlay": True, "pane": "price", "color": "#f0a04c", "data": dn})
+            continue
+        if name == "RSI_DIV":
+            # 신호값(+1/0/-1)을 선으로 그리면 0 에 붙은 평선 + 바늘이라 읽을 수 없다.
+            # 대신 RSI 선 · 기준선 · 다이버전스를 이루는 두 저점(약세는 고점)을 잇는 선을 그린다 —
+            # 가격 차트(오버레이)와 RSI 패널 양쪽에. 선분은 [점1, 점2, 끊기(None)] 로 보낸다(GUI 가 None 에서 끊는다).
+            from . import indicators as ind
+            pr = op.get("params") or {}
+            per = op.get("period") or 14
+            lvl = float(pr.get("level", 30))
+            cvd_mode = int(pr.get("cvd", 0)) if cs.taker_buy is not None else 0
+            segs = ind.rsi_divergence_segments(cs.high, cs.low, cs.close, per, lvl, int(pr.get("min_gap", 5)),
+                                               int(pr.get("window", 60)), float(pr.get("strength", 0)),
+                                               cs.volume, cs.taker_buy, cvd_mode)
+            if int(pr.get("cvd", 0)) and cs.taker_buy is None:
+                segs = []                                    # 조건이 항상 false 인 것과 맞춘다
+            r = ind.rsi(cs.close, per)
+            t_of = lambda i: int(cs.open_time[(i // k) * k])
+            last_t = int(cs.open_time[((n - 1) // k) * k])
+            result.append({"label": f"RSI({per})", "overlay": False, "pane": "rsi_div",
+                           "color": "#e8a13a", "data": subsample(r)})
+            sides = div_sides.get(json.dumps(op, sort_keys=True), {1, -1})
+            for v in ([lvl] if 1 in sides else []) + ([100.0 - lvl] if -1 in sides else []):
+                result.append({"label": f"기준 {v:g}", "overlay": False, "pane": "rsi_div", "color": "#6c7080",
+                               "data": [[int(cs.open_time[0]), v], [last_t, v]]})
+            for side, color, nm in ((1, "#eb6834", "강세"), (-1, "#c77dff", "약세")):
+                if side not in sides:
+                    continue
+                pts = {"price": [], "rsi": []}
+                prev_end = -1
+                for d in segs:
+                    if d["side"] != side:
+                        continue
+                    (a0, _), (a1, _) = d["price"]
+                    (b0, _), _ = d["rsi"]
+                    t0, t1 = t_of(min(a0, b0)), t_of(a1)
+                    if t0 <= prev_end or t_of(a0) >= t1 or t_of(b0) >= t1:
+                        continue                                 # 축약(k>1)으로 겹치면 생략
+                    for key in ("price", "rsi"):
+                        (i0, v0), (i1, v1) = d[key]
+                        pts[key] += [[t_of(i0), round(v0, dv)], [t_of(i1), round(v1, dv)], [t1 + 1, None]]
+                    prev_end = t1 + 1
+                if not pts["price"]:
+                    continue
+                result.append({"label": f"{nm} 다이버전스(가격)", "overlay": True, "pane": "price",
+                               "color": color, "data": pts["price"]})
+                result.append({"label": f"{nm} 다이버전스(RSI)", "overlay": False, "pane": "rsi_div",
+                               "color": color, "data": pts["rsi"]})
+            continue
         try:
             series = resolver.resolve(op)
         except Exception:
@@ -410,6 +550,21 @@ def _chart_indicators(base, tf_min: int, preset_dict: dict, max_bars: int = 2000
             "color": _IND_COLOR.get(name, "#8a90a0"),
             "data": subsample(series),
         })
+    # 같은 선이 두 조건에서 나오면 한 번만(예: 정배열 EMA20 과 눌림 조건의 EMA20)
+    seen_lbl, uniq_res = set(), []
+    for r in result:
+        key = (r["label"], r["pane"])
+        if r.get("overlay") and key in seen_lbl:
+            continue
+        seen_lbl.add(key)
+        uniq_res.append(r)
+    result = uniq_res
+    # 가격 위 이평이 여럿이면 기간 짧은 순으로 색을 나눈다 — 전부 같은 주황이면 정배열을 못 읽는다
+    _MA_COLORS = ["#e8a13a", "#4cc9f0", "#c77dff", "#26d07c", "#f0708a"]
+    import re as _re
+    mas = [r for r in result if r.get("overlay") and _re.match(r"^(EMA|SMA)\((\d+)\)$", r["label"])]
+    for i, r in enumerate(sorted(mas, key=lambda r: int(_re.match(r"^\w+\((\d+)\)$", r["label"]).group(1)))):
+        r["color"] = _MA_COLORS[i % len(_MA_COLORS)]
     return result
 
 
@@ -453,18 +608,21 @@ def _run_backtest(p: dict, emit=None) -> dict:
     import math
     reasons = Counter(t.exit_reason for t in m.trades)
 
-    def _px(x):   # nan → None, 그 외 round
-        return None if x is None or (isinstance(x, float) and math.isnan(x)) else round(float(x), 2)
+    dp = price_decimals(base)
 
-    stage(95, "차트 준비 중")
-    tf_min = TIMEFRAME_MINUTES[p["timeframe"]]
-    ohlc, bar_min = _ohlc_for_chart(base, tf_min)
-    chart_inds = _chart_indicators(base, tf_min, preset_dict)
+    def _px(x):   # nan → None, 그 외 round
+        return None if x is None or (isinstance(x, float) and math.isnan(x)) else round(float(x), dp)
+
+    # 전체 캔들 차트는 안 보낸다 — 거래 목록에서 한 건을 누르면 /api/bt_trade_chart 가 그 구간만 신호 TF 그대로 그린다.
+    # (2000일 5m 를 한 차트에 넣으면 20만 봉 상한에 걸려 4봉씩 묶였고, 묶음 안 RSI 저점이 안 보였다.)
+    stage(95, "결과 정리 중")
     trades_out = [{
         "side": t.side,
-        "entryTime": int(t.entry_time), "entryPrice": round(float(t.entry_price), 2),
-        "exitTime": int(t.exit_time), "exitPrice": round(float(t.exit_price), 2),
+        "entryTime": int(t.entry_time), "entryPrice": round(float(t.entry_price), dp),
+        "exitTime": int(t.exit_time), "exitPrice": round(float(t.exit_price), dp),
         "stop": _px(t.stop_price), "tp": _px(t.tp_price),
+        "qty": float(t.qty), "leverage": int(t.leverage),
+        "fees": round(float(t.fees), 2), "funding": round(float(t.funding), 2),
         "pnl": round(float(t.pnl), 2), "reason": t.exit_reason,
     } for t in m.trades]
     return {
@@ -474,9 +632,7 @@ def _run_backtest(p: dict, emit=None) -> dict:
         "fundingRate": fr_rate,
         "makerFee": cfg.maker_fee,
         "takerFee": cfg.taker_fee,
-        "ohlc": ohlc,
-        "ohlcBarMin": bar_min,
-        "indicators": chart_inds,
+        "pricePrecision": dp,
         "trades": trades_out,
         "metrics": {
             "totalReturnPct": round(m.total_return_pct, 3),
@@ -498,6 +654,27 @@ def _run_backtest(p: dict, emit=None) -> dict:
         "buyHoldPct": round((float(base.close[-1]) / float(base.close[0]) - 1) * 100, 2),
         "equityCurve": _downsample([[t, round(e, 2)] for t, e in m.equity_curve]),
     }
+
+
+def _run_backtest_ranked(p: dict, emit=None) -> dict:
+    """화면 백테스트 = 실행 + 랭킹 자동 등록(engine/ranking.py). 등록 실패가 결과를 막지는 않는다."""
+    res = _run_backtest(p, emit)
+    try:
+        from . import ranking
+        res["rankingKey"] = ranking.record(p, res)
+        if res["rankingKey"] is None:
+            res["rankingSkipped"] = f"기간 {ranking.MIN_DAYS}일(1년) 미만이라 랭킹에 등록하지 않았어요"
+    except Exception as e:
+        print(f"  [랭킹 등록 실패] {type(e).__name__}: {e}", flush=True)
+    return res
+
+
+def _bt_trade_chart(p: dict) -> dict:
+    """백테스트 거래 한 건 → 진입~청산 구간 캔들+지표(신호 TF 그대로). p = {preset, entryTime, exitTime}."""
+    from . import trade_chart
+    pr = p["preset"]
+    mk = pr["market"]
+    return trade_chart.window(mk["symbol"], pr, mk["timeframe"], int(p["entryTime"]), int(p["exitTime"]))
 
 
 def _run_optimize(p: dict, emit) -> None:
@@ -542,8 +719,37 @@ def _run_optimize(p: dict, emit) -> None:
         is_frac=0.7 if use_oos else 1.0,
         progress_cb=on_combo,
     )
+    result["rankingRegistered"] = _register_range_top(p, result, base, emit)
     result["type"] = "done"
     emit(result)
+
+
+RANGE_RANK_TOP = 5     # 범위 테스트 상위 몇 개를 전체 기간으로 다시 돌려 랭킹에 올리나
+
+
+def _register_range_top(p: dict, result: dict, base, emit) -> list:
+    """범위 테스트 상위 조합을 **전체 기간** 백테스트로 다시 돌려 랭킹에 등록 — 일반 백테스트와 같은 기준으로 비교되게.
+    조합 순위는 IS(앞 70%) 목적함수 기준이라 그 수익을 그대로 올리면 기간이 달라 비교가 안 된다.
+    'N조합 중 k위'를 같이 남겨 고른 결과(운이 섞임)임이 보이게 한다. 1년 미만 기간이면 돌리지 않는다."""
+    from . import ranking
+    top = (result.get("top") or [])[:RANGE_RANK_TOP]
+    if not top:
+        return []
+    span_days = (int(base.open_time[-1]) - int(base.open_time[0])) / 86_400_000
+    if round(span_days) < ranking.MIN_DAYS:
+        return [{"skipped": f"기간 {ranking.MIN_DAYS}일(1년) 미만이라 랭킹에 등록하지 않았어요"}]
+    out = []
+    for k, row in enumerate(top, 1):
+        emit({"type": "ranking", "text": f"랭킹 등록 — 상위 {k}/{len(top)}위 조합을 전체 기간으로 다시 백테스트 중"})
+        try:
+            pf = {**p, **row["params"]}
+            res = _run_backtest(pf)
+            key = ranking.record(pf, res, source={"kind": "range", "rank": k, "combos": result.get("evaluated"),
+                                                  "params": row["params"]})
+            out.append({"rank": k, "key": key, "returnPct": res["metrics"]["totalReturnPct"]})
+        except Exception as e:
+            out.append({"rank": k, "error": f"{type(e).__name__}: {e}"})
+    return out
 
 
 def _run_collect(p: dict) -> dict:
@@ -656,7 +862,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path in ("/", "/index.html", "/dashboard", "/dashboard/"):   # 랜딩 = 매매 대시보드
             with open(_DASH_HTML, "rb") as f:
                 self._send(200, f.read(), "text/html; charset=utf-8")
-        elif self.path in ("/backtest", "/backtest/"):        # 백테스트 스튜디오
+        elif self.path.split("?")[0] in ("/backtest", "/backtest/"):   # 백테스트 스튜디오(?preset=이름 → 그 프리셋으로 열기)
             with open(_HTML, "rb") as f:
                 self._send(200, f.read(), "text/html; charset=utf-8")
         elif self.path == "/vendor/lightweight-charts.js":
@@ -669,6 +875,18 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path in ("/settings", "/settings/"):       # 글로벌 설정(가드레일·레버리지 티어)
             with open(_SETTINGS_HTML, "rb") as f:
                 self._send(200, f.read(), "text/html; charset=utf-8")
+        elif self.path in ("/video", "/video/"):             # 트레이딩 영상 분석(자막 → 요약·규칙)
+            with open(_VIDEO_HTML, "rb") as f:
+                self._send(200, f.read(), "text/html; charset=utf-8")
+        elif self.path.split("?")[0] in ("/ranking", "/ranking/"):   # 백테스트 결과 랭킹
+            with open(_RANKING_HTML, "rb") as f:
+                self._send(200, f.read(), "text/html; charset=utf-8")
+        elif self.path == "/api/ranking":                    # 랭킹 표(가벼운 행들)
+            from . import ranking
+            self._send(200, json.dumps(ranking.list_results(), ensure_ascii=False))
+        elif self.path == "/api/video_list":                 # 저장된 영상 분석 목록
+            from . import video_analyze
+            self._send(200, json.dumps(video_analyze.list_analyses()))
         elif self.path in ("/collector", "/collector/"):     # 데이터·수집기 관리 페이지
             with open(_COLLECTOR_HTML, "rb") as f:
                 self._send(200, f.read(), "text/html; charset=utf-8")
@@ -726,8 +944,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, b"not found", "text/plain")
 
     def do_POST(self):
+        if self.path == "/api/video_analyze":             # 영상 분석(자막 받기 → Claude) + 진행(NDJSON)
+            from . import video_analyze
+            self._ndjson_stream(video_analyze.run)
+            return
         if self.path == "/api/backtest_stream":           # 백테스트 + 진행률(NDJSON)
-            self._ndjson_stream(lambda params, emit: emit({"type": "done", "result": _run_backtest(params, emit)}))
+            self._ndjson_stream(lambda params, emit: emit({"type": "done", "result": _run_backtest_ranked(params, emit)}))
             return
         if self.path == "/api/optimize":
             self._optimize_stream()
@@ -827,7 +1049,10 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._send(400, json.dumps({"error": str(e)}))
             return
-        routes = {"/api/backtest": _run_backtest,
+        from . import video_analyze, ranking
+        routes = {"/api/backtest": _run_backtest, "/api/bt_trade_chart": _bt_trade_chart,
+                  "/api/video_preset": video_analyze.make_preset,          # 영상 분석 → 백테스트 프리셋
+                  "/api/ranking_item": ranking.get, "/api/ranking_delete": ranking.delete,
                   "/api/collect": _run_collect, "/api/collect_chunk": _run_collect_chunk,
                   "/api/save_preset": _save_preset, "/api/delete_preset": _delete_preset}
         if self.path not in routes:

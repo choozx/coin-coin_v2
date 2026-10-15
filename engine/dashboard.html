@@ -168,6 +168,8 @@ const $ = id => document.getElementById(id);
 const esc = t => String(t==null?"":t).replace(/[&<>"']/g, c =>
   ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const fmt = n => n==null ? "–" : Number(n).toLocaleString(undefined,{maximumFractionDigits:2});
+// 가격 전용 — 소수 2자리 고정이면 DOGE(~0.1) 진입가·손절이 0.12 로 뭉갠다. 1천 이상은 2자리, 그 아래는 유효숫자 6.
+const fmtP = n => n==null ? "–" : Number(n).toLocaleString(undefined, Math.abs(n) >= 1000 ? {maximumFractionDigits:2} : {maximumSignificantDigits:6});
 const fmtT = ms => { const d=new Date(ms); return d.toLocaleString('ko-KR',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}); };
 const fmtAgo = ms => {                               // 경과시간 사람이 읽게(초 raw 대신)
   const s = Math.max(0, Math.round(ms/1000));
@@ -325,14 +327,14 @@ async function tick(){
       : `${pos.uPnl>=0?"+":""}${fmt(pos.uPnl)}${pos.uPnlPct==null?"":` (${pos.uPnlPct>=0?"+":""}${fmt(pos.uPnlPct)}%)`}`;
     live += `<div class="pos"><h3>현재 포지션</h3><div class="posgrid">
       <div><div class="k">방향</div><div class="v ${posCls}">${pos.side>0?"롱 LONG":"숏 SHORT"}</div></div>
-      <div><div class="k">진입가</div><div class="v">${fmt(pos.entryPrice)}</div></div>
-      <div><div class="k">현재가</div><div class="v">${pos.mark==null?"–":fmt(pos.mark)}</div></div>
+      <div><div class="k">진입가</div><div class="v">${fmtP(pos.entryPrice)}</div></div>
+      <div><div class="k">현재가</div><div class="v">${pos.mark==null?"–":fmtP(pos.mark)}</div></div>
       <div><div class="k">미실현손익</div><div class="v ${upCls}">${upTxt}</div></div>
       <div><div class="k">수량</div><div class="v">${fmt(pos.qty)}</div></div>
       <div><div class="k">레버리지</div><div class="v">${pos.leverage}x</div></div>
-      <div><div class="k">손절</div><div class="v">${pos.stop==null?"–":fmt(pos.stop)}</div></div>
-      <div><div class="k">익절</div><div class="v">${pos.tp==null?"–":fmt(pos.tp)}</div></div>
-      <div><div class="k">청산가</div><div class="v r">${fmt(pos.liq)}</div></div>
+      <div><div class="k">손절</div><div class="v">${pos.stop==null?"–":fmtP(pos.stop)}</div></div>
+      <div><div class="k">익절</div><div class="v">${pos.tp==null?"–":fmtP(pos.tp)}</div></div>
+      <div><div class="k">청산가</div><div class="v r">${fmtP(pos.liq)}</div></div>
       <div><div class="k">진입시각</div><div class="v">${fmtT(pos.entryTime)}</div></div>
     </div>
     <div style="margin-top:12px"><button onclick="flatten()" style="background:var(--down);color:#fff;border:0;padding:8px 14px;border-radius:8px;font-weight:600;cursor:pointer">🛑 즉시청산</button>
@@ -360,7 +362,7 @@ function renderTrades(){
     const nm=(t.strategy||'-').split('/').pop().replace('.json','');
     h += `<tr class="trow" onclick="toggleTrade(${t.id})"><td class="cursor">▸</td>`
       + `<td class="${t.side>0?'g':'r'}">${t.side>0?"롱":"숏"}</td>`
-      + `<td class="sub">${nm}</td><td>${fmt(t.entry_price)}</td><td>${fmt(t.exit_price)}</td>`
+      + `<td class="sub">${nm}</td><td>${fmtP(t.entry_price)}</td><td>${fmtP(t.exit_price)}</td>`
       + `<td>${RN[t.reason]||t.reason}</td><td class="${c}">${t.pnl>=0?"+":""}${fmt(t.pnl)}</td>`
       + `<td class="sub">${fmtT(t.exit_time)}</td></tr>`
       + `<tr class="exprow" id="exp-${t.id}" style="display:none"><td colspan="8"><div class="tchart" id="tc-${t.id}"></div></td></tr>`;
@@ -409,11 +411,13 @@ function drawTradeChart(box, d){
   const LC = window.LightweightCharts;
   if (!LC){ box.innerHTML = `<div class="err">차트 라이브러리 로드 실패</div>`; return null; }
   const inds = d.indicators || [];
+  const prec = d.pricePrecision ?? 2;
+  const priceFormat = { type:"price", precision:prec, minMove:Math.pow(10, -prec) };
   const cap = document.createElement("div");
   cap.className = "caption";
   const nm = (d.strategy||'').split('/').pop().replace('.json','');
   cap.innerHTML = `<b>${nm}</b> · ${d.symbol} ${d.timeframe} · ${d.entry.side>0?"롱":"숏"} `
-    + `${fmt(d.entry.price)} → ${fmt(d.exit.price)} · ${RN[d.exit.reason]||d.exit.reason} `
+    + `${fmtP(d.entry.price)} → ${fmtP(d.exit.price)} · ${RN[d.exit.reason]||d.exit.reason} `
     + `<b class="${d.exit.pnl>=0?'g':'r'}">${d.exit.pnl>=0?'+':''}${fmt(d.exit.pnl)}</b>`;
   box.appendChild(cap);
   const holder = document.createElement("div");
@@ -431,7 +435,7 @@ function drawTradeChart(box, d){
     localization: { timeFormatter: s => fmtT(s*1000) },
   });
   const candles = chart.addSeries(LC.CandlestickSeries, {
-    upColor:"#3aa76d", downColor:"#cf5b5b", borderVisible:false, wickUpColor:"#3aa76d", wickDownColor:"#cf5b5b" });
+    upColor:"#3aa76d", downColor:"#cf5b5b", borderVisible:false, wickUpColor:"#3aa76d", wickDownColor:"#cf5b5b", priceFormat });
   candles.setData(d.ohlc.map(b => ({ time:b[0]/1000, open:b[1], high:b[2], low:b[3], close:b[4] })));
 
   const ohlc = d.ohlc, nn = ohlc.length;
@@ -448,7 +452,7 @@ function drawTradeChart(box, d){
   const te = snap(d.entry.time), tx = snap(d.exit.time);
   if (tx > te){
     for (const [pr,color] of [[d.entry.price,"rgba(76,155,232,.7)"],[d.exit.price, win?"rgba(38,208,124,.7)":"rgba(255,92,108,.7)"]]){
-      const s = chart.addSeries(LC.LineSeries, { color, lineWidth:1, lineStyle:LC.LineStyle.Dashed,
+      const s = chart.addSeries(LC.LineSeries, { color, lineWidth:1, lineStyle:LC.LineStyle.Dashed, priceFormat,
         priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false });
       s.setData([{ time:te, value:pr }, { time:tx, value:pr }]);
     }
@@ -463,6 +467,7 @@ function drawTradeChart(box, d){
       s.setData(ind.data.filter(p=>p[1]!=null).map(p => p[2] ? {time:p[0]/1000,value:p[1],color:p[2]} : {time:p[0]/1000,value:p[1]}));
     } else {
       const opt = { color:ind.color, lineWidth:ind.overlay?2:1, priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false, pointMarkersVisible:false };
+      if (pane === 0) opt.priceFormat = priceFormat;
       let run = [];
       const flush = () => { if (run.length){ const s = chart.addSeries(LC.LineSeries, opt, pane); s.setData(run); run=[]; } };
       for (const p of ind.data){ if (p[1]==null) flush(); else run.push({ time:p[0]/1000, value:p[1] }); }

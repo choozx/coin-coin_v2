@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>백테스트 랭킹</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --line:#2a2f3a;
+          --fg:#e6e9ef; --mut:#8b93a3; --accent:#4f9dff; --up:#26d07c; --down:#ff5c6c; --warn:#e0a030; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--fg); font-size:14px; }
+  header { padding:14px 20px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0; font-weight:600; }
+  header a { color:#4c9be8; text-decoration:none; font-size:13px; }
+  header .sub { color:var(--mut); font-size:12px; }
+  .wrap { padding:16px 20px; }
+  .bar { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:12px; }
+  select, input[type=text] { background:var(--panel2); border:1px solid var(--line); color:var(--fg); border-radius:7px; padding:7px 9px; font-size:13px; }
+  input[type=text] { min-width:240px; }
+  label.chk { display:flex; gap:5px; align-items:center; color:var(--mut); font-size:12px; }
+  label.per input[type=range] { width:150px; accent-color:var(--accent); }
+  label.per b { color:var(--fg); font-weight:600; min-width:96px; }
+  .note { color:var(--mut); font-size:12px; line-height:1.55; margin-bottom:10px; }
+  .tw { overflow-x:auto; border:1px solid var(--line); border-radius:9px; }
+  table { border-collapse:collapse; width:100%; font-size:12px; }
+  th, td { padding:7px 8px; border-bottom:1px solid var(--line); text-align:right; white-space:nowrap; vertical-align:top; }
+  th { position:sticky; top:0; background:var(--panel2); color:var(--mut); font-weight:600; cursor:pointer; user-select:none; }
+  th.sorted { color:var(--fg); }
+  th.l, td.l { text-align:left; }
+  .tw { max-width:900px; }
+  tr.row { cursor:pointer; }
+  tr.row.open td { background:rgba(79,157,255,.10); }
+  td.ret { font-size:14px; font-weight:600; }
+  tr.detail td { background:var(--bg); padding:12px 14px; text-align:left; white-space:normal; cursor:default; }
+  .dset { line-height:1.6; color:#c9ced8; margin-bottom:10px; }
+  .dset .k { color:var(--mut); display:inline-block; width:52px; }
+  .dset .diff { color:var(--warn); }
+  .mgrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(110px, 1fr)); gap:8px; margin-bottom:10px; }
+  .mgrid > div { background:var(--panel); border:1px solid var(--line); border-radius:7px; padding:6px 9px; }
+  .mgrid .k { color:var(--mut); font-size:11px; }
+  .mgrid .v { font-size:13px; font-weight:600; margin-top:2px; }
+  .rtag { font-size:11px; color:#b9a2ff; background:rgba(124,92,255,.14); border-radius:9px; padding:1px 7px; margin-left:4px; white-space:nowrap; }
+  .dact { display:flex; gap:10px; align-items:center; color:var(--mut); font-size:11px; }
+  td.set .s { color:var(--mut); }
+  tr:hover td { background:rgba(79,157,255,.05); }
+  tr.top td:first-child { color:var(--warn); font-weight:700; }
+  .up { color:var(--up); } .down { color:var(--down); }
+  .nm { font-weight:600; }
+  .var { color:var(--mut); font-size:11px; }
+  a.btn, button.btn { display:inline-block; background:var(--panel2); border:1px solid var(--line); color:var(--fg); border-radius:6px;
+                      padding:3px 8px; font-size:11px; text-decoration:none; cursor:pointer; }
+  button.del { background:none; border:0; color:var(--mut); cursor:pointer; font-size:12px; }
+  button.del:hover { color:var(--down); }
+  .empty { color:var(--mut); padding:40px; text-align:center; line-height:1.8; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🏆 백테스트 랭킹</h1>
+  <a href="/backtest">📊 백테스트</a>
+  <a href="/video">🎬 영상 분석</a>
+  <a href="/collector">📥 데이터·수집기</a>
+  <span class="sub">기간 1년 이상 백테스트를 돌릴 때마다 자동 등록 · 같은 프리셋이라도 설정이 다르면 따로 순위</span>
+</header>
+<div class="wrap">
+  <div class="bar">
+    <select id="grp" title="같은 심볼·봉끼리 비교 — 기간은 오른쪽 슬라이더로"></select>
+    <input type="text" id="q" placeholder="🔎 프리셋 이름·조건 검색">
+    <select id="sort" title="정렬 기준"></select>
+    <label class="chk per" title="이 기간 이상으로 돌린 결과만 (1개월 단위)">기간
+      <input type="range" id="minMonths" min="12" max="60" step="1" value="12"><b id="minMonthsLbl"></b></label>
+    <label class="chk"><input type="checkbox" id="bestOnly"> 프리셋마다 최고 설정만</label>
+    <label class="chk"><input type="checkbox" id="randOnly"> 랜덤보다 나은 것만</label>
+    <label class="chk" title="범위 테스트 상위 조합을 전체 기간으로 다시 돌린 결과"><input type="checkbox" id="rangeIn" checked> 범위 테스트 결과 포함</label>
+    <label class="chk"><input type="checkbox" id="minTr" checked> 거래 20건 이상</label>
+  </div>
+  <div class="note" id="info"></div>
+  <div id="out"><div class="empty">불러오는 중…</div></div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmtD = ms => new Date(ms).toISOString().slice(0, 10);
+const pct = (v, d = 1) => v == null ? "–" : `<span class="${v > 0 ? "up" : v < 0 ? "down" : ""}">${v > 0 ? "+" : ""}${(+v).toFixed(d)}%</span>`;
+const COLS = [   // [키, 제목, 높을수록 좋음?, 렌더]
+  ["returnPct", "총수익", true, r => pct(r.returnPct)],
+  ["calmar", "Calmar", true, r => r.calmar == null ? "–" : `<span class="${r.calmar > 0 ? "up" : "down"}">${r.calmar.toFixed(2)}</span>`],
+  ["cagrPct", "연환산", true, r => pct(r.cagrPct)],
+  ["mddPct", "MDD", false, r => `<span class="down">${(+r.mddPct).toFixed(1)}%</span>`],
+  ["trades", "거래", true, r => r.trades],
+  ["winRatePct", "승률", true, r => `${(+r.winRatePct).toFixed(0)}%`],
+  ["profitFactor", "PF", true, r => r.profitFactor == null ? "∞" : (+r.profitFactor).toFixed(2)],
+  ["sharpe", "샤프", true, r => (+r.sharpe).toFixed(2)],
+  ["beatsRandom", "랜덤 대비", true, r => r.beatsRandom == null ? "–" : r.beatsRandom ? `<span class="up">✅ 나음</span>` : `<span class="down">❌</span>`],
+];
+let rows = [], sortKey = "returnPct", sortDesc = true;
+const gkey = r => `${r.symbol}|${r.timeframe}`;      // 기간은 슬라이더(N개월 이상)가 거른다
+
+async function load() {
+  rows = await (await fetch("/api/ranking", { cache: "no-store" })).json();
+  const groups = {};
+  for (const r of rows) { const k = gkey(r); (groups[k] = groups[k] || { n: 0, at: 0, r }); groups[k].n++; groups[k].at = Math.max(groups[k].at, r.at); }
+  const keys = Object.keys(groups).sort((a, b) => groups[b].at - groups[a].at);   // 최근에 돌린 조건 먼저
+  const prev = $("grp").value;
+  $("grp").innerHTML = `<option value="*">모든 심볼·봉 (${rows.length}개)</option>`
+    + keys.map(k => { const g = groups[k].r; return `<option value="${esc(k)}">${esc(g.symbol)} ${esc(g.timeframe)} (${groups[k].n}개)</option>`; }).join("");
+  $("grp").value = prev && groups[prev] ? prev : "*";          // 기본은 모두 보기(다시 불러와도 고른 건 유지)
+  render();
+}
+
+let openKey = null;     // 펼쳐 둔 줄(다시 그려도 유지)
+function render() {
+  const g = $("grp").value, words = $("q").value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  let list = rows.filter(r => (g === "*" || gkey(r) === g)
+    && words.every(w => `${r.presetName} ${r.summary.entry} ${r.summary.exit} ${r.summary.sizing} ${r.symbol}`.toLowerCase().includes(w))
+    && (!$("randOnly").checked || r.beatsRandom)
+    && ($("rangeIn").checked || !r.source)
+    && (!$("minTr").checked || r.trades >= 20)
+    && Math.round(r.days) >= Math.round(+$("minMonths").value * 365.25 / 12));      // 기간 N개월 이상(12개월 = 365일)
+  const col = COLS.find(c => c[0] === sortKey);
+  const val = r => { const v = r[sortKey]; return v == null ? (col[2] ? -Infinity : Infinity) : +v; };
+  list.sort((a, b) => (sortDesc ? val(b) - val(a) : val(a) - val(b)) || b.returnPct - a.returnPct);
+  // 같은 프리셋 이름 안에서 설정 변형 번호(먼저 등록된 순) — '프리셋마다 달라지는 셋팅값' 구분용
+  const byName = {};
+  [...rows].sort((a, b) => a.at - b.at).forEach(r => { (byName[r.presetName] = byName[r.presetName] || []).push(r.settingsKey); });
+  const variantNo = r => { const ks = [...new Set(byName[r.presetName])]; return ks.length > 1 ? ks.indexOf(r.settingsKey) + 1 : 0; };
+  // 같은 프리셋의 설정 변형끼리 '다른 점'만 — 모든 변형에 공통인 조각을 빼고 남는 것
+  const parts = r => [...r.summary.entry.split(/ \| | · /), ...r.summary.exit.split(" · "), ...r.summary.sizing.split(" · ")];
+  const common = {};
+  for (const r of rows) {
+    const ps = new Set(parts(r));
+    common[r.presetName] = common[r.presetName] ? new Set([...common[r.presetName]].filter(x => ps.has(x))) : ps;
+  }
+  const diffOf = r => parts(r).filter(x => !common[r.presetName].has(x));
+  if ($("bestOnly").checked) {
+    const seen = new Set(); list = list.filter(r => !seen.has(r.presetName) && seen.add(r.presetName));
+  }
+  $("info").textContent = `${list.length}개 · 줄을 누르면 상세 · 기간 1년 이상 백테스트만 등록`;
+  if (!list.length) { $("out").innerHTML = `<div class="empty">조건에 맞는 결과가 없어요.<br>백테스트 화면에서 기간 1년(365일) 이상으로 돌리면 여기 자동으로 쌓여요.</div>`; return; }
+
+  const detail = r => {
+    const v = variantNo(r), d = diffOf(r);
+    const m = (k, val) => `<div><div class="k">${k}</div><div class="v">${val}</div></div>`;
+    return `<tr class="detail"><td colspan="${ncol}">`
+      + `<div class="dset"><div><span class="k">진입</span>${esc(r.summary.entry)}</div>`
+      + `<div><span class="k">청산</span>${esc(r.summary.exit)}</div>`
+      + `<div><span class="k">크기</span>${esc(r.summary.sizing)}</div>`
+      + (v && d.length ? `<div class="diff"><span class="k">다른 점</span>${d.map(esc).join(" · ")}</div>` : "")
+      + (r.source && r.source.kind === "range" ? `<div><span class="k">출처</span>범위 테스트 ${r.source.combos}조합 중 IS(앞 70%) 기준 ${r.source.rank}위 → 전체 기간으로 다시 백테스트한 결과예요. 여러 조합 중 고른 값이라 운이 섞여 있어요.</div>` : "")
+      + `</div>`
+      + `<div class="mgrid">`
+      + COLS.filter(c => c[0] !== "returnPct").map(c => m(c[1], c[3](r))).join("")
+      + m("강제청산", `${r.liquidations}회`) + m("수수료", `$${(+r.fees).toLocaleString()}`)
+      + m("보유만 했으면", pct(r.buyHoldPct)) + `</div>`
+      + `<div class="dact"><a class="btn" href="/backtest?result=${encodeURIComponent(r.key)}" title="이 설정을 백테스트 화면에 채워요">불러오기</a>`
+      + `<button class="del" data-k="${esc(r.key)}" title="랭킹에서 지우기">✕ 지우기</button>`
+      + `<span>등록 ${new Date(r.at).toLocaleString("ko-KR", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })} · 초기자본 $${(+r.equity).toLocaleString()}</span></div>`
+      + `</td></tr>`;
+  };
+  const extra = sortKey !== "returnPct";            // 다른 기준으로 정렬하면 그 값을 옆에 한 칸 더
+  const ncol = extra ? 5 : 4;
+  let h = `<div class="tw"><table><thead><tr><th>#</th><th class="l">프리셋</th><th class="l">심볼·기간</th><th>총수익</th>`
+    + (extra ? `<th class="sorted">${col[1]} ${sortDesc ? "▼" : "▲"}</th>` : "") + `</tr></thead><tbody>`;
+  list.forEach((r, i) => {
+    const v = variantNo(r), open = r.key === openKey;
+    h += `<tr class="row${i < 3 ? " top" : ""}${open ? " open" : ""}" data-k="${esc(r.key)}"><td>${i + 1}</td>`
+      + `<td class="l"><span class="nm">${esc(r.presetName)}</span>${v ? ` <span class="var">#${v}</span>` : ""}`
+      + (r.source && r.source.kind === "range" ? ` <span class="rtag" title="범위 테스트 ${r.source.combos}조합 중 IS 기준 ${r.source.rank}위 — 고른 결과라 운이 섞여 있어요">🔍 ${r.source.combos}조합 중 ${r.source.rank}위</span>` : "")
+      + `</td>`
+      + `<td class="l">${esc(r.symbol)} ${esc(r.timeframe)} <span class="var">${fmtD(r.start)}~${fmtD(r.end)}</span></td>`
+      + `<td class="ret">${pct(r.returnPct)}</td>` + (extra ? `<td>${col[3](r)}</td>` : "") + `</tr>`
+      + (open ? detail(r) : "");
+  });
+  $("out").innerHTML = h + `</tbody></table></div>`;
+  document.querySelectorAll("tr.row").forEach(tr => tr.onclick = () => { openKey = openKey === tr.dataset.k ? null : tr.dataset.k; render(); });
+  document.querySelectorAll("button.del").forEach(b => b.onclick = async e => {
+    e.stopPropagation();
+    if (!confirm("이 결과를 랭킹에서 지울까요?")) return;
+    await fetch("/api/ranking_delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: b.dataset.k }) });
+    openKey = null; load();
+  });
+}
+$("sort").innerHTML = COLS.map(c => `<option value="${c[0]}">정렬: ${c[1]}</option>`).join("");
+$("sort").addEventListener("change", () => { sortKey = $("sort").value; sortDesc = COLS.find(c => c[0] === sortKey)[2]; render(); });
+["grp", "bestOnly", "randOnly", "minTr", "rangeIn"].forEach(id => $(id).addEventListener("change", render));
+function monthsLabel() {
+  const m = +$("minMonths").value, y = Math.floor(m / 12), r = m % 12;
+  $("minMonthsLbl").textContent = `${y ? y + "년" : ""}${r ? (y ? " " : "") + r + "개월" : ""} 이상`;
+}
+$("minMonths").addEventListener("input", () => { monthsLabel(); render(); });
+monthsLabel();
+$("q").addEventListener("input", render);
+load();
+</script>
+</body>
+</html>

@@ -212,18 +212,22 @@
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["percent", "atrMultiple", "price", "swing", "swingLow", "swingHigh", "riskReward"],
-          "description": "percent=진입가대비%, atrMultiple=ATR배수, price=절대가격, swing=스윙 고저점(방향 자동: 롱손절·숏익절=전저점, 숏손절·롱익절=전고점), swingLow/swingHigh=방향 고정(레거시), riskReward=손익비(익절 거리=손절 거리×value, 익절 전용·손절 필수)"
+          "enum": ["percent", "atrMultiple", "price", "swing", "swingLow", "swingHigh", "riskReward", "indicator"],
+          "description": "percent=진입가대비%, atrMultiple=ATR배수, price=절대가격, swing=스윙 고저점(방향 자동: 롱손절·숏익절=전저점, 숏손절·롱익절=전고점), swingLow/swingHigh=방향 고정(레거시), riskReward=손익비(익절 거리=손절 거리×value, 익절 전용·손절 필수), indicator=진입 시점 지표 값(예: EMA50) ± bufferPercent 에 고정(손절용)"
         },
         "value": { "type": "number", "exclusiveMinimum": 0 },
         "lookback": { "type": "integer", "minimum": 2,
           "description": "swing 타입: 전저/전고를 찾을 과거 봉 개수 (현재 신호봉 포함)" },
         "bufferPercent": { "type": "number", "minimum": 0,
-          "description": "swing 타입: 스탑사냥 회피용 버퍼 %. 전저점 -buffer%, 전고점 +buffer%" }
+          "description": "swing·indicator 타입: 스탑사냥 회피용 버퍼 %. 롱 손절 -buffer%, 숏 손절 +buffer%" },
+        "indicator": { "$ref": "#/$defs/operand",
+          "description": "indicator 타입: 기준 지표 operand (예: EMA 기간 50)" }
       },
       "allOf": [
         { "if": { "properties": { "type": { "enum": ["percent", "atrMultiple", "price", "riskReward"] } } },
           "then": { "required": ["value"] } },
+        { "if": { "properties": { "type": { "const": "indicator" } } },
+          "then": { "required": ["indicator"] } },
         { "if": { "properties": { "type": { "enum": ["swing", "swingLow", "swingHigh"] } } },
           "then": { "required": ["lookback"] } }
       ]
@@ -297,10 +301,10 @@
               "type": "string",
               "enum": ["SMA", "EMA", "RSI", "MACD", "MACD_signal", "MACD_hist",
                        "BB_upper", "BB_lower", "BB_mid", "ATR", "ADX", "PLUS_DI", "MINUS_DI", "STOCH_K", "STOCH_D",
-                       "STOCHRSI_K", "STOCHRSI_D", "CCI", "MFI", "RVOL", "VWAP", "VWAP_Z", "SMA_SLOPE", "MA_GAP", "MA_CROSSES", "BODY_ATR",
+                       "STOCHRSI_K", "STOCHRSI_D", "CCI", "MFI", "RVOL", "VWAP", "VWAP_Z", "SMA_SLOPE", "MA_ANGLE", "MA_GAP", "MA_CROSSES", "BODY_ATR",
                        "TAKER_DELTA", "TAKER_DELTA_RATIO", "CVD", "CVD_EMA", "HAWKEYE",
                        "QQE_MOD", "QQE_RSI", "QQE_LINE",
-                       "SUPERTREND", "SUPERTREND_DIR",
+                       "SUPERTREND", "SUPERTREND_DIR", "RSI_DIV", "ATR_RANK", "PIN_BAR", "TRIANGLE_BREAK", "FRACTAL", "PULLBACK_FRACTAL",
                        "CDL_BULLREV", "CDL_BEARREV", "CDL_ENGULFING", "CDL_HAMMER",
                        "CDL_HANGINGMAN", "CDL_MORNINGSTAR", "CDL_EVENINGSTAR",
                        "CDL_PIERCING", "CDL_DARKCLOUDCOVER"]

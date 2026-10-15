@@ -1,0 +1,56 @@
+{
+  "schemaVersion": "1.0",
+  "name": "RSI + CVD 다이버전스 롱 (5m)",
+  "description": "RSI 다이버전스 롱에 주문 흐름 확인을 겹친다 — 가격은 저점1 → 저점2 로 낮아졌는데 그 사이 시장가 매수가 매도보다 많았을 때(CVD 저점2 > 저점1)만. 청산은 RSI 다이버전스 프리셋과 같다. 연구(research/BACKLOG.md CV): BTC 2019~2024 거래당 +24.7/+14.5bp(수수료 전)였으나 2024-05 이후 −3.8bp, ETH +0.6bp. 하락장(일봉 SMA200 아래)에서 더 좋았다. 숏 쪽은 CVD 를 붙여도 개선 없음. BTCUSDC(maker 0%) 지정가 진입 — 60초 안에 닿지 않으면 시장가 추격. ⚠ 엔진 백테스트는 maker 체결 비율 기본 0%라 지정가도 taker 0.05% 로 계산한다(실측 체결률이 나오기 전까지 보수적으로).",
+  "market": {
+    "exchange": "binance-futures",
+    "symbol": "BTCUSDC",
+    "timeframe": "5m",
+    "direction": "long"
+  },
+  "entry": {
+    "left": {
+      "indicator": "RSI_DIV",
+      "period": 14,
+      "params": {
+        "level": 30,
+        "min_gap": 5,
+        "window": 60,
+        "cvd": 1
+      }
+    },
+    "cmp": ">",
+    "right": 0
+  },
+  "exit": {
+    "stopLoss": {
+      "type": "swing",
+      "lookback": 20,
+      "bufferPercent": 0
+    },
+    "takeProfit": {
+      "type": "riskReward",
+      "value": 2.5
+    },
+    "timeStop": {
+      "maxBars": 48
+    }
+  },
+  "sizing": {
+    "leverage": 10,
+    "marginMode": "isolated",
+    "size": {
+      "type": "equityPercent",
+      "value": 10.0
+    },
+    "maxConcurrentPositions": 1
+  },
+  "filter": {
+    "cooldownBars": 0,
+    "avoidFundingWindowMinutes": 2
+  },
+  "execution": {
+    "entryType": "makerLimit",
+    "makerTimeoutSeconds": 60
+  }
+}

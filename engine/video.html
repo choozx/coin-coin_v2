@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>영상 분석</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --line:#2a2f3a;
+          --fg:#e6e9ef; --mut:#8b93a3; --accent:#4f9dff; --up:#26d07c; --down:#ff5c6c; --warn:#e0a030; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+         background:var(--bg); color:var(--fg); font-size:14px; }
+  header { padding:14px 20px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0; font-weight:600; }
+  header a { color:#4c9be8; text-decoration:none; font-size:13px; }
+  header .sub { color:var(--mut); font-size:12px; }
+  .wrap { display:grid; grid-template-columns:300px 1fr; min-height:calc(100vh - 50px); }
+  .side { border-right:1px solid var(--line); padding:16px; overflow-y:auto; }
+  .main { padding:20px 24px; overflow-y:auto; max-width:1100px; }
+  @media (max-width:800px) { .wrap { grid-template-columns:1fr; } .side { border-right:0; border-bottom:1px solid var(--line); } }
+  input[type=text] { width:100%; background:var(--panel2); border:1px solid var(--line); color:var(--fg);
+                     border-radius:7px; padding:9px 10px; font-size:13px; }
+  button { background:var(--accent); color:#fff; border:0; border-radius:7px; padding:9px 12px; font-size:13px;
+           cursor:pointer; width:100%; margin-top:8px; font-weight:600; }
+  button:disabled { opacity:.5; cursor:default; }
+  .chk { display:flex; gap:6px; align-items:center; color:var(--mut); font-size:12px; margin-top:8px; }
+  .note { color:var(--mut); font-size:12px; line-height:1.55; }
+  .hist h3 { font-size:12px; color:var(--mut); margin:22px 0 8px; font-weight:600; }
+  .hitem { padding:8px 10px; border:1px solid var(--line); border-radius:7px; margin-bottom:6px; cursor:pointer; background:var(--panel); }
+  .hitem:hover { border-color:var(--accent); }
+  .hitem .t { font-size:12px; font-weight:600; line-height:1.4; }
+  .hitem .s { font-size:11px; color:var(--mut); margin-top:3px; line-height:1.4; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:9px; padding:14px 16px; margin-bottom:14px; }
+  .card h2 { font-size:15px; margin:0 0 6px; }
+  .card h3 { font-size:12px; color:var(--mut); margin:0 0 10px; font-weight:600; }
+  .meta { color:var(--mut); font-size:12px; }
+  .meta a { color:#4c9be8; }
+  .one { font-size:15px; font-weight:600; margin:10px 0 2px; line-height:1.5; }
+  ul { margin:0; padding-left:18px; line-height:1.65; }
+  li { margin:2px 0; }
+  table { border-collapse:collapse; width:100%; font-size:13px; }
+  th, td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.5; }
+  th { color:var(--mut); font-weight:600; font-size:12px; }
+  .strat { border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-bottom:10px; background:var(--panel2); }
+  .strat .h { font-weight:600; margin-bottom:8px; }
+  .tag { display:inline-block; font-size:11px; padding:1px 7px; border-radius:10px; margin-left:6px; background:var(--line); color:var(--fg); font-weight:500; }
+  .cols { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+  @media (max-width:900px) { .cols { grid-template-columns:1fr; } }
+  .col { border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
+  .col .k { font-size:12px; font-weight:600; margin-bottom:6px; }
+  .ok { color:var(--up); } .mid { color:var(--warn); } .no { color:var(--down); }
+  .warn { border-color:rgba(224,160,48,.45); }
+  .err { color:var(--down); background:rgba(255,92,108,.08); border:1px solid rgba(255,92,108,.35); border-radius:8px; padding:10px 12px; }
+  .prog { color:var(--mut); font-size:13px; padding:20px 0; }
+  details summary { cursor:pointer; color:var(--mut); font-size:12px; }
+  pre { white-space:pre-wrap; font-size:12px; color:#c9ced8; max-height:420px; overflow:auto; background:var(--panel2); padding:10px; border-radius:7px; }
+  .badge { display:inline-block; white-space:nowrap; font-size:12px; font-weight:600; padding:2px 8px; border-radius:10px; background:var(--panel2); border:1px solid var(--line); }
+  .badge.ok { color:var(--up); border-color:rgba(38,208,124,.4); } .badge.mid { color:var(--warn); border-color:rgba(224,160,48,.45); }
+  .badge.no { color:var(--down); border-color:rgba(255,92,108,.45); }
+  .verdict { display:flex; gap:10px; align-items:baseline; margin-top:10px; line-height:1.6; }
+  .counts { display:flex; gap:18px; font-size:13px; font-weight:600; margin:0 0 14px 4px; }
+  td.part { color:var(--mut); font-weight:600; }
+  code { background:var(--panel2); padding:1px 5px; border-radius:4px; font-size:12px; color:#9cc3ff; }
+  .hasp { font-size:12px; color:var(--up); margin:-4px 0 10px; line-height:1.6; }
+  .hasp a { color:#4c9be8; text-decoration:none; } .hasp a:hover { text-decoration:underline; }
+  .hasp .gone { color:var(--mut); text-decoration:line-through; }
+  .hitem .pc { color:var(--up); }
+  .mk { width:auto; margin:0 0 0 auto; padding:5px 12px; font-size:12px; background:#7c5cff; }
+  .made { border:1px solid rgba(38,208,124,.4); background:rgba(38,208,124,.06); border-radius:8px; padding:10px 12px; margin-bottom:12px; font-size:13px; }
+  .made a.open { color:#4c9be8; margin-left:8px; font-weight:600; }
+  .grid2 { display:grid; grid-template-columns:110px 1fr; gap:4px 10px; font-size:13px; }
+  .grid2 .k { color:var(--mut); padding-top:2px; }
+  .empty { color:var(--mut); padding:40px 0; text-align:center; line-height:1.8; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🎬 영상 분석</h1>
+  <a href="/backtest">📊 백테스트</a>
+  <a href="/collector">📥 데이터·수집기</a>
+  <a href="/">🤖 매매</a>
+  <span class="sub">유튜브 자막 → 지표·규칙별 구현 가능 여부 · 이 맥의 Claude Code 로 분석</span>
+</header>
+<div class="wrap">
+  <div class="side">
+    <input type="text" id="url" placeholder="유튜브 링크 (youtu.be/… 또는 youtube.com/watch?v=…)">
+    <label class="chk"><input type="checkbox" id="force"> 저장된 분석이 있어도 다시 분석</label>
+    <button id="go">분석하기</button>
+    <div class="note" style="margin-top:10px">
+      자막만 받아요(영상은 안 받음). 화면에만 나온 설정값·그린 선은 자막에 없어서 빠져요.
+      분석은 보통 1~3분 걸리고, 사용량은 이 맥에 로그인된 Claude 계정에서 나가요.
+    </div>
+    <div class="hist"><h3>지난 분석</h3><div id="hist"><div class="note">불러오는 중…</div></div></div>
+  </div>
+  <div class="main" id="out">
+    <div class="empty">왼쪽에 트레이딩 영상 링크를 넣고 <b>분석하기</b>를 눌러 주세요.<br>
+      지표와 진입/청산/손절 규칙마다 ✅ 엔진에 있음 · 🛠 구현 가능 · ⛔ 구현 불가 를 표시해요.</div>
+  </div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+// 분석 결과는 남의 영상에서 나온 텍스트 — innerHTML 에 넣기 전에 반드시 이스케이프
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const list = arr => (arr && arr.length) ? `<ul>${arr.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : `<span class="note">없음</span>`;
+const DIR = { long: "롱", short: "숏", both: "롱·숏" };
+const fmtDur = s => s ? `${Math.floor(s / 60)}분 ${s % 60}초` : "";
+
+async function loadHist() {
+  try {
+    const rows = await (await fetch("/api/video_list", { cache: "no-store" })).json();
+    $("hist").innerHTML = rows.length ? rows.map(r =>
+      `<div class="hitem" data-url="${esc(r.url)}"><div class="t">${esc(r.title)}</div>`
+      + `<div class="s">${esc(r.channel)} · ${new Date(r.at).toLocaleDateString("ko-KR")}`
+      + `${r.presetCount ? ` · <span class="pc">⚙️ 프리셋 ${r.presetCount}</span>` : ""}</div></div>`).join("")
+      : `<div class="note">아직 없어요</div>`;
+    document.querySelectorAll(".hitem").forEach(el => el.onclick = () => { $("url").value = el.dataset.url; $("force").checked = false; analyze(); });
+  } catch (e) { $("hist").innerHTML = `<div class="note">목록을 못 불러왔어요</div>`; }
+}
+
+// 매매법마다 이미 만든 프리셋(서버 data/video/<id>/preset_<번호>.json) — 있으면 이름과 '백테스트에서 열기'
+let presetRecs = {};
+const made = si => presetRecs[si] || [];
+function madeHtml(si) {
+  const list = made(si);
+  if (!list.length) return "";
+  return `<div class="hasp">✅ 만든 프리셋 ${list.length}개: ` + list.map(p => p.exists
+      ? `<a href="/backtest?preset=${encodeURIComponent(p.name)}" target="_blank" rel="noopener">${esc(p.name)}</a>`
+      : `<span class="gone" title="presets/saved 에서 지워졌어요">${esc(p.name)} (삭제됨)</span>`).join(" · ") + `</div>`;
+}
+const ST = { ready: ["✅ 엔진에 있음", "ok"], buildable: ["🛠 구현 가능", "mid"], impossible: ["⛔ 구현 불가", "no"] };
+const VD = { ready: ["✅ 지금 바로 백테스트 가능", "ok"], partial: ["🛠 일부 구현하면 가능", "mid"], impossible: ["⛔ 핵심이 구현 불가", "no"] };
+const badge = (map, k) => { const [t, c] = map[k] || [esc(k), ""]; return `<span class="badge ${c}">${t}</span>`; };
+
+function render(r) {
+  const m = r.meta, a = r.analysis;
+  presetRecs = r.presets || {};
+  const v = a.verdict || {};
+  let h = `<div class="card"><h2>${esc(m.title)}</h2>`
+    + `<div class="meta">${esc(m.channel)} · ${fmtDur(m.duration)} · <a href="${esc(m.url)}" target="_blank" rel="noopener">유튜브에서 보기</a>`
+    + `${r.cached ? " · 저장된 분석" : ""}${a._cost_usd != null ? ` · 분석 비용 약 $${Number(a._cost_usd).toFixed(2)}` : ""}</div>`
+    + `<div class="one">${esc(a.one_line)}</div>`
+    + `<div class="verdict">${badge(VD, v.status)}<span>${esc(v.text)}</span></div></div>`;
+
+  // 상태별 개수 — 한눈에
+  const all = [...(a.indicators || []), ...(a.strategies || []).flatMap(s => s.rules || [])];
+  const cnt = k => all.filter(x => x.status === k).length;
+  h += `<div class="counts"><span class="ok">✅ 있음 ${cnt("ready")}</span><span class="mid">🛠 구현 가능 ${cnt("buildable")}</span>`
+    + `<span class="no">⛔ 불가 ${cnt("impossible")}</span></div>`;
+  // 엔진에 기능이 추가된 뒤 열었으면 서버가 상태만 다시 판정한다 — 무엇이 바뀌었는지 한 줄로
+  if (a._rejudged) {
+    const b = a._rejudged.before, f = a._rejudged.after;
+    const d = (k, lab) => b[k] === f[k] ? `${lab} ${f[k]}` : `${lab} ${b[k]} → <b>${f[k]}</b>`;
+    h += `<div class="made" style="margin-bottom:14px">🔄 엔진에 기능이 추가돼서 규칙 상태를 다시 판정했어요 · `
+      + `${d("ready", "✅")} · ${d("buildable", "🛠")} · ${d("impossible", "⛔")}</div>`;
+  }
+
+  h += `<div class="card"><h3>지표</h3>` + ((a.indicators || []).length
+    ? `<table><thead><tr><th style="width:150px">지표</th><th style="width:150px">설정</th><th style="width:120px">상태</th><th>엔진에서 / 구현 방법 / 불가 이유</th></tr></thead><tbody>`
+      + a.indicators.map(i => `<tr><td><b>${esc(i.name)}</b></td><td>${esc(i.settings)}</td><td>${badge(ST, i.status)}</td>`
+        + `<td>${i.engine ? `<code>${esc(i.engine)}</code> ` : ""}${esc(i.how)}</td></tr>`).join("")
+      + `</tbody></table>` : `<span class="note">없음</span>`) + `</div>`;
+
+  (a.strategies || []).forEach((s, si) => {
+    // 엔진에 있는(✅) 진입 규칙이 하나라도 있어야 프리셋을 만들 수 있다
+    const canMake = (s.rules || []).some(x => x.part === "진입" && x.status === "ready");
+    h += `<div class="card"><h3 style="color:var(--fg);font-size:14px;display:flex;align-items:center;gap:6px">${esc(s.name)}<span class="tag">${DIR[s.direction] || esc(s.direction)}</span>`
+      + `${s.timeframe ? `<span class="tag">${esc(s.timeframe)}</span>` : ""}`
+      + (canMake ? `<button class="mk" data-si="${si}">${made(si).length ? "⚙️ 하나 더 만들기" : "⚙️ 프리셋 만들기"}</button>`
+                 : `<span class="note" style="margin-left:auto;font-weight:400">엔진에 있는 진입 규칙이 없어 프리셋 불가</span>`) + `</h3>`
+      + madeHtml(si)
+      + `<div class="mkout" id="mk_${si}"></div>`
+      + `<table><thead><tr><th style="width:60px">구분</th><th>규칙</th><th style="width:120px">상태</th><th>엔진에서 / 구현 방법 / 불가 이유</th></tr></thead><tbody>`
+      + (s.rules || []).map(x => `<tr><td class="part">${esc(x.part)}</td><td>${esc(x.text)}</td><td>${badge(ST, x.status)}</td><td>${esc(x.how)}</td></tr>`).join("")
+      + `</tbody></table></div>`;
+  });
+  if (!(a.strategies || []).length) h += `<div class="card"><span class="note">영상에 구체적인 매매 규칙이 없어요</span></div>`;
+
+  h += `<div class="card"><details><summary>자막 원문 보기 (${(m.transcript || "").length.toLocaleString()}자)</summary><pre>${esc(m.transcript)}</pre></details></div>`;
+  $("out").innerHTML = h;
+  document.querySelectorAll(".mk").forEach(b => b.onclick = () => makePreset(m.id, +b.dataset.si, b));
+}
+
+// 분석의 매매법 하나 → 백테스트 프리셋(✅ 규칙만). 서버가 Claude 로 초안 → 화면과 같은 경로로 빌드·검증 → presets/saved 저장.
+async function makePreset(id, si, btn) {
+  const box = $("mk_" + si);
+  btn.disabled = true; btn.textContent = "만드는 중… (30초~1분)";
+  box.innerHTML = "";
+  try {
+    const r = await (await fetch("/api/video_preset", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, index: si }) })).json();
+    if (r.error) throw new Error(r.error);
+    box.innerHTML = `<div class="made"><div><b>✅ 프리셋 저장: ${esc(r.name)}</b>`
+      + ` <a class="open" href="/backtest?preset=${encodeURIComponent(r.name)}" target="_blank" rel="noopener">백테스트에서 열기 →</a></div>`
+      + `<div class="grid2" style="margin-top:8px">`
+      + `<div class="k">진입</div><div>${(r.entry || []).map(g => `<div><span class="tag" style="margin:0 6px 0 0">${DIR[g.side] || esc(g.side)}</span>${g.conds.map(esc).join(" · ")}</div>`).join("")}</div>`
+      + `<div class="k mid">기본값으로 정함</div><div>${list(r.assumed)}</div>`
+      + `<div class="k no">빠진 규칙</div><div>${list(r.excluded)}</div></div>`
+      + `<div class="note" style="margin-top:6px">심볼은 BTCUSDT·기간 365일로 들어가요. 백테스트 화면에서 바꾸고 실행하세요.`
+      + `${r.costUsd != null ? ` · 비용 약 $${Number(r.costUsd).toFixed(2)}` : ""}</div></div>`;
+    presetRecs[si] = [...made(si).filter(p => p.name !== r.name), { name: r.name, exists: true }];
+    btn.textContent = "⚙️ 하나 더 만들기";
+    loadHist();
+  } catch (e) {
+    box.innerHTML = `<div class="err" style="margin-bottom:10px">프리셋 실패: ${esc(e.message)}</div>`;
+    btn.textContent = "⚙️ 프리셋 만들기";
+  } finally { btn.disabled = false; }
+}
+
+async function analyze() {
+  const url = $("url").value.trim();
+  if (!url) return;
+  const btn = $("go"); btn.disabled = true; btn.textContent = "분석 중…";
+  const started = performance.now();
+  let text = "시작하는 중";
+  $("out").innerHTML = `<div class="prog" id="prog"></div>`;
+  const tick = setInterval(() => { const el = $("prog"); if (el) el.textContent = `${text} · ${((performance.now() - started) / 1000).toFixed(0)}초`; }, 500);
+  try {
+    const res = await fetch("/api/video_analyze", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url, force: $("force").checked }) });
+    if (!res.ok || !res.body) throw new Error("서버 응답 오류 (" + res.status + ")");
+    const reader = res.body.getReader(), dec = new TextDecoder();
+    let buf = "", result = null;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
+        if (!line) continue;
+        const ev = JSON.parse(line);
+        if (ev.type === "error") throw new Error(ev.error);
+        if (ev.type === "progress") text = ev.text;
+        else if (ev.type === "done") result = ev.result;
+      }
+    }
+    if (!result) throw new Error("결과를 받지 못했어요 (연결이 끊겼을 수 있어요)");
+    render(result);
+    loadHist();
+  } catch (e) {
+    $("out").innerHTML = `<div class="err">에러: ${esc(e.message)}</div>`;
+  } finally {
+    clearInterval(tick);
+    btn.disabled = false; btn.textContent = "분석하기";
+  }
+}
+$("go").onclick = analyze;
+$("url").addEventListener("keydown", e => { if (e.key === "Enter") analyze(); });
+loadHist();
+</script>
+</body>
+</html>

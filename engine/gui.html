@@ -47,6 +47,16 @@
                      opacity:.55; font-size:11px; }
   .cpreset .cp-del:hover { opacity:1; color:#e5534b; }
   .cp-empty { font-size:11px; color:var(--mut); align-self:center; }
+  .presetbar { display:flex; gap:6px; margin-bottom:14px; }
+  .presetbar .pcombo { flex:1; }
+  .presetbar #presetSearch { width:100%; }
+  .presetbar #savePreset { width:auto; margin:0; padding:6px 10px; font-size:12px; background:var(--panel2);
+                           border:1px dashed var(--line); font-weight:500; white-space:nowrap; }
+  .pdrop { left:0; right:auto; width:100%; max-height:420px; }
+  .pdrop .grp { padding:6px 10px 3px; font-size:10px; color:var(--mut); text-transform:uppercase; letter-spacing:.04em; }
+  .pdrop .opt .nm { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .pdrop .opt .del { color:var(--mut); padding:0 4px; border-radius:4px; font-size:11px; }
+  .pdrop .opt .del:hover { color:#e5534b; background:rgba(229,83,75,.12); }
   .results { overflow-y:auto; }
   .metrics { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:18px; }
   .metric { background:var(--panel); border:1px solid var(--line); border-radius:9px; padding:12px 14px; }
@@ -57,7 +67,19 @@
               padding:14px; margin-bottom:16px; }
   .chartbox h3 { margin:0 0 10px; font-size:12px; color:var(--mut); font-weight:600; }
   canvas { width:100%; height:240px; display:block; }
-  #priceChart { height:380px; position:relative; }   /* Lightweight Charts 가 내부를 채움 */
+  .tradeChart { position:relative; }                 /* Lightweight Charts 가 내부를 채움 — 높이는 패널 수로 JS 가 정함 */
+  .trade-wrap { max-height:560px; overflow:auto; border:1px solid var(--line); border-radius:7px; }
+  .trade-tab { border-collapse:collapse; width:100%; font-size:12px; }
+  .trade-tab th { position:sticky; top:0; background:var(--panel2); color:var(--mut); font-weight:600; z-index:1; }
+  .trade-tab th, .trade-tab td { padding:5px 8px; text-align:right; border-bottom:1px solid var(--line); white-space:nowrap; }
+  .trade-tab td.l, .trade-tab th.l { text-align:left; }
+  .trade-tab tr.trow { cursor:pointer; }   /* .row 는 폼 flex 레이아웃 클래스라 쓰면 표 칸이 깨진다 */
+  .trade-tab tr.trow:hover td { background:rgba(79,157,255,.07); }
+  .trade-tab tr.trow.open td { background:rgba(79,157,255,.13); }
+  .trade-tab tr.detail td { background:var(--bg); padding:10px; text-align:left; white-space:normal; }
+  .trade-tab .up { color:var(--up); } .trade-tab .down { color:var(--down); }
+  .trade-info { display:flex; flex-wrap:wrap; gap:6px 16px; font-size:12px; color:var(--mut); margin-bottom:8px; }
+  .trade-info b { color:var(--fg); font-weight:600; }
   .chartlegend { display:flex; flex-wrap:wrap; gap:12px; margin-top:8px; font-size:11px; color:var(--mut); }
   .chartlegend span { display:inline-flex; align-items:center; gap:4px; }
   .chartlegend i { width:14px; height:0; border-top-width:2px; border-top-style:solid; display:inline-block; }
@@ -160,25 +182,23 @@
   <h1>백테스트 스튜디오</h1>
   <a href="/collector" style="color:#4c9be8;text-decoration:none;font-size:13px">📥 데이터·수집기</a>
   <a href="/" style="color:#4c9be8;text-decoration:none;font-size:13px">🤖 매매</a>
+  <a href="/video" style="color:#4c9be8;text-decoration:none;font-size:13px">🎬 영상 분석</a>
+  <a href="/ranking" style="color:#4c9be8;text-decoration:none;font-size:13px">🏆 랭킹</a>
   <span class="sub">바이낸스 USDⓈ-M 선물 · API 키 불필요</span>
 </header>
 
 <div class="wrap">
   <div class="panel controls">
    <div id="pane-backtest">
-    <div class="presets">
-      <button data-preset="scalp">1m 스켈핑</button>
-      <button data-preset="rsi15">15m RSI 반등</button>
-      <button data-preset="meanrevert">RSI 역추세</button>
-      <button data-preset="swing">전저점+리스크</button>
-      <button data-preset="macd">MACD 추세</button>
-      <button data-preset="triple">3층 반전(EMA·RSI·VWAP·StochRSI)</button>
+    <!-- 프리셋: 검색 드롭다운 하나(기본 예시 + 저장된 것 + 영상 분석 🎬). 이름·심볼·봉·조건 이름으로 검색 -->
+    <div class="presetbar">
+      <div class="combo pcombo">
+        <input type="text" id="presetSearch" autocomplete="off" spellcheck="false" placeholder="🔎 프리셋 검색·선택">
+        <div class="dropdown pdrop" id="presetDrop" style="display:none"></div>
+      </div>
+      <button id="savePreset" title="현재 폼·진입 조건을 이름 붙여 저장 (브라우저 + presets/saved/)">💾 저장</button>
     </div>
-
-    <div class="presets" id="customPresets">
-      <button id="savePreset" title="현재 폼·진입 조건을 이름 붙여 저장 (이 브라우저에 보관)">💾 현재 설정 저장</button>
-      <span id="cpList" style="display:contents"></span>
-    </div>
+    <div class="note" id="presetCur" style="margin:-6px 0 12px"></div>
 
     <div class="group">
       <h3>시장 / 데이터</h3>
@@ -216,13 +236,18 @@
           <option value="percent" selected>고정 %</option>
           <option value="atrMultiple">ATR 배수</option>
           <option value="swing">스윙 고저점 (롱=전저점 / 숏=전고점)</option>
+          <option value="indicator">지표 값 (진입 때 EMA·SMA 값 아래/위)</option>
           <option value="supertrend">SuperTrend 전환 (추세이탈 손절)</option>
         </select></div>
+      <div class="row" data-when="sl-ind"><label>지표</label>
+        <select id="slInd"><option value="EMA" selected>EMA</option><option value="SMA">SMA</option></select></div>
+      <div class="row" data-when="sl-ind"><label>기간</label>
+        <input type="number" id="slIndPeriod" value="50" min="1"></div>
       <div class="row" data-when="sl-value"><label id="slValueLabel">손절 % (가격)</label>
         <input type="number" id="slValue" value="1.5" step="0.1" min="0"></div>
       <div class="row" data-when="sl-swing"><label>룩백(봉)</label>
         <input type="number" id="slLookback" value="20" min="2"></div>
-      <div class="row" data-when="sl-swing"><label>버퍼 %</label>
+      <div class="row" data-when="sl-buf"><label>버퍼 %</label>
         <input type="number" id="slBuffer" value="0.05" step="0.05" min="0"></div>
       <div class="row" data-when="sl-st"><label>SuperTrend ATR기간</label>
         <input type="number" id="slStPeriod" value="10" min="1"></div>
@@ -270,6 +295,10 @@
       <div class="row"><label class="hint">기준값 (복귀 목표)</label>
         <input type="number" id="exitCondValue" value="55" min="1" max="99"></div>
       <div class="note">역추세(과매도 진입)엔 지표가 평균으로 복귀하면 청산이 정석 (RSI&gt;55, Stoch%K&gt;80 등)</div>
+      <div class="row" style="display:block;margin-top:10px"><label class="hint">직접 청산 조건 (고급 · JSON, 비우면 안 씀)</label>
+        <textarea id="exitCustom" rows="3" spellcheck="false" style="width:100%;margin-top:4px;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px;font:11px ui-monospace,monospace"
+          placeholder='{"long": {"cross":"crossUnder","left":{"indicator":"RSI","period":14},"right":50}}'></textarea></div>
+      <div class="note">방향별 청산 조건 {"long": 조건, "short": 조건}. 지표 복귀 청산과 같이 켜면 둘 중 먼저 맞는 쪽으로 청산. 영상 분석 프리셋이 여기에 넣어요.</div>
       <div class="row"><label><input type="checkbox" id="exitStEnabled"> SuperTrend 추세이탈 청산</label></div>
       <div class="row" data-when="exit-st"><label class="hint">ATR기간</label>
         <input type="number" id="exitStPeriod" value="10" min="1"></div>
@@ -327,17 +356,17 @@
       <div class="row"><label>펀딩 회피(분)</label><input type="number" id="avoidFundingMin" value="2" min="0"></div>
     </div>
 
-    <button id="run">▶ 백테스트 실행</button>
-
     <div class="group opt" style="margin-top:22px; border-top:1px solid var(--line); padding-top:16px;">
-      <h3>🔍 파라미터 최적화</h3>
-      <div class="note">위 설정에서 값 옆의 <b>"범위" 체크박스</b>를 켜면 그 값을 <b>최소~최대</b>를 <b>단위</b>씩 옮겨가며 전 조합 테스트해.<br>
-        진입 지표·손절·레버리지 등 <b>지금 구성한 그대로</b> 최적화 — 체크한 것만 동적으로 바뀜. Calmar(수익÷MDD) 기준 · 앞 70% 최적화 → 뒤 30% 검증.</div>
+      <h3>🔍 범위 테스트 (파라미터 최적화)</h3>
+      <div class="note">값 옆의 <b>"범위"</b>를 하나라도 켜면 아래 버튼이 <b>범위 테스트</b>로 바뀌어, 그 값을 <b>최소~최대</b>를 <b>단위</b>씩 옮겨가며 전 조합을 돌려.
+        끄면 일반 백테스트. Calmar(수익÷MDD) 기준 · 앞 70% 최적화 → 뒤 30% 검증.</div>
       <div id="comboCount"></div>
       <div class="row" style="margin-top:12px"><label>최소 트레이드 수</label><input type="number" id="minTrades" value="15" min="1"></div>
       <div class="row"><label><input type="checkbox" id="useOOS" checked> OOS 검증 (과최적화 방어)</label></div>
-      <button id="optimize" style="background:#7c5cff">🔍 최적화 실행</button>
     </div>
+
+    <!-- 버튼은 하나 — "범위"가 켜져 있으면 범위 테스트(최적화), 아니면 백테스트 -->
+    <button id="run">▶ 백테스트 실행</button>
    </div><!-- /pane-backtest -->
   </div>
 
@@ -351,9 +380,9 @@
 <script>
 const $ = id => document.getElementById(id);
 const FIELDS = ["symbol","timeframe","days","equity",
-  "slType","slValue","slLookback","slBuffer","slStPeriod","slStMult",
+  "slType","slValue","slLookback","slBuffer","slInd","slIndPeriod","slStPeriod","slStMult",
   "tpType","tpValue","tpLookback","tpBuffer","tpStPeriod","tpStMult",
-  "exitCondEnabled","exitCondInd","exitCondPeriod","exitCondCmp","exitCondValue","timeStopBars",
+  "exitCondEnabled","exitCondInd","exitCondPeriod","exitCondCmp","exitCondValue","exitCustom","timeStopBars",
   "exitStEnabled","exitStPeriod","exitStMult",
   "trailingEnabled","trailingCallback","trailingActivation",
   "leverage","levTierEnabled","sizeType","sizeValue","minLiqBuffer","cooldownBars","avoidFundingMin",
@@ -407,6 +436,22 @@ function collect() {
 const _MODE_MA = {k:"mode",label:"방식",type:"select",opts:[["price","가격 대비"],["cross","크로스"]],v:"price",reflow:true};
 const _MODE_OSC = {k:"mode",label:"방식",type:"select",opts:[["level","기준값 비교"],["cross","크로스(K·D)"]],v:"level",reflow:true};
 const _MODE_ST = {k:"mode",label:"방식",type:"select",opts:[["trend","추세 필터(가격 대비)"],["flip","전환 신호(플립)"]],v:"trend",reflow:true};
+// '직접 조건(고급)'용 — 엔진 지표 전부(schema/preset.schema.json 의 operand.indicator) + 가격 소스
+const ENGINE_INDICATORS = ["SMA", "EMA", "RSI", "MACD", "MACD_signal", "MACD_hist", "BB_upper", "BB_lower", "BB_mid", "ATR", "ADX", "PLUS_DI", "MINUS_DI", "STOCH_K", "STOCH_D", "STOCHRSI_K", "STOCHRSI_D", "CCI", "MFI", "RVOL", "VWAP", "VWAP_Z", "SMA_SLOPE", "MA_ANGLE", "MA_GAP", "MA_CROSSES", "BODY_ATR", "TAKER_DELTA", "TAKER_DELTA_RATIO", "CVD", "CVD_EMA", "HAWKEYE", "QQE_MOD", "QQE_RSI", "QQE_LINE", "SUPERTREND", "SUPERTREND_DIR", "RSI_DIV", "ATR_RANK", "PIN_BAR", "TRIANGLE_BREAK", "FRACTAL", "PULLBACK_FRACTAL", "CDL_BULLREV", "CDL_BEARREV", "CDL_ENGULFING", "CDL_HAMMER", "CDL_HANGINGMAN", "CDL_MORNINGSTAR", "CDL_EVENINGSTAR", "CDL_PIERCING", "CDL_DARKCLOUDCOVER"];
+const PRICE_SOURCES = [["close","종가"],["open","시가"],["high","고가"],["low","저가"],["volume","거래량"]];
+const OPERAND_OPTS = [...PRICE_SOURCES, ...ENGINE_INDICATORS.map(x => [x, x])];
+function customOperand(name, per, params) {
+  if (PRICE_SOURCES.some(([k]) => k === name)) return { source: name };
+  const o = { indicator: name };
+  if (per !== "" && per != null && !isNaN(+per)) o.period = +per;
+  if (params && String(params).trim()) { try { const pr = JSON.parse(params); if (pr && typeof pr === "object") o.params = pr; } catch (e) {} }
+  return o;
+}
+function operandText(o) {
+  if (typeof o === "number") return String(o);
+  if (o.source) return (PRICE_SOURCES.find(([k]) => k === o.source) || [0, o.source])[1];
+  return `${o.indicator}${o.period ? `(${o.period})` : ""}${o.params ? " " + JSON.stringify(o.params) : ""}`;
+}
 const COND_TYPES = {
   rsi: { label:"RSI",
     fields:[{k:"period",label:"기간",v:14,sweep:{path:"left.period",def:[7,21,7]}},{k:"cmp",label:"조건",type:"cmp"},{k:"value",label:"기준값",v:30,sweep:{path:"right",def:[15,35,5]}}],
@@ -476,6 +521,25 @@ const COND_TYPES = {
     desc:n=> n.cross!==undefined
       ? `SuperTrend ${n.cross==="crossOver"?"▲상승전환":"▼하락전환"}(${n.left.period},×${n.left.params.multiplier})`
       : `가격 ${n.cmp} SuperTrend(${n.right.period},×${n.right.params.multiplier})` },
+  rsiDiv: { label:"RSI 다이버전스",
+    fields:[{k:"dir",label:"신호",type:"select",opts:[["bull","강세(가격 저점↓·RSI 저점↑ → 롱)"],["bear","약세(가격 고점↑·RSI 고점↓ → 숏)"]],v:"bull"},
+            {k:"period",label:"RSI기간",v:14,sweep:{path:"left.period",def:[7,21,7]}},
+            {k:"level",label:"과매도 기준(숏은 100−값)",v:30,sweep:{path:"left.params.level",def:[20,35,5]}},
+            {k:"minGap",label:"저점 최소 간격(봉)",v:5},
+            {k:"window",label:"최대 창(봉)",v:60},
+            {k:"cvd",label:"CVD 확인",type:"select",opts:[["0","끔(RSI만)"],["1","RSI + CVD(두 저점 사이 매수 우세)"],["2","CVD만"]],v:"0"}],
+    build:f=>({left:{indicator:"RSI_DIV",period:+f.period,
+                     params:{level:+f.level,min_gap:+f.minGap,window:+f.window,cvd:+(f.cvd||0)}},
+               cmp:f.dir==="bull"?">":"<",right:0}),
+    desc:n=>`RSI(${n.left.period}) ${n.cmp===">"?"▲강세":"▼약세"} 다이버전스(${n.left.params.level})`
+            + ({1:" + CVD",2:" · CVD만"}[n.left.params.cvd] || "") },
+  volRank: { label:"변동성 순위(최근 대비)",
+    fields:[{k:"cmp",label:"조건",type:"cmp",v:">="},
+            {k:"value",label:"백분위(0~100)",v:80,sweep:{path:"right",def:[60,90,10]}},
+            {k:"period",label:"ATR기간",v:14},
+            {k:"lookback",label:"비교 기간(봉)",v:2016}],
+    build:f=>({left:{indicator:"ATR_RANK",period:+f.period,params:{lookback:+f.lookback}},cmp:f.cmp,right:+f.value}),
+    desc:n=>`변동성 순위(${n.left.params.lookback}봉) ${n.cmp} ${n.right}` },
   bb: { label:"볼린저밴드",
     fields:[{k:"band",label:"밴드",type:"select",opts:[["lower","하단(과매도)"],["upper","상단(과매수)"]],v:"lower"},
             {k:"period",label:"기간",v:20,sweep:{path:"right.period",def:[10,30,10]}},{k:"stddev",label:"표준편차",v:2,sweep:{path:"right.params.stddev",def:[1.5,3,0.5]}}],
@@ -521,6 +585,77 @@ const COND_TYPES = {
         CDL_HAMMER:"해머",CDL_HANGINGMAN:"교수형",CDL_MORNINGSTAR:"샛별",CDL_EVENINGSTAR:"저녁별",
         CDL_PIERCING:"관통형",CDL_DARKCLOUDCOVER:"먹구름"};
       return `${n.cmp===">"?"↑상승":"↓하락"} ${P[n.left.indicator]||"반전"} 캔들`; } },
+  maAngle: { label:"이평 기울기(각도)",
+    // 차트 각도 대신 ATR 기준 각도: 봉당 0.22 ATR = 45°. 75이평 상위 25% ≈ 20°, 상위 10% ≈ 28° (BTC·DOGE 1m~1h 공통)
+    fields:[{k:"ma",label:"이평",type:"select",opts:[["SMA","SMA"],["EMA","EMA"]],v:"SMA"},
+            {k:"period",label:"이평 기간",v:75,sweep:{path:"left.period",def:[25,75,25]}},
+            {k:"dir",label:"방향",type:"select",opts:[["up","오름 ≥ 각도(롱)"],["down","내림 ≤ −각도(숏)"]],v:"up"},
+            {k:"deg",label:"각도(°)",v:20,sweep:{path:"right",def:[10,30,5]}},
+            {k:"lookback",label:"기울기 계산(봉)",v:5}],
+    build:f=>({left:{indicator:"MA_ANGLE",period:+f.period,params:{sma:f.ma==="SMA"?1:0,lookback:+f.lookback}},
+               cmp:f.dir==="up"?">=":"<=",right:f.dir==="up"?+f.deg:-f.deg}),
+    desc:n=>`${n.left.params.sma?"SMA":"EMA"}(${n.left.period}) 각도 ${n.cmp} ${n.right}°` },
+  maTangle: { label:"이평 엉킴 없음(추세장)",
+    // 최근 N봉 동안 두 이평끼리 교차한 횟수(ma_only) — 엉키면(횡보) 교차가 몰린다. 가격 교차는 안 센다
+    fields:[{k:"fast",label:"빠른 이평",v:5},
+            {k:"slow",label:"느린 이평",v:25},
+            {k:"window",label:"최근 봉 수",v:30,sweep:{path:"left.params.window",def:[20,60,20]}},
+            {k:"max",label:"교차 횟수 미만",v:2,sweep:{path:"right",def:[1,4,1]}}],
+    build:f=>({left:{indicator:"MA_CROSSES",period:+f.slow,params:{fast:+f.fast,window:+f.window,ma_only:1}},cmp:"<",right:+f.max}),
+    desc:n=>`최근 ${n.left.params.window}봉 SMA(${n.left.params.fast})·SMA(${n.left.period}) 교차 < ${n.right}회` },
+  pullback: { label:"눌림 → 프랙탈 → 이평 재돌파",
+    // 롱: 종가가 이평 아래로 눌림 → 그 안에서 저점 프랙탈 확정 → 이평 상향 돌파한 봉. 숏은 거울.
+    fields:[{k:"dir",label:"방향",type:"select",opts:[["long","롱(눌림 후 상향 돌파)"],["short","숏(반등 후 하향 돌파)"]],v:"long"},
+            {k:"ma",label:"이평",type:"select",opts:[["EMA","EMA"],["SMA","SMA"]],v:"EMA"},
+            {k:"period",label:"이평 기간",v:20,sweep:{path:"left.period",def:[20,50,30]}},
+            {k:"n",label:"프랙탈 좌우 봉",v:7,sweep:{path:"left.params.n",def:[2,7,5]}},
+            {k:"window",label:"눌림 최대 길이(봉)",v:60}],
+    build:f=>({left:{indicator:"PULLBACK_FRACTAL",period:+f.period,params:{sma:f.ma==="SMA"?1:0,n:+f.n,window:+f.window}},
+               cmp:f.dir==="long"?">":"<",right:0}),
+    desc:n=>`${n.left.params.sma?"SMA":"EMA"}(${n.left.period}) ${n.cmp===">"?"눌림→저점 프랙탈→▲상향 돌파":"반등→고점 프랙탈→▼하향 돌파"} (프랙탈 ${n.left.params.n})` },
+  fractal: { label:"윌리엄스 프랙탈",
+    fields:[{k:"dir",label:"종류",type:"select",opts:[["low","저점 프랙탈(빨강) 확정"],["high","고점 프랙탈(파랑) 확정"]],v:"low"},
+            {k:"n",label:"좌우 봉",v:2,sweep:{path:"left.period",def:[2,7,5]}}],
+    build:f=>({left:{indicator:"FRACTAL",period:+f.n},cmp:f.dir==="low"?">":"<",right:0}),
+    desc:n=>`${n.cmp===">"?"저점":"고점"} 프랙탈 확정(좌우 ${n.left.period}봉)` },
+  pinBar: { label:"핀바(꼬리 긴 봉)",
+    fields:[{k:"dir",label:"방향",type:"select",opts:[["bull","강세(긴 아래꼬리)"],["bear","약세(긴 위꼬리)"]],v:"bull"},
+            {k:"wick",label:"꼬리 ≥ 봉 길이 %",v:66,sweep:{path:"left.params.wick",def:[55,75,5]}},
+            {k:"body",label:"몸통 ≤ 봉 길이 %",v:30},
+            {k:"minAtr",label:"봉 길이 ≥ ATR×",v:0},
+            {k:"within",label:"최근 N봉 안",v:1,sweep:{path:"left.params.within",def:[1,5,1]}}],
+    build:f=>({left:{indicator:"PIN_BAR",params:{wick:+f.wick,body:+f.body,min_atr:+f.minAtr,within:+f.within}},
+               cmp:f.dir==="bull"?">":"<",right:0}),
+    desc:n=>`${n.cmp===">"?"↑강세":"↓약세"} 핀바(꼬리 ${n.left.params.wick}%)${n.left.params.within>1?` · 최근 ${n.left.params.within}봉`:""}` },
+  triangle: { label:"삼각형 수렴 돌파",
+    fields:[{k:"dir",label:"방향",type:"select",opts:[["up","위 돌파(롱)"],["down","아래 이탈(숏)"]],v:"up"},
+            {k:"pivot",label:"고점·저점 확인(좌우 봉)",v:5,sweep:{path:"left.period",def:[3,9,2]}},
+            {k:"lookback",label:"패턴 최대 길이(봉)",v:100,sweep:{path:"left.params.lookback",def:[50,200,50]}},
+            {k:"tol",label:"평평 허용(패턴 폭 대비 %)",v:10},
+            {k:"within",label:"최근 N봉 안",v:1,sweep:{path:"left.params.within",def:[1,5,1]}}],
+    build:f=>({left:{indicator:"TRIANGLE_BREAK",period:+f.pivot,params:{lookback:+f.lookback,tol:+f.tol,within:+f.within}},
+               cmp:f.dir==="up"?">":"<",right:0}),
+    desc:n=>`삼각형 수렴 ${n.cmp===">"?"▲위 돌파":"▼아래 이탈"}(피벗 ${n.left.period}·${n.left.params.lookback}봉)${n.left.params.within>1?` · 최근 ${n.left.params.within}봉`:""}` },
+  custom: { label:"직접 조건(고급)",
+    // 엔진 지표 아무거나 — 비교(<,>…) 또는 교차. 영상 분석 프리셋이 이 종류로 만들어진다.
+    fields:f=>[
+      {k:"left",label:"왼쪽",type:"select",opts:OPERAND_OPTS,v:"RSI"},
+      {k:"lp",label:"기간",v:"14",sweep:{path:"left.period",def:[7,21,7]}},
+      {k:"lparams",label:"파라미터(JSON)",v:""},
+      {k:"op",label:"조건",type:"select",opts:[["<","< 미만"],["<=","≤ 이하"],[">","> 초과"],[">=","≥ 이상"],["crossOver","▲ 상향 교차"],["crossUnder","▼ 하향 교차"]],v:">"},
+      {k:"rk",label:"오른쪽",type:"select",opts:[["num","숫자"],["ind","지표·가격"]],v:"num",reflow:true},
+      ...(f.rk==="ind"
+        ? [{k:"right",label:"지표",type:"select",opts:OPERAND_OPTS,v:"SMA"},
+           {k:"rp",label:"기간",v:"100",sweep:{path:"right.period",def:[50,200,50]}},
+           {k:"rparams",label:"파라미터(JSON)",v:""}]
+        : [{k:"rv",label:"값",v:"50",sweep:{path:"right",def:[30,70,10]}}])],
+    build:f=>{
+      const L = customOperand(f.left, f.lp, f.lparams);
+      const R = f.rk==="ind" ? customOperand(f.right, f.rp, f.rparams) : +f.rv;
+      return String(f.op).startsWith("cross") ? {cross:f.op,left:L,right:R} : {left:L,cmp:f.op,right:R}; },
+    desc:n=> n.cross!==undefined
+      ? `${operandText(n.left)} ${n.cross==="crossOver"?"▲상향 교차":"▼하향 교차"} ${operandText(n.right)}`
+      : `${operandText(n.left)} ${n.cmp} ${operandText(n.right)}` },
 };
 let entryGroups = [];   // [{side, conds:[{type,node}...AND]}, ...(OR)]  →  ((A&B)→롱) or ((C&D)→숏)
 
@@ -661,9 +796,11 @@ function sync() {
   const show = (sel, on) => document.querySelectorAll(`[data-when="${sel}"]`)
                                     .forEach(e => e.style.display = on ? "" : "none");
   // 가격 레벨 손절이 있는가 (손익비·리스크사이징은 이게 필요). supertrend/off는 없음.
-  const slPrice = slT === "percent" || slT === "atrMultiple" || slT === "swing";
+  const slPrice = slT === "percent" || slT === "atrMultiple" || slT === "swing" || slT === "indicator";
   show("sl-value", slT === "percent" || slT === "atrMultiple");
   show("sl-swing", slT === "swing");
+  show("sl-ind", slT === "indicator");
+  show("sl-buf", slT === "swing" || slT === "indicator");
   show("sl-st", slT === "supertrend");
   show("tp-value", tpT === "percent" || tpT === "atrMultiple" || tpT === "riskReward");
   show("tp-swing", tpT === "swing");
@@ -684,6 +821,8 @@ function sync() {
   $("slValueLabel").textContent = slT === "atrMultiple" ? "손절 ATR 배수" : "손절 % (가격)";
   $("slNote").textContent = slT === "swing"
     ? "룩백 구간(현재 봉 포함)의 최저/최고가 ± 버퍼%. 방향은 자동 — 롱은 전저점 아래, 숏은 전고점 위."
+    : slT === "indicator"
+    ? "진입 신호봉의 지표 값(예: EMA50) ± 버퍼%에 손절을 고정. 롱은 아래, 숏은 위. 지표가 진입가 반대편이면 그 거래는 손절 없음."
     : slT === "supertrend"
     ? "포지션 반대로 SuperTrend 전환 시 손절(신호봉 종가). 롱=하락전환, 숏=상승전환. 가격 레벨이 없어 손익비·리스크% 사이징과는 함께 못 씀."
     : "";
@@ -759,6 +898,7 @@ function migrate(k, v) {
 
 function applyPreset(p) {
   if (!p) return;
+  if (!("exitCustom" in p)) $("exitCustom").value = "";   // 이 칸이 없던 옛 프리셋이 직전 프리셋의 직접 청산을 물려받지 않게
   for (const [k,v0] of Object.entries(p)) {
     if (k === "entry") continue;
     const el = $(k); if (!el) continue;
@@ -769,7 +909,6 @@ function applyPreset(p) {
   setEntryGroups(p.entry);
   sync();
 }
-document.querySelectorAll("[data-preset]").forEach(b => b.onclick = () => applyPreset(PRESETS[b.dataset.preset]));
 
 // ---- 커스텀 프리셋 (사용자가 만든 세팅을 이름 붙여 브라우저에 저장) ----
 // 빌트인 PRESETS와 같은 형태({...폼필드, entry:[{side,conds:[{type,...필드값}]}]})로 저장 →
@@ -787,38 +926,113 @@ function cpSerialize(){
   return p;
 }
 let serverPresets = {};   // 서버 파일(presets/saved/) name -> form. 📁 로 표시.
+let _presetFromUrl = new URLSearchParams(location.search).get("preset");   // 영상 분석 → '백테스트에서 열기'
+(async () => {                                   // 랭킹 → '불러오기': 그 결과의 설정 그대로 폼에
+  const key = new URLSearchParams(location.search).get("result");
+  if (!key) return;
+  try {
+    const r = await (await fetch("/api/ranking_item", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key }) })).json();
+    if (r.error || !r.form) throw new Error(r.error || "폼 정보가 없는 결과예요");
+    applyPreset(r.form);
+    if (r.source && r.source.params) applyParams(r.source.params);     // 범위 테스트 조합이면 그 값까지
+    currentPresetName = r.presetName === "(이름 없음)" ? "" : r.presetName;
+    $("presetCur").innerHTML = `랭킹에서 불러옴: <b>${escapeHtml(r.presetName)}</b> · ${escapeHtml(r.symbol)} ${escapeHtml(r.timeframe)} · ${Math.round(r.days)}일`;
+  } catch (e) { $("err").innerHTML = `<div class="err">랭킹 결과 불러오기 실패: ${escapeHtml(e.message)}</div>`; }
+})();
 async function loadServerPresets(){
   try { const r = await fetch("/api/presets"); const d = await r.json();
     serverPresets = {}; (d.presets||[]).forEach(p => serverPresets[p.name] = p.form);
   } catch(e){ serverPresets = {}; }
   cpRender();
+  if (_presetFromUrl && serverPresets[_presetFromUrl]) {
+    applyPreset(serverPresets[_presetFromUrl]);
+    currentPresetName = _presetFromUrl;
+    $("presetCur").innerHTML = `불러온 프리셋: <b>${escapeHtml(_presetFromUrl)}</b>`;
+    $("err").innerHTML = `<div class="err" style="color:var(--up);background:#132a1c;border-color:#1d4a2f">'${escapeHtml(_presetFromUrl)}' 프리셋을 불러왔어. 심볼·기간을 확인하고 실행해봐.</div>`;
+  }
+  _presetFromUrl = null;
 }
-function cpRender(){
+// ---- 프리셋 드롭다운: 기본 예시 + 저장된 것(브라우저·서버) — 검색하면 바로 걸러진다 ----
+const BUILTIN_LABELS = { scalp:"1m 스켈핑", rsi15:"15m RSI 반등", meanrevert:"RSI 역추세", swing:"전저점+리스크",
+                         macd:"MACD 추세", triple:"3층 반전(EMA·RSI·VWAP·StochRSI)" };
+let currentPresetName = "";        // 지금 폼에 불러온 프리셋 이름 — 백테스트 결과 랭킹에 같이 기록
+let pdActive = -1;
+function presetItems() {
   const local = cpLoad();
-  const names = [...new Set([...Object.keys(local), ...Object.keys(serverPresets)])].sort();
-  $("cpList").innerHTML = names.length
-    ? names.map(n => {
-        const srvOnly = !(n in local) && (n in serverPresets);      // 서버에만 있는 프리셋
-        return `<span class="cpreset"><button class="cp-load" data-name="${escapeHtml(n)}" title="${escapeHtml(n)}">${srvOnly?"📁 ":""}${escapeHtml(n)}</button>`
-          + `<button class="cp-del" data-name="${escapeHtml(n)}" title="삭제">✕</button></span>`;
-      }).join("")
-    : `<span class="cp-empty">저장된 프리셋 없음 — 세팅 후 “💾 현재 설정 저장”</span>`;
-  document.querySelectorAll(".cp-load").forEach(b => b.onclick = () => {
-    const n = b.dataset.name; applyPreset(cpLoad()[n] || serverPresets[n]);
-  });
-  document.querySelectorAll(".cp-del").forEach(b => b.onclick = async () => {
-    const n = b.dataset.name;
-    if (!confirm(`'${n}' 프리셋을 삭제할까? (브라우저 + 서버 파일 둘 다)`)) return;
-    const all = cpLoad(); if (n in all) { delete all[n]; cpStore(all); }         // 브라우저
-    try { await fetch("/api/delete_preset", {method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({ name: n })}); } catch(e){ console.warn("서버 삭제 실패:", e); }
-    loadServerPresets();                                                          // 서버 목록 새로고침 + 재렌더
-  });
+  const saved = [...new Set([...Object.keys(local), ...Object.keys(serverPresets)])].sort((a, b) => a.localeCompare(b, "ko"));
+  const item = (name, form, kind) => {
+    const conds = (form.entry || []).flatMap(g => (g.conds || []).map(c => (COND_TYPES[c.type] || {}).label || c.type));
+    return { name, form, kind, meta: `${form.symbol || ""} ${form.timeframe || ""}`.trim(),
+             hay: [name, form.symbol, form.timeframe, ...conds].join(" ").toLowerCase() };
+  };
+  return [...saved.map(n => item(n, local[n] || serverPresets[n], "saved")),
+          ...Object.entries(PRESETS).map(([k, f]) => item(BUILTIN_LABELS[k] || k, f, "builtin"))];
 }
+function renderPresetDrop() {
+  const q = $("presetSearch").value.trim().toLowerCase();
+  const words = q.split(/\s+/).filter(Boolean);
+  const items = presetItems().filter(it => words.every(w => it.hay.includes(w)));   // 단어 여러 개 = 모두 포함
+  const drop = $("presetDrop");
+  if (!items.length) { drop.innerHTML = `<div class="empty2">'${escapeHtml(q)}' 와 맞는 프리셋 없음</div>`; }
+  else {
+    let h = "", lastKind = null;
+    items.forEach((it, i) => {
+      if (it.kind !== lastKind) { h += `<div class="grp">${it.kind === "saved" ? "저장된 프리셋" : "기본 예시"}</div>`; lastKind = it.kind; }
+      h += `<div class="opt" data-i="${i}"><span class="nm" title="${escapeHtml(it.name)}">${escapeHtml(it.name)}</span>`
+        + `<span class="r">${escapeHtml(it.meta)}${it.kind === "saved" ? ` <span class="del" data-name="${escapeHtml(it.name)}" title="삭제">✕</span>` : ""}</span></div>`;
+    });
+    drop.innerHTML = h;
+    drop.querySelectorAll(".opt").forEach(o => o.addEventListener("mousedown", e => {
+      e.preventDefault();
+      if (e.target.classList.contains("del")) { deletePreset(e.target.dataset.name); return; }
+      pickPreset(items[+o.dataset.i]);
+    }));
+  }
+  pdActive = -1;
+  drop.style.display = "";
+  drop._items = items;
+}
+function pickPreset(it) {
+  applyPreset(it.form);
+  currentPresetName = it.name;
+  $("presetSearch").value = "";
+  $("presetSearch").blur();
+  $("presetDrop").style.display = "none";
+  $("presetCur").innerHTML = `불러온 프리셋: <b>${escapeHtml(it.name)}</b>`;
+}
+async function deletePreset(n) {
+  if (!confirm(`'${n}' 프리셋을 삭제할까? (브라우저 + 서버 파일 둘 다)`)) return;
+  const all = cpLoad(); if (n in all) { delete all[n]; cpStore(all); }         // 브라우저
+  try { await fetch("/api/delete_preset", {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({ name: n })}); } catch(e){ console.warn("서버 삭제 실패:", e); }
+  await loadServerPresets();
+  renderPresetDrop();
+}
+function cpRender(){                                   // 목록이 바뀌면 개수 안내만 갱신(드롭다운은 열 때 그린다)
+  const n = presetItems().length;
+  $("presetSearch").placeholder = `🔎 프리셋 검색·선택 (${n}개 — 이름·심볼·봉·조건)`;
+}
+$("presetSearch").addEventListener("focus", renderPresetDrop);
+$("presetSearch").addEventListener("input", renderPresetDrop);
+$("presetSearch").addEventListener("blur", () => setTimeout(() => { $("presetDrop").style.display = "none"; }, 150));
+$("presetSearch").addEventListener("keydown", e => {
+  const drop = $("presetDrop"), opts = [...drop.querySelectorAll(".opt")];
+  if (drop.style.display === "none" || !opts.length) return;
+  if (e.key === "ArrowDown") { pdActive = Math.min(pdActive + 1, opts.length - 1); e.preventDefault(); }
+  else if (e.key === "ArrowUp") { pdActive = Math.max(pdActive - 1, 0); e.preventDefault(); }
+  else if (e.key === "Enter") { e.preventDefault(); const i = pdActive >= 0 ? pdActive : 0; pickPreset(drop._items[+opts[i].dataset.i]); return; }
+  else if (e.key === "Escape") { drop.style.display = "none"; $("presetSearch").blur(); return; }
+  else return;
+  opts.forEach((o, i) => o.classList.toggle("active", i === pdActive));
+  opts[pdActive].scrollIntoView({ block: "nearest" });
+});
 $("savePreset").onclick = async () => {
   if (!entryGroups.length){ alert("저장할 진입 조건이 없어 — 진입 그룹을 먼저 만들어줘."); return; }
-  const name = (prompt("프리셋 이름:", "") || "").trim();
+  const name = (prompt("프리셋 이름:", currentPresetName || "") || "").trim();
   if (!name) return;
+  currentPresetName = name;
+  $("presetCur").innerHTML = `불러온 프리셋: <b>${escapeHtml(name)}</b>`;
   const all = cpLoad();
   if (all[name] && !confirm(`'${name}' 이(가) 이미 있어. 덮어쓸까?`)) return;
   const form = cpSerialize();
@@ -833,7 +1047,20 @@ $("savePreset").onclick = async () => {
 };
 loadServerPresets();
 
-$("run").onclick = async () => {
+// 버튼 하나: 적용 가능한 "범위"가 하나라도 켜져 있으면 범위 테스트(최적화), 아니면 백테스트.
+function runLabel() {
+  const sweep = collectSweep(), n = Object.keys(sweep).length;
+  return n ? `🔍 범위 테스트 실행 · ${comboCountOf(sweep).toLocaleString()}조합` : "▶ 백테스트 실행";
+}
+function updateRunButton() {
+  const btn = $("run"); if (!btn || btn.disabled) return;
+  const opt = Object.keys(collectSweep()).length > 0;
+  btn.textContent = runLabel();
+  btn.style.background = opt ? "#7c5cff" : "";
+}
+$("run").onclick = () => Object.keys(collectSweep()).length ? runOptimize() : runBacktest();
+
+async function runBacktest() {
   if (!entryGroups.length) { $("err").innerHTML = '<div class="err">진입 조건을 하나 이상 추가해줘 (진입 섹션)</div>'; return; }
   const btn = $("run"); btn.disabled = true; btn.textContent = "실행 중...";
   $("err").innerHTML = "";
@@ -849,7 +1076,7 @@ $("run").onclick = async () => {
   }, 500);
   try {
     const res = await fetch("/api/backtest_stream", {method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify(collect())});
+      body: JSON.stringify({ ...collect(), presetName: currentPresetName, form: cpSerialize() })});   // 이름·폼은 랭킹 등록용
     if (!res.ok || !res.body) throw new Error("서버 응답 오류 (" + res.status + ")");
     const reader = res.body.getReader(), dec = new TextDecoder();
     let buf = "", result = null;
@@ -878,9 +1105,9 @@ $("run").onclick = async () => {
     $("err").innerHTML = `<div class="err">에러: ${e.message}</div>`;
   } finally {
     clearInterval(tick);
-    btn.disabled = false; btn.textContent = "▶ 백테스트 실행";
+    btn.disabled = false; updateRunButton();
   }
-};
+}
 
 function fmtDate(ms){ return new Date(ms).toISOString().slice(0,16).replace("T"," "); }
 
@@ -941,19 +1168,10 @@ function render(d) {
     html += `<div class="metric"><div class="k">${k}</div><div class="v ${c}">${v}</div></div>`;
   html += '</div>';
   html += verdictBox(d.verdict, m, d.buyHoldPct, d.preset && d.preset.market && d.preset.market.symbol);
+  html += d.rankingKey ? `<div class="note" style="margin:-6px 0 14px">🏆 랭킹에 등록됐어요 — <a href="/ranking" style="color:#4c9be8">랭킹 보기</a></div>`
+        : d.rankingSkipped ? `<div class="note" style="margin:-6px 0 14px">🏆 랭킹 미등록: ${d.rankingSkipped}</div>` : "";
 
-  const nTr = (d.trades||[]).length, detail = nTr <= 100;
-  const nBar = (d.ohlc||[]).length, barMin = d.ohlcBarMin||0;
-  // 지표 범례는 drawPriceChart 가 시리즈 참조와 함께 채운다(클릭=켜기/끄기).
-  const indLegend = (d.indicators || []).length ? `<div class="chartlegend" id="indLegend"></div>` : "";
-  html += `<div class="chartbox"><h3>캔들 · 진입/청산 · 손절·익절 · 지표 · ${d.preset.market.symbol} ${d.preset.market.timeframe} · ${nBar}봉(1봉≈${barMin}분)</h3>`
-    + `<div id="priceChart"></div>`
-    + `<div class="chartlegend"><span><b style="color:#4c9be8">▲</b> 롱 진입</span><span><b style="color:#4c9be8">▼</b> 숏 진입</span>`
-    + `<span><b style="color:#26d07c">●</b>/<b style="color:#ff5c6c">●</b> 청산(이익/손실)</span>`
-    + `<span><i style="border-color:#ff5c6c"></i> 손절</span><span><i style="border-color:#26d07c"></i> 익절</span>`
-    + `<span style="margin-left:auto">휠=줌 · 드래그=이동 · 더블클릭=최근200봉</span>`
-    + (detail ? "" : `<span style="color:#e0a030">⚠️ ${nTr}건 → 손절/익절 라인 생략, 마커만</span>`) + `</div>`
-    + indLegend + `</div>`;
+  html += tradeListHtml(d);
 
   const feeInfo = (d.makerFee != null)
     ? ` · 수수료 maker ${(d.makerFee*100).toFixed(4)}%${d.makerFee===0?"(USDC 0)":""}/taker ${(d.takerFee*100).toFixed(4)}%`
@@ -973,7 +1191,7 @@ function render(d) {
 
   html += `<details><summary>생성된 프리셋 JSON 보기</summary><pre>${JSON.stringify(d.preset,null,2)}</pre></details>`;
   $("out").innerHTML = html;
-  drawPriceChart(d.ohlc || [], d.trades || [], d.dataRange, d.ohlcBarMin || 1, d.indicators || []);
+  bindTradeList(d);
   drawChart(d.equityCurve, m.initialEquity);
 }
 
@@ -998,146 +1216,192 @@ function drawChart(curve, base) {
   ctx.stroke();
 }
 
-// 캔들스틱(백테스트 타임프레임 그대로) — TradingView Lightweight Charts.
-// 줌/팬/크로스헤어/툴팁은 라이브러리가 처리. 우리는 진입·청산 마커와 트레이드별 손절/익절 구간선만 얹는다.
-// ohlc: [[time_ms, open, high, low, close], ...]
-let priceChartObj = null;   // 결과 갱신 때 이전 차트 정리용
+// ---- 거래 내역 + 거래별 차트 ----
+// 전체 기간 캔들을 한 차트에 넣지 않는다(2000일 5m = 60만 봉 → 압축되면 RSI 저점이 묶음 안에 숨는다).
+// 거래 한 줄을 누르면 서버가 그 진입~청산 구간만 신호 타임프레임 그대로(압축 없이) 지표와 함께 보낸다.
+const TRADE_RN = {take_profit:"익절", stop_loss:"손절", trailing:"트레일링", signal:"신호청산", time:"시간청산", liquidation:"강제청산 ⚠️"};
+let tradeChartObj = null;   // 펼친 거래 차트(한 번에 하나)
 
-function drawPriceChart(ohlc, trades, range, barMin, indicators) {
-  const box = $("priceChart");
-  if (!box || !ohlc.length || !window.LightweightCharts) return;
-  if (priceChartObj) { priceChartObj.remove(); priceChartObj = null; }
+function fmtPx(v, prec) { return v == null ? "–" : Number(v).toFixed(prec); }
+function fmtDur(ms) {
+  const m = Math.round(ms / 60000);
+  return m < 60 ? `${m}분` : `${Math.floor(m / 60)}시간${m % 60 ? " " + (m % 60) + "분" : ""}`;
+}
+
+function tradeListHtml(d) {
+  const trs = d.trades || [];
+  if (!trs.length) return "";
+  const prec = d.pricePrecision ?? 2;
+  let h = `<div class="chartbox"><h3>거래 내역 · ${d.preset.market.symbol} ${d.preset.market.timeframe} · ${trs.length}건 · 줄을 누르면 진입~청산 차트</h3>`
+    + `<div class="trade-wrap"><table class="trade-tab"><thead><tr>`
+    + `<th>#</th><th class="l">방향</th><th class="l">진입 (UTC)</th><th>진입가</th><th class="l">청산 (UTC)</th><th>청산가</th>`
+    + `<th>보유</th><th>가격 변화</th><th class="l">사유</th><th>레버리지</th><th>손익</th></tr></thead><tbody>`;
+  trs.forEach((t, i) => {
+    const mv = t.side * (t.exitPrice / t.entryPrice - 1) * 100;
+    const pc = t.pnl > 0 ? "up" : (t.pnl < 0 ? "down" : "");
+    h += `<tr class="trow" data-i="${i}"><td>${i + 1}</td><td class="l">${t.side > 0 ? "롱" : "숏"}</td>`
+      + `<td class="l">${fmtDate(t.entryTime)}</td><td>${fmtPx(t.entryPrice, prec)}</td>`
+      + `<td class="l">${fmtDate(t.exitTime)}</td><td>${fmtPx(t.exitPrice, prec)}</td>`
+      + `<td>${fmtDur(t.exitTime - t.entryTime)}</td><td class="${mv > 0 ? "up" : mv < 0 ? "down" : ""}">${mv > 0 ? "+" : ""}${mv.toFixed(2)}%</td>`
+      + `<td class="l">${TRADE_RN[t.reason] || t.reason}</td><td>${t.leverage}배</td>`
+      + `<td class="${pc}">${t.pnl > 0 ? "+" : ""}${t.pnl.toFixed(2)}</td></tr>`;
+  });
+  return h + `</tbody></table></div></div>`;
+}
+
+function bindTradeList(d) {
+  if (tradeChartObj) { tradeChartObj.remove(); tradeChartObj = null; }
+  const tbody = document.querySelector(".trade-tab tbody");
+  if (!tbody) return;
+  tbody.querySelectorAll("tr.trow").forEach(row => row.onclick = () => openTrade(d, row));
+}
+
+async function openTrade(d, row) {
+  const wasOpen = row.classList.contains("open");
+  if (tradeChartObj) { tradeChartObj.remove(); tradeChartObj = null; }
+  document.querySelectorAll(".trade-tab tr.detail").forEach(r => r.remove());
+  document.querySelectorAll(".trade-tab tr.trow.open").forEach(r => r.classList.remove("open"));
+  if (wasOpen) return;                                   // 같은 줄 다시 누르면 접기
+  row.classList.add("open");
+  const t = d.trades[+row.dataset.i];
+  const prec = d.pricePrecision ?? 2;
+  const det = document.createElement("tr");
+  det.className = "detail";
+  const risk = t.stop != null ? Math.abs(t.entryPrice - t.stop) : null;
+  const rr = (risk && t.tp != null) ? (Math.abs(t.tp - t.entryPrice) / risk).toFixed(2) : null;
+  det.innerHTML = `<td colspan="11"><div class="trade-info">`
+    + `<span>방향 <b>${t.side > 0 ? "롱" : "숏"}</b></span>`
+    + `<span>진입 <b>${fmtDate(t.entryTime)} · ${fmtPx(t.entryPrice, prec)}</b></span>`
+    + `<span>청산 <b>${fmtDate(t.exitTime)} · ${fmtPx(t.exitPrice, prec)}</b> (${TRADE_RN[t.reason] || t.reason})</span>`
+    + `<span>손절 <b>${fmtPx(t.stop, prec)}</b>${risk ? ` (${(risk / t.entryPrice * 100).toFixed(2)}%)` : ""}</span>`
+    + `<span>익절 <b>${fmtPx(t.tp, prec)}</b>${rr ? ` (손절폭 ×${rr})` : ""}</span>`
+    + `<span>수량 <b>${Number(t.qty).toLocaleString(undefined, {maximumSignificantDigits: 6})}</b> · 레버리지 <b>${t.leverage}배</b></span>`
+    + `<span>수수료 <b>${t.fees}</b> · 펀딩 <b>${t.funding}</b></span>`
+    + `<span>손익 <b class="${t.pnl > 0 ? "up" : "down"}">${t.pnl > 0 ? "+" : ""}${t.pnl.toFixed(2)}</b></span>`
+    + `</div><div class="tradeChart"><div class="note">차트 불러오는 중…</div></div>`
+    + `<div class="chartlegend"><span><b style="color:#4c9be8">▲</b> 진입</span>`
+    + `<span><b style="color:#26d07c">●</b>/<b style="color:#ff5c6c">●</b> 청산(이익/손실)</span>`
+    + `<span><b style="display:inline-block;width:12px;height:10px;background:rgba(255,92,108,.35)"></b> 진입가~손절</span>`
+    + `<span><b style="display:inline-block;width:12px;height:10px;background:rgba(38,208,124,.35)"></b> 진입가~익절</span>`
+    + `<span style="margin-left:auto">휠=줌 · 드래그=이동 · 더블클릭=처음 보기</span></div>`
+    + `<div class="chartlegend tradeIndLegend"></div></td>`;
+  row.after(det);
+  const box = det.querySelector(".tradeChart");
+  try {
+    const res = await fetch("/api/bt_trade_chart", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({preset: d.preset, entryTime: t.entryTime, exitTime: t.exitTime})});
+    const w = await res.json();
+    if (w.error) throw new Error(w.error);
+    if (!det.isConnected) return;                        // 기다리는 사이 다른 줄을 눌렀다
+    box.innerHTML = "";
+    tradeChartObj = drawTradeWindow(box, det.querySelector(".tradeIndLegend"), w, t);
+  } catch (e) {
+    box.innerHTML = `<div class="note" style="color:var(--down)">차트 실패: ${e.message}</div>`;
+  }
+}
+
+// 한 거래 구간 차트 — 캔들(신호 TF 그대로)·진입/청산 마커·손절/익절 구간선·전략 지표(오버레이/하단 패널).
+function drawTradeWindow(box, leg, w, t) {
   const LC = window.LightweightCharts;
-  indicators = indicators || [];
-
-  // 오실레이터 패널 수만큼 차트 높이를 키운다(메인 380 + 패널당 120).
-  const oscPaneCount = new Set(indicators.filter(i => !i.overlay).map(i => i.pane)).size;
-  box.style.height = (380 + oscPaneCount * 120) + "px";
-
-  // 한 화면 최대 CAP봉. minBarSpacing = 폭÷CAP 으로 줌아웃 하한을 잡아 CAP봉 이상은
-  // 한 화면에 안 담기게 하드캡한다(나머지는 드래그 횡스크롤). 봉이 CAP 이하면 그냥 전체.
-  const CAP = 200;
-  const boxW = box.clientWidth || 1000;
-  const minBarSpacing = ohlc.length > CAP ? Math.max(0.5, boxW / CAP) : 0.5;
-
+  if (!LC || !w.ohlc.length) { box.innerHTML = `<div class="note">캔들 없음</div>`; return null; }
+  // 가격 자릿수: 라이브러리 기본은 소수 2자리라 DOGE(~0.1) 같은 싼 코인은 축·툴팁이 뭉갠다. 서버가 심볼별로 준다.
+  const prec = w.pricePrecision ?? 2;
+  const priceFormat = { type: "price", precision: prec, minMove: Math.pow(10, -prec) };
+  const inds = w.indicators || [];
+  const nOsc = new Set(inds.filter(i => !i.overlay).map(i => i.pane)).size;
+  box.style.height = (340 + nOsc * 120) + "px";
   const chart = LC.createChart(box, {
-    autoSize: true,                                   // ResizeObserver 내장 → 창 크기 따라감
+    autoSize: true,
     layout: { background: { color: "transparent" }, textColor: "#8a90a0",
               fontFamily: "system-ui, sans-serif", attributionLogo: false },
-    grid: { vertLines: { color: "rgba(255,255,255,.05)" },
-            horzLines: { color: "rgba(255,255,255,.05)" } },
+    grid: { vertLines: { color: "rgba(255,255,255,.05)" }, horzLines: { color: "rgba(255,255,255,.05)" } },
     crosshair: { mode: LC.CrosshairMode.Normal },
     rightPriceScale: { borderColor: "rgba(255,255,255,.10)" },
-    timeScale: { borderColor: "rgba(255,255,255,.10)", timeVisible: true, secondsVisible: false,
-                 minBarSpacing },
-    localization: { timeFormatter: s => fmtDate(s*1000) },   // 라이브러리는 초, fmtDate 는 ms
+    timeScale: { borderColor: "rgba(255,255,255,.10)", timeVisible: true, secondsVisible: false },
+    localization: { timeFormatter: s => fmtDate(s * 1000) },   // 라이브러리는 초, fmtDate 는 ms
   });
-  priceChartObj = chart;
-
+  const ohlc = w.ohlc;
   const candles = chart.addSeries(LC.CandlestickSeries, {
     upColor: "#3aa76d", downColor: "#cf5b5b", borderVisible: false,
-    wickUpColor: "#3aa76d", wickDownColor: "#cf5b5b",
+    wickUpColor: "#3aa76d", wickDownColor: "#cf5b5b", priceFormat,
+    priceLineVisible: false, lastValueVisible: false,   // 마지막 봉 가격선은 손절선과 헷갈린다
   });
-  // 라이브러리 시각 단위는 초. 봉 시각이 곧 x좌표 기준점이 된다.
-  candles.setData(ohlc.map(b => ({ time: b[0]/1000, open: b[1], high: b[2], low: b[3], close: b[4] })));
+  candles.setData(ohlc.map(b => ({ time: b[0] / 1000, open: b[1], high: b[2], low: b[3], close: b[4] })));
 
-  // 트레이드 시각 → 그 시각을 담고 있는 봉의 시각. 마커·구간선이 봉 격자에 맞아떨어져야 해서 스냅한다.
+  // 트레이드 시각 → 그 시각을 담은 봉 시각(마커·구간선이 봉 격자에 맞게)
   const n = ohlc.length;
-  const snap = t => { let a=0,b=n-1,r=0; while(a<=b){ const m=(a+b)>>1;
-    if(ohlc[m][0]<=t){ r=m; a=m+1; } else b=m-1; } return ohlc[r][0]/1000; };
-
-  const markers = [];
-  for (const t of trades) {
-    const win = t.pnl > 0;
-    markers.push({ time: snap(t.entryTime), position: t.side>0 ? "belowBar" : "aboveBar",
-                   color: "#4c9be8", shape: t.side>0 ? "arrowUp" : "arrowDown",
-                   text: t.side>0 ? "롱" : "숏" });   // 가격은 크로스헤어 툴팁에 나오니 생략
-    markers.push({ time: snap(t.exitTime), position: t.side>0 ? "aboveBar" : "belowBar",
-                   color: win ? "#26d07c" : "#ff5c6c", shape: "circle",
-                   text: (t.pnl>0?"+":"") + t.pnl.toFixed(0) });
+  const snap = x => { let a = 0, b = n - 1, r = 0; while (a <= b) { const m = (a + b) >> 1;
+    if (ohlc[m][0] <= x) { r = m; a = m + 1; } else b = m - 1; } return ohlc[r][0] / 1000; };
+  const t0 = snap(t.entryTime), t1 = snap(t.exitTime);
+  LC.createSeriesMarkers(candles, [
+    { time: t0, position: t.side > 0 ? "belowBar" : "aboveBar", color: "#4c9be8",
+      shape: t.side > 0 ? "arrowUp" : "arrowDown", text: t.side > 0 ? "롱" : "숏" },
+    { time: t1, position: t.side > 0 ? "aboveBar" : "belowBar", color: t.pnl > 0 ? "#26d07c" : "#ff5c6c",
+      shape: "circle", text: (t.pnl > 0 ? "+" : "") + t.pnl.toFixed(0) },
+  ].sort((a, b) => a.time - b.time));
+  // 포지션 박스(트레이딩뷰 롱/숏 포지션 도구처럼): 진입~청산 구간에 진입가↔손절 빨강, 진입가↔익절 초록 반투명.
+  // BaselineSeries(기준값 = 진입가)가 선과 기준값 사이를 채운다 — 위/아래 채움을 같은 색으로 둬서 롱·숏 모두 맞게.
+  const tEnd = t1 > t0 ? t1 : t0 + (w.ohlcBarMin || 5) * 60;   // 같은 봉 청산이면 한 봉 폭이라도
+  for (const [lvl, rgb] of [[t.stop, "255,92,108"], [t.tp, "38,208,124"]]) {
+    if (lvl == null) continue;
+    const box = chart.addSeries(LC.BaselineSeries, {
+      baseValue: { type: "price", price: t.entryPrice }, priceFormat,
+      topFillColor1: `rgba(${rgb},.22)`, topFillColor2: `rgba(${rgb},.22)`, topLineColor: `rgba(${rgb},.9)`,
+      bottomFillColor1: `rgba(${rgb},.22)`, bottomFillColor2: `rgba(${rgb},.22)`, bottomLineColor: `rgba(${rgb},.9)`,
+      lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+    });
+    box.setData([{ time: t0, value: lvl }, { time: tEnd, value: lvl }]);
   }
-  markers.sort((a,b) => a.time - b.time);            // 라이브러리가 시각 오름차순을 요구
-  LC.createSeriesMarkers(candles, markers);
+  const ent = chart.addSeries(LC.LineSeries, { color: "rgba(160,170,190,.9)", lineWidth: 1, priceFormat,
+    priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+  ent.setData([{ time: t0, value: t.entryPrice }, { time: tEnd, value: t.entryPrice }]);   // 진입가(박스 경계)
 
-  // 손절/익절: createPriceLine 은 차트 전체를 가로지르므로, 트레이드 구간에만 걸치는
-  // 2점짜리 라인 시리즈로 그린다. 건수가 많으면 시리즈 폭증하니 생략(범례에 안내).
-  if (trades.length <= 100) {
-    for (const t of trades) {
-      const t0 = snap(t.entryTime), t1 = snap(t.exitTime);
-      if (t1 <= t0) continue;                        // 같은 봉에서 진입·청산 → 그릴 구간 없음
-      for (const [lvl, color] of [[t.stop, "rgba(255,92,108,.6)"], [t.tp, "rgba(38,208,124,.6)"]]) {
-        if (lvl == null) continue;
-        const s = chart.addSeries(LC.LineSeries, {
-          color, lineWidth: 1, lineStyle: LC.LineStyle.Dashed,
-          priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
-        });
-        s.setData([{ time: t0, value: lvl }, { time: t1, value: lvl }]);
-      }
-    }
-  }
-
-  // 전략에 쓰인 지표: 오버레이는 메인(pane 0, 가격 스케일), 오실레이터는 그룹별 하단 패널.
   const paneOf = {}; let nextPane = 1;
-  const seriesRefs = [];                              // 범례 토글용 {label,color,overlay,series[],visible}
-  for (const ind of indicators) {
-    let paneIndex = 0;
-    if (!ind.overlay) {
-      if (!(ind.pane in paneOf)) paneOf[ind.pane] = nextPane++;
-      paneIndex = paneOf[ind.pane];
-    }
+  const refs = [];
+  for (const ind of inds) {
+    let pane = 0;
+    if (!ind.overlay) { if (!(ind.pane in paneOf)) paneOf[ind.pane] = nextPane++; pane = paneOf[ind.pane]; }
     const made = [];
     if (ind.type === "histogram") {
-      // 막대 그래프(HawkEye 볼륨·QQE MOD). p=[time,value,color?] — 막대별 색 지원.
-      const s = chart.addSeries(LC.HistogramSeries,
-        { color: ind.color, priceLineVisible: false, lastValueVisible: false }, paneIndex);
-      s.setData(ind.data.filter(p => p[1] != null)
+      const sr = chart.addSeries(LC.HistogramSeries, { color: ind.color, priceLineVisible: false, lastValueVisible: false }, pane);
+      sr.setData(ind.data.filter(p => p[1] != null)
         .map(p => p[2] ? { time: p[0] / 1000, value: p[1], color: p[2] } : { time: p[0] / 1000, value: p[1] }));
-      made.push(s);
+      made.push(sr);
     } else {
-      // v5는 whitespace로 선이 안 끊겨(건너뛰고 이어붙임). 그래서 값이 '연속된 구간'마다
-      // 별도 시리즈로 쪼갠다 → 전환점(SuperTrend 상승↔하락)·워밍업 결측에서 확실히 끊긴다.
+      // 값이 끊기는 곳(전환점·워밍업·다이버전스 선분 사이)마다 시리즈를 쪼갠다 — v5 는 whitespace 를 건너뛰어 이어 그린다.
       const opt = { color: ind.color, lineWidth: ind.overlay ? 2 : 1, priceLineVisible: false,
                     lastValueVisible: false, crosshairMarkerVisible: false, pointMarkersVisible: false };
+      if (pane === 0) opt.priceFormat = priceFormat;
+      if (ind.label.startsWith("기준")) Object.assign(opt, { lineStyle: LC.LineStyle.Dashed, color: "#a7afc0" });   // RSI 기준선 잘 보이게
       let run = [];
-      const flush = () => { if (run.length) { const s = chart.addSeries(LC.LineSeries, opt, paneIndex); s.setData(run); made.push(s); run = []; } };
-      for (const p of ind.data) {
-        if (p[1] == null) flush();
-        else run.push({ time: p[0] / 1000, value: p[1] });
-      }
+      const flush = () => { if (run.length) { const sr = chart.addSeries(LC.LineSeries, opt, pane); sr.setData(run); made.push(sr); run = []; } };
+      for (const p of ind.data) { if (p[1] == null) flush(); else run.push({ time: p[0] / 1000, value: p[1] }); }
       flush();
     }
-    seriesRefs.push({ label: ind.label, color: ind.color, overlay: ind.overlay, series: made, visible: true });
+    refs.push({ label: ind.label, color: ind.color, overlay: ind.overlay, series: made, visible: true });
   }
-  // 메인 패널을 크게, 오실레이터 패널은 작게
   try {
     const panes = chart.panes();
     if (panes.length > 1) { panes[0].setStretchFactor(3); for (let i = 1; i < panes.length; i++) panes[i].setStretchFactor(1); }
   } catch (e) {}
 
-  // 지표 범례 = 클릭해서 켜기/끄기 (series.applyOptions({visible}))
-  const leg = $("indLegend");
-  if (leg && seriesRefs.length) {
+  if (leg && refs.length) {
     leg.innerHTML = `<span style="color:var(--mut)">지표(클릭=켜기/끄기):</span>`
-      + seriesRefs.map((r, i) => `<span class="indtog" data-i="${i}" style="cursor:pointer;user-select:none">`
+      + refs.map((r, i) => `<span class="indtog" data-i="${i}" style="cursor:pointer;user-select:none">`
           + `<b style="color:${r.color}">━</b> ${r.label}${r.overlay ? "" : " ▾패널"}</span>`).join("");
     leg.querySelectorAll(".indtog").forEach(el => {
       el.onclick = () => {
-        const r = seriesRefs[+el.dataset.i];
+        const r = refs[+el.dataset.i];
         r.visible = !r.visible;
-        r.series.forEach(s => s.applyOptions({ visible: r.visible }));   // 쪼개진 구간 전부 토글
+        r.series.forEach(sr => sr.applyOptions({ visible: r.visible }));
         el.style.opacity = r.visible ? "1" : "0.4";
         el.style.textDecoration = r.visible ? "none" : "line-through";
       };
     });
   }
-
-  // 기본 뷰 = 최근 CAP봉 (나머지는 왼쪽으로 드래그해 스크롤). CAP 이하면 전체.
-  const resetView = () => {
-    if (ohlc.length > CAP) chart.timeScale().setVisibleLogicalRange({ from: ohlc.length - CAP, to: ohlc.length });
-    else chart.timeScale().fitContent();
-  };
-  resetView();
-  box.ondblclick = resetView;                              // 더블클릭 = 최근 200봉으로 복귀
+  chart.timeScale().fitContent();
+  box.ondblclick = () => chart.timeScale().fitContent();
+  return chart;
 }
 
 // ---- 파라미터 최적화 (백테스트 폼의 각 파라미터 옆 "범위" 체크박스로 스윕) ----
@@ -1243,6 +1507,7 @@ function comboCountOf(sweep) {
   }, 1);
 }
 function updateComboCount() {
+  updateRunButton();
   const sweep = collectSweep();
   const keys = Object.keys(sweep);
   if (!keys.length) { $("comboCount").textContent = '탐색할 값 옆의 "범위" 체크박스를 켜줘'; return; }
@@ -1263,7 +1528,7 @@ $("exitCondInd").addEventListener("change", () => {
 // 방식/사용여부가 바뀌면 스윕 적용 가능성이 달라짐 → 조합수 갱신
 ["exitCondEnabled","slType","tpType"].forEach(id => $(id).addEventListener("change", updateComboCount));
 
-$("optimize").onclick = async () => {
+async function runOptimize() {
   if (!entryGroups.length) { $("err").innerHTML = '<div class="err">진입 조건을 하나 이상 추가해줘 (진입 섹션)</div>'; return; }
   const sweep = collectSweep();
   if (!Object.keys(sweep).length) {
@@ -1271,12 +1536,13 @@ $("optimize").onclick = async () => {
   }
   const combos = comboCountOf(sweep);
   if (combos > 400 && !confirm(`총 ${combos.toLocaleString()}개 조합을 백테스트해. 시간이 걸릴 수 있어. 계속?`)) return;
-  const btn = $("optimize"); btn.disabled = true; btn.textContent = "최적화 중...";
+  const btn = $("run"); btn.disabled = true; btn.textContent = "범위 테스트 중...";
   $("err").innerHTML = "";
   const started = performance.now();
   try {
     const body = { ...collect(), sweep, objective:"calmar",
-                   minTrades:+$("minTrades").value, useOOS:$("useOOS").checked };
+                   minTrades:+$("minTrades").value, useOOS:$("useOOS").checked,
+                   presetName: currentPresetName, form: cpSerialize() };       // 상위 조합 랭킹 등록용
     const res = await fetch("/api/optimize", {method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify(body)});
     if (!res.ok || !res.body) throw new Error("서버 응답 오류 (" + res.status + ")");
@@ -1297,9 +1563,9 @@ $("optimize").onclick = async () => {
   } catch (e) {
     $("err").innerHTML = `<div class="err">에러: ${e.message}</div>`;
   } finally {
-    btn.disabled = false; btn.textContent = "🔍 최적화 실행";
+    btn.disabled = false; updateRunButton();
   }
-};
+}
 
 // 스트림 이벤트 처리: 진행률 바 + 실시간 결과 (통과 조합을 obj 내림차순으로 즉시 표시)
 function handleOptEvent(ev, live) {
@@ -1321,6 +1587,10 @@ function handleOptEvent(ev, live) {
     if (el) el.textContent = `${pct}% · ${ev.done}/${ev.total} 조합 · 통과 ${live.passed}개 · ${secs}s`
       + (ev.done >= ev.total ? " · OOS 검증 중..." : "");
     renderOptLive(live);
+    return;
+  }
+  if (ev.type === "ranking") {                      // 상위 조합을 전체 기간으로 다시 돌려 랭킹 등록 중
+    const el = $("optProgText"); if (el) el.textContent = ev.text;
     return;
   }
   if (ev.type === "done") { renderOpt(ev); }
@@ -1351,6 +1621,15 @@ function renderOpt(d) {
     + '<b>견고</b>=IS·OOS 둘 다 수익. <b>랜덤보다 나음</b>=OOS 에서 같은 거래들(보유·방향 그대로)을 아무 때나 사고판 랜덤 2,000번 중 '
     + `이 값보다 잘 번 횟수. 조합을 ${d.totalCombos}개나 뒤졌으니 그중 하나는 운으로도 잘 나와 — 그래서 ✅ 문턱은 '랜덤 ${d.totalCombos}개를 뽑아 그중 최고'보다 높아야 해(칸에 마우스를 올리면 문턱이 보여). `
     + '<b style="color:var(--up)">둘 다 ✅ 인 값만 의미가 있어.</b> 견고만 ✅ 인 값은 "다른 구간에서도 벌었지만 랜덤과 구별 안 됨"이야.</div>';
+  const reg = d.rankingRegistered || [];
+  if (reg.length) {
+    const ok = reg.filter(x => x.key);
+    html += `<div class="note" style="margin:6px 0 10px">🏆 ${reg[0].skipped ? "랭킹 미등록: " + reg[0].skipped
+      : `상위 ${ok.length}개 조합을 <b>전체 기간</b>으로 다시 백테스트해 랭킹에 등록했어요 (`
+        + ok.map(x => `${x.rank}위 ${x.returnPct > 0 ? "+" : ""}${x.returnPct.toFixed(1)}%`).join(" · ")
+        + `) — <a href="/ranking" style="color:#4c9be8">랭킹 보기</a>`
+        + (reg.some(x => x.error) ? ` · 실패 ${reg.filter(x => x.error).length}개` : "")}</div>`;
+  }
   html += '<div style="overflow-x:auto"><table class="opt-tab"><thead><tr><th>#</th>';
   names.forEach(n => html += `<th>${labelFor(n)}</th>`);
   html += '<th>IS수익</th><th>IS Calmar</th><th>IS건</th><th>OOS수익</th><th>OOS Calmar</th><th>견고</th><th>랜덤보다 나음</th><th></th></tr></thead><tbody>';
@@ -1397,10 +1676,12 @@ function applyParams(params) {
     } else { const el = $(k); if (el) el.value = v; }
   }
   if (entryChanged) renderGroups();
+  // 범위 체크를 풀어야 같은 버튼이 '전체 기간 백테스트'가 된다(켜둔 채면 범위 테스트가 다시 돈다)
+  sweepState = {}; restoreSweepUI(); updateComboCount();
   sync();
   window.scrollTo(0,0);
   $("err").innerHTML = '<div class="err" style="color:var(--up);background:#132a1c;border-color:#1d4a2f">'
-    + '최적값을 폼에 적용했어. [백테스트 실행]으로 전체 기간 성과를 확인해봐.</div>';
+    + '최적값을 폼에 적용하고 "범위" 체크를 껐어. [백테스트 실행]으로 전체 기간 성과를 확인해봐.</div>';
 }
 
 function drawHeat(hm) {

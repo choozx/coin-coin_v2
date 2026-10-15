@@ -110,13 +110,15 @@ def _leverage_for(sizing: dict, equity: float, max_lev: int) -> int:
     return max(1, min(int(sizing["leverage"]), max_lev))
 
 
-def _exit_level(cfg: dict, entry: float, side: int, atr_val: float, signal, sb: int):
+def _exit_level(cfg: dict, entry: float, side: int, atr_val: float, signal, sb: int, resolver=None):
     """익절/손절 목표가. cfg 없으면 nan.
 
     side: 진입가 기준 목표가의 방향 부호(+1 위 / -1 아래). 호출부에서 조정.
           롱 손절 -1 · 롱 익절 +1 · 숏 손절 +1 · 숏 익절 -1.
     swing: side 부호대로 전저(아래)/전고(위)를 자동 선택 → 롱 손절=전저점, 숏 손절=전고점.
     swingLow/swingHigh: 방향을 명시적으로 고정 (레거시 프리셋 호환).
+    indicator: 신호봉의 지표 값(예: EMA(50)) ± bufferPercent — 롱 손절은 그 아래, 숏 손절은 위. 진입 때 값으로 고정.
+               지표가 진입가 반대편이면(롱인데 EMA50 이 진입가 위) _valid_level 이 무효로 만든다.
     """
     if cfg is None:
         return float("nan")
@@ -137,6 +139,11 @@ def _exit_level(cfg: dict, entry: float, side: int, atr_val: float, signal, sb: 
         if use_low:
             return signal.low[s:sb + 1].min() * (1 - buf)     # 전저점 아래
         return signal.high[s:sb + 1].max() * (1 + buf)        # 전고점 위
+    if t == "indicator":
+        if resolver is None:
+            return float("nan")
+        v = float(resolver.resolve(cfg["indicator"])[sb])
+        return v * (1 + side * cfg.get("bufferPercent", 0.0) / 100.0) if np.isfinite(v) else float("nan")
     return float("nan")
 
 
@@ -206,6 +213,7 @@ class Stepper:
         self.on_open = on_open
         self.on_close = on_close
         self.diagnose = diagnose
+        self._resolver = None                 # 손절 'indicator' 타입(진입 시점 EMA 값 등)이 지표를 읽을 때 쓴다 — step() 마다 갱신
         self.last_exit_time = -10 ** 15       # 쿨다운 기준: 마지막 청산이 일어난 **신호봉 시각(ms)**
         #   인덱스로 두면 라이브에서 영원히 안 풀린다(슬라이딩 윈도우 — 위 entry_signal_time 주석 참고).
         self.apply_preset(preset)
@@ -237,6 +245,7 @@ class Stepper:
         ot = int(base.open_time[t]); hi, lo, cl = base.high[t], base.low[t], base.close[t]
         sb = int(bar_of[t])                   # 이 1분봉이 속한 신호봉(배열 인덱스)
         sb_time = int(signal.open_time[sb])   # 그 신호봉의 시각 — 기간 계산은 전부 이걸로
+        self._resolver = resolver
         self.manage_position(ot, hi, lo, cl, sb_time)
         if self.pending is not None:          # 지정가 진입 대기 중이면 이 봉에서 체결/추격 판정
             self._resolve_pending(signal, atr_series, hi, lo, cl, ot, sb)
@@ -355,7 +364,7 @@ class Stepper:
         lev = _leverage_for(preset.sizing, equity, cfg.max_leverage)   # 현재 자산 기준 레버리지
         p = _open_position(preset, preset.sizing, ex_block, sig_close, fill_time, sb,
                            side, lev, equity, cfg, atr_series, signal,
-                           entry_maker=self.maker_entry, sb_time=sb_time)
+                           entry_maker=self.maker_entry, sb_time=sb_time, resolver=self._resolver)
         if p is not None:
             ex.open(p, is_maker=self.maker_entry)
             if self.on_open:
@@ -385,7 +394,7 @@ class Stepper:
         lev = _leverage_for(preset.sizing, equity, cfg.max_leverage)
         p = _open_position(preset, preset.sizing, preset.exit, price, ot, sb,
                            side, lev, equity, cfg, atr_series, signal, entry_maker=is_maker,
-                           sb_time=int(signal.open_time[sb]))
+                           sb_time=int(signal.open_time[sb]), resolver=self._resolver)
         if p is not None:
             ex.open(p, is_maker=is_maker)
             if self.on_open:
@@ -524,19 +533,19 @@ def _entry_allowed(sb, ot, filt, last_exit_idx, cfg) -> bool:
 
 
 def _open_position(preset, sizing, ex, price, ot, sb, side, lev, equity, cfg, atr_series, signal,
-                   entry_maker=False, sb_time=None):
+                   entry_maker=False, sb_time=None, resolver=None):
     atr_val = atr_series[sb]
     # 손절/익절가 먼저 계산 (리스크 사이징이 손절 거리를 필요로 함).
     # 롱 손절은 아래(-side), 익절은 위(+side). swing 타입은 side 무시.
     sl_cfg, tp_cfg = ex.get("stopLoss"), ex.get("takeProfit")
-    stop_price = _exit_level(sl_cfg, price, -side, atr_val, signal, sb) if sl_cfg else float("nan")
+    stop_price = _exit_level(sl_cfg, price, -side, atr_val, signal, sb, resolver) if sl_cfg else float("nan")
     stop_price = _valid_level(stop_price, price, -side)      # 방향 뒤집힌 손절 무효화
     if tp_cfg and tp_cfg.get("type") == "riskReward":
         # 손익비(R:R): 익절 거리 = 손절 거리 × value. 손절 없으면 익절도 없음(nan).
         tp_price = (price + side * float(tp_cfg["value"]) * abs(price - stop_price)
                     if not np.isnan(stop_price) else float("nan"))
     else:
-        tp_price = _exit_level(tp_cfg, price, side, atr_val, signal, sb) if tp_cfg else float("nan")
+        tp_price = _exit_level(tp_cfg, price, side, atr_val, signal, sb, resolver) if tp_cfg else float("nan")
         tp_price = _valid_level(tp_price, price, side)       # 방향 뒤집힌 익절 무효화
 
     qty, margin = _size_position(sizing, equity, price, lev, stop_price)

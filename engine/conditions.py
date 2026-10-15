@@ -25,7 +25,12 @@ class SeriesResolver:
 
     def resolve(self, operand) -> np.ndarray:
         if isinstance(operand, (int, float)):
-            return np.full(len(self.c), float(operand))
+            # 상수도 캐시 — evaluate 는 봉마다 호출되므로 매번 np.full(n) 이면 O(n²)
+            # (DOGE 5m 2100일: 백테스트 46초 중 33초가 여기였다).
+            key = ("const", float(operand))
+            if key not in self._cache:
+                self._cache[key] = np.full(len(self.c), float(operand))
+            return self._cache[key]
         key = self._key(operand)
         if key in self._cache:
             return self._cache[key]
@@ -90,9 +95,12 @@ class SeriesResolver:
         if name == "MA_GAP":
             return ind.ma_gap(c.close, int(params.get("fast", 22)), int(params.get("slow", period or 200)),
                               int(params.get("window", 1)))
+        if name == "MA_ANGLE":                              # 이평 각도(도) — ATR 기준. params sma 1/0 · lookback · scale
+            return ind.ma_angle(c.high, c.low, c.close, period or 75, bool(params.get("sma", 1)),
+                                int(params.get("lookback", 5)), int(params.get("atr", 14)), float(params.get("scale", 4.5)))
         if name == "MA_CROSSES":
             return ind.ma_crosses(c.close, int(params.get("fast", 22)), int(params.get("slow", period or 200)),
-                                  int(params.get("window", 20)))
+                                  int(params.get("window", 20)), bool(params.get("ma_only", 0)))
         if name == "BODY_ATR":
             return ind.body_atr(c.open, c.high, c.low, c.close, period or 14)
         if name == "VWAP_Z":
@@ -121,6 +129,29 @@ class SeriesResolver:
                                    float(params.get("bb_mult", 0.35)))
             line, rsi_ma = ind.qqe(c.close, rl, sm, float(params.get("factor_primary", 3.0)))
             return (rsi_ma - 50.0) if name == "QQE_RSI" else (line - 50.0)
+        if name == "ATR_RANK":
+            return ind.atr_rank(c.high, c.low, c.close, period or 14, int(params.get("lookback", 2016)))
+        if name == "RSI_DIV":
+            cvd_mode = int(params.get("cvd", 0))            # 0 RSI 만 · 1 RSI+CVD · 2 CVD 만
+            if cvd_mode and c.taker_buy is None:            # 오더플로우 데이터 없음 → 항상 false
+                return np.full(len(c), np.nan)
+            return ind.rsi_divergence(c.high, c.low, c.close, period or 14,
+                                      float(params.get("level", 30)), int(params.get("min_gap", 5)),
+                                      int(params.get("window", 60)), float(params.get("strength", 0)),
+                                      c.volume, c.taker_buy, cvd_mode)
+        if name == "FRACTAL":                               # 프랙탈 확정 봉: +1 저점(빨강) · -1 고점(파랑). period=좌우 봉
+            return ind.fractal(c.high, c.low, period or 2)
+        if name == "PULLBACK_FRACTAL":                      # 눌림 → 프랙탈 → 이평 재돌파: +1 롱 · -1 숏. period=이평 기간
+            ma = (ind.sma if params.get("sma") else ind.ema)(c.close, period or 20)     # params 는 숫자만 — sma 1=SMA, 0=EMA
+            return ind.pullback_fractal(c.high, c.low, c.close, ma, int(params.get("n", 2)),
+                                        int(params.get("window", 60)))
+        if name == "PIN_BAR":                               # +1 아래꼬리(강세) · -1 위꼬리(약세)
+            return ind.pin_bar(c.open, c.high, c.low, c.close, float(params.get("wick", 66)),
+                               float(params.get("body", 30)), float(params.get("min_atr", 0)),
+                               int(params.get("within", 1)))
+        if name == "TRIANGLE_BREAK":                        # +1 위 추세선 돌파 · -1 아래 추세선 이탈 (period=피벗 좌우 봉수)
+            return ind.triangle_breakout(c.high, c.low, c.close, period or 5, int(params.get("lookback", 100)),
+                                         float(params.get("tol", 10)), int(params.get("within", 1)))
         if name in ("SUPERTREND", "SUPERTREND_DIR"):
             line, d = ind.supertrend(c.high, c.low, c.close, period or 10,
                                      float(params.get("multiplier", 3.0)))
