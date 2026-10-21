@@ -266,7 +266,7 @@ def _ohlc_for_chart(base, tf_min: int, max_bars: int = 200000):
 
 
 # ---- 전략에 쓰인 지표 추출·계산 (차트 표시용) ----
-_OVERLAY_INDS = {"SMA", "EMA", "VWAP", "SUPERTREND", "BB_upper", "BB_mid", "BB_lower"}
+_OVERLAY_INDS = {"SMA", "EMA", "VWAP", "SUPERTREND", "BB_upper", "BB_mid", "BB_lower", "BOX_HIGH", "BOX_LOW"}
 # 오실레이터 → 패널 그룹키 (같은 그룹은 한 패널에 겹쳐 그림)
 _IND_PANE = {
     "RSI": "rsi", "MACD": "macd", "MACD_signal": "macd", "MACD_hist": "macd",
@@ -698,7 +698,12 @@ def _run_optimize(p: dict, emit) -> None:
     for vl in value_lists:
         total *= len(vl)
     workers = opt.resolve_workers(min(total, 3000))
-    emit({"type": "start", "total": total, "names": names, "workers": workers})
+    # AI 최적화는 같은 프리셋에 반복될수록 다중검정이 쌓인다 → 프리셋별 누적 조합 수로 귀무 게이트를 건다
+    gate_n = None
+    if p.get("aiOpt"):
+        from . import ai_optimize
+        gate_n = ai_optimize.tested(p.get("presetName")) + min(total, 3000)
+    emit({"type": "start", "total": total, "names": names, "workers": workers, "gateCombos": gate_n})
 
     use_oos = bool(p.get("useOOS", True))
     seen = {"n": 0}
@@ -718,7 +723,10 @@ def _run_optimize(p: dict, emit) -> None:
         min_trades=int(p.get("minTrades", 15)),
         is_frac=0.7 if use_oos else 1.0,
         progress_cb=on_combo,
+        gate_combos=gate_n,
     )
+    if gate_n is not None:
+        result["gateCombos"] = ai_optimize.add_tested(p.get("presetName"), result["evaluated"])
     result["rankingRegistered"] = _register_range_top(p, result, base, emit)
     result["type"] = "done"
     emit(result)
@@ -1049,9 +1057,16 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._send(400, json.dumps({"error": str(e)}))
             return
-        from . import video_analyze, ranking
-        routes = {"/api/backtest": _run_backtest, "/api/bt_trade_chart": _bt_trade_chart,
+        from . import video_analyze, ranking, ai_optimize
+        routes = {"/api/ai_propose": ai_optimize.propose, "/api/ai_explain": ai_optimize.explain,   # 백테스트 'AI 최적화'
+                  "/api/backtest": _run_backtest, "/api/bt_trade_chart": _bt_trade_chart,
                   "/api/video_preset": video_analyze.make_preset,          # 영상 분석 → 백테스트 프리셋
+                  "/api/video_chat": video_analyze.chat,                   # 대화하며 초안 다듬기(한 턴)
+                  "/api/video_chat_load": video_analyze.chat_load, "/api/video_chat_reset": video_analyze.chat_reset,
+                  "/api/video_chat_save": video_analyze.chat_save,         # 대화의 현재 초안 → 프리셋 저장
+                  "/api/video_search": video_analyze.search,               # 유튜브 검색(제외 채널 거름)
+                  "/api/video_excluded": video_analyze.excluded_list, "/api/video_exclude": video_analyze.exclude_channel,
+                  "/api/video_unexclude": video_analyze.unexclude_channel,
                   "/api/ranking_item": ranking.get, "/api/ranking_delete": ranking.delete,
                   "/api/collect": _run_collect, "/api/collect_chunk": _run_collect_chunk,
                   "/api/save_preset": _save_preset, "/api/delete_preset": _delete_preset}

@@ -139,6 +139,9 @@ class SeriesResolver:
                                       float(params.get("level", 30)), int(params.get("min_gap", 5)),
                                       int(params.get("window", 60)), float(params.get("strength", 0)),
                                       c.volume, c.taker_buy, cvd_mode)
+        if name in ("BOX_HIGH", "BOX_LOW"):                 # 직전 박스(시간 경계로 period 봉씩) 고·저 — 1분봉 5 = 직전 5분봉
+            bh, bl = ind.box_levels(c.open_time, c.high, c.low, period or 5, int(c.timeframe_min) * 60_000)
+            return bh if name == "BOX_HIGH" else bl
         if name == "FRACTAL":                               # 프랙탈 확정 봉: +1 저점(빨강) · -1 고점(파랑). period=좌우 봉
             return ind.fractal(c.high, c.low, period or 2)
         if name == "PULLBACK_FRACTAL":                      # 눌림 → 프랙탈 → 이평 재돌파: +1 롱 · -1 숏. period=이평 기간

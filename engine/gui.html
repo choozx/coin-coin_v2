@@ -37,6 +37,10 @@
   button { background:var(--accent); color:#fff; border:0; border-radius:7px;
            padding:11px; width:100%; font-size:14px; font-weight:600; cursor:pointer; margin-top:6px; }
   button:disabled { opacity:.5; cursor:wait; }
+  #aiOpt { background:#7c5cff; margin-top:8px; }
+  .aibox { border:1px solid rgba(124,92,255,.5); background:rgba(124,92,255,.07); border-radius:8px; padding:10px 12px; margin-bottom:12px;
+           line-height:1.6; white-space:pre-wrap; font-size:13px; }
+  .aibox b.h { display:block; margin-bottom:4px; }
   .presets { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:14px; }
   .presets button { width:auto; padding:6px 10px; font-size:12px; background:var(--panel2);
                     border:1px solid var(--line); font-weight:500; margin:0; }
@@ -246,7 +250,7 @@
       <div class="row" data-when="sl-value"><label id="slValueLabel">손절 % (가격)</label>
         <input type="number" id="slValue" value="1.5" step="0.1" min="0"></div>
       <div class="row" data-when="sl-swing"><label>룩백(봉)</label>
-        <input type="number" id="slLookback" value="20" min="2"></div>
+        <input type="number" id="slLookback" value="20" min="1"></div>
       <div class="row" data-when="sl-buf"><label>버퍼 %</label>
         <input type="number" id="slBuffer" value="0.05" step="0.05" min="0"></div>
       <div class="row" data-when="sl-st"><label>SuperTrend ATR기간</label>
@@ -271,7 +275,7 @@
         <input type="number" id="tpValue" value="3" step="0.1" min="0"></div>
       <div class="note" id="tpNote" style="color:var(--mut)"></div>
       <div class="row" data-when="tp-swing"><label>룩백(봉)</label>
-        <input type="number" id="tpLookback" value="20" min="2"></div>
+        <input type="number" id="tpLookback" value="20" min="1"></div>
       <div class="row" data-when="tp-swing"><label>버퍼 %</label>
         <input type="number" id="tpBuffer" value="0.05" step="0.05" min="0"></div>
       <div class="row" data-when="tp-st"><label>SuperTrend ATR기간</label>
@@ -367,6 +371,9 @@
 
     <!-- 버튼은 하나 — "범위"가 켜져 있으면 범위 테스트(최적화), 아니면 백테스트 -->
     <button id="run">▶ 백테스트 실행</button>
+    <button id="aiOpt">🤖 AI 최적화</button>
+    <div class="note" style="margin-top:6px">AI 가 이 프리셋에서 결과를 좌우할 값 1~3개와 범위를 골라 범위 테스트를 돌리고, 결과를 설명해요.
+      판정 기준은 이 프리셋으로 AI 최적화를 돌린 조합 수가 쌓일수록 올라가요. Claude 호출 2번(이 맥의 Claude 계정).</div>
    </div><!-- /pane-backtest -->
   </div>
 
@@ -437,7 +444,7 @@ const _MODE_MA = {k:"mode",label:"방식",type:"select",opts:[["price","가격 �
 const _MODE_OSC = {k:"mode",label:"방식",type:"select",opts:[["level","기준값 비교"],["cross","크로스(K·D)"]],v:"level",reflow:true};
 const _MODE_ST = {k:"mode",label:"방식",type:"select",opts:[["trend","추세 필터(가격 대비)"],["flip","전환 신호(플립)"]],v:"trend",reflow:true};
 // '직접 조건(고급)'용 — 엔진 지표 전부(schema/preset.schema.json 의 operand.indicator) + 가격 소스
-const ENGINE_INDICATORS = ["SMA", "EMA", "RSI", "MACD", "MACD_signal", "MACD_hist", "BB_upper", "BB_lower", "BB_mid", "ATR", "ADX", "PLUS_DI", "MINUS_DI", "STOCH_K", "STOCH_D", "STOCHRSI_K", "STOCHRSI_D", "CCI", "MFI", "RVOL", "VWAP", "VWAP_Z", "SMA_SLOPE", "MA_ANGLE", "MA_GAP", "MA_CROSSES", "BODY_ATR", "TAKER_DELTA", "TAKER_DELTA_RATIO", "CVD", "CVD_EMA", "HAWKEYE", "QQE_MOD", "QQE_RSI", "QQE_LINE", "SUPERTREND", "SUPERTREND_DIR", "RSI_DIV", "ATR_RANK", "PIN_BAR", "TRIANGLE_BREAK", "FRACTAL", "PULLBACK_FRACTAL", "CDL_BULLREV", "CDL_BEARREV", "CDL_ENGULFING", "CDL_HAMMER", "CDL_HANGINGMAN", "CDL_MORNINGSTAR", "CDL_EVENINGSTAR", "CDL_PIERCING", "CDL_DARKCLOUDCOVER"];
+const ENGINE_INDICATORS = ["SMA", "EMA", "RSI", "MACD", "MACD_signal", "MACD_hist", "BB_upper", "BB_lower", "BB_mid", "ATR", "ADX", "PLUS_DI", "MINUS_DI", "STOCH_K", "STOCH_D", "STOCHRSI_K", "STOCHRSI_D", "CCI", "MFI", "RVOL", "VWAP", "VWAP_Z", "SMA_SLOPE", "MA_ANGLE", "MA_GAP", "MA_CROSSES", "BODY_ATR", "TAKER_DELTA", "TAKER_DELTA_RATIO", "CVD", "CVD_EMA", "HAWKEYE", "QQE_MOD", "QQE_RSI", "QQE_LINE", "SUPERTREND", "SUPERTREND_DIR", "RSI_DIV", "ATR_RANK", "PIN_BAR", "TRIANGLE_BREAK", "FRACTAL", "PULLBACK_FRACTAL", "BOX_HIGH", "BOX_LOW", "CDL_BULLREV", "CDL_BEARREV", "CDL_ENGULFING", "CDL_HAMMER", "CDL_HANGINGMAN", "CDL_MORNINGSTAR", "CDL_EVENINGSTAR", "CDL_PIERCING", "CDL_DARKCLOUDCOVER"];
 const PRICE_SOURCES = [["close","종가"],["open","시가"],["high","고가"],["low","저가"],["volume","거래량"]];
 const OPERAND_OPTS = [...PRICE_SOURCES, ...ENGINE_INDICATORS.map(x => [x, x])];
 function customOperand(name, per, params) {
@@ -613,6 +620,12 @@ const COND_TYPES = {
     build:f=>({left:{indicator:"PULLBACK_FRACTAL",period:+f.period,params:{sma:f.ma==="SMA"?1:0,n:+f.n,window:+f.window}},
                cmp:f.dir==="long"?">":"<",right:0}),
     desc:n=>`${n.left.params.sma?"SMA":"EMA"}(${n.left.period}) ${n.cmp===">"?"눌림→저점 프랙탈→▲상향 돌파":"반등→고점 프랙탈→▼하향 돌파"} (프랙탈 ${n.left.params.n})` },
+  boxBreak: { label:"직전 박스 돌파(N봉 박스)",
+    fields:[{k:"dir",label:"방향",type:"select",opts:[["up","▲ 종가가 직전 박스 고가 상향 돌파"],["down","▼ 종가가 직전 박스 저가 하향 돌파"]],v:"up"},
+            {k:"n",label:"박스 봉 수",v:5,sweep:{path:"right.period",def:[3,10,1]}}],
+    build:f=>({cross:f.dir==="up"?"crossOver":"crossUnder",left:{source:"close"},
+               right:{indicator:f.dir==="up"?"BOX_HIGH":"BOX_LOW",period:+f.n}}),
+    desc:n=>`종가가 직전 ${n.right.period}봉 박스 ${n.cross==="crossOver"?"고가 ▲상향":"저가 ▼하향"} 돌파 (박스는 시간 경계로 ${n.right.period}봉씩)` },
   fractal: { label:"윌리엄스 프랙탈",
     fields:[{k:"dir",label:"종류",type:"select",opts:[["low","저점 프랙탈(빨강) 확정"],["high","고점 프랙탈(파랑) 확정"]],v:"low"},
             {k:"n",label:"좌우 봉",v:2,sweep:{path:"left.period",def:[2,7,5]}}],
@@ -898,6 +911,7 @@ function migrate(k, v) {
 
 function applyPreset(p) {
   if (!p) return;
+  if (aiPlan) { aiPlan = null; if ($("aiPlanBox")) $("out").innerHTML = ""; }   // 다른 프리셋의 AI 범위 확인은 버린다
   if (!("exitCustom" in p)) $("exitCustom").value = "";   // 이 칸이 없던 옛 프리셋이 직전 프리셋의 직접 청산을 물려받지 않게
   for (const [k,v0] of Object.entries(p)) {
     if (k === "entry") continue;
@@ -1419,6 +1433,7 @@ const FIXED_SWEEP = { slValue:[0.5,2.5,0.5], tpValue:[0.5,3,0.5],
 const FIXED_LABEL = { slValue:"손절 값", tpValue:"익절 값", exitCondValue:"청산 기준값",
   exitCondPeriod:"청산 기간", timeStopBars:"시간청산", leverage:"레버리지", sizeValue:"사이징 값" };
 let sweepState = {};   // key → {min,max,step} : 체크된(범위 탐색) 파라미터만 담김
+let aiPlan = null;     // AI 최적화가 고른 범위의 확인 대기 상태 {reason, testedBefore, costUsd} — 실행·취소·프리셋 변경 시 비움
 
 // 백테스트 폼의 고정 필드 옆에 "범위" 토글 + 범위 편집기를 1회 주입
 function injectFixedSweeps() {
@@ -1508,6 +1523,7 @@ function comboCountOf(sweep) {
 }
 function updateComboCount() {
   updateRunButton();
+  updateAiPlan();
   const sweep = collectSweep();
   const keys = Object.keys(sweep);
   if (!keys.length) { $("comboCount").textContent = '탐색할 값 옆의 "범위" 체크박스를 켜줘'; return; }
@@ -1528,27 +1544,28 @@ $("exitCondInd").addEventListener("change", () => {
 // 방식/사용여부가 바뀌면 스윕 적용 가능성이 달라짐 → 조합수 갱신
 ["exitCondEnabled","slType","tpType"].forEach(id => $(id).addEventListener("change", updateComboCount));
 
-async function runOptimize() {
+async function runOptimize(opts = {}) {
   if (!entryGroups.length) { $("err").innerHTML = '<div class="err">진입 조건을 하나 이상 추가해줘 (진입 섹션)</div>'; return; }
   const sweep = collectSweep();
   if (!Object.keys(sweep).length) {
     $("err").innerHTML = '<div class="err">탐색할 값 옆의 "범위" 체크박스를 하나 이상 켜줘</div>'; return;
   }
   const combos = comboCountOf(sweep);
-  if (combos > 400 && !confirm(`총 ${combos.toLocaleString()}개 조합을 백테스트해. 시간이 걸릴 수 있어. 계속?`)) return;
+  if (!opts.ai && combos > 400 && !confirm(`총 ${combos.toLocaleString()}개 조합을 백테스트해. 시간이 걸릴 수 있어. 계속?`)) return;
   const btn = $("run"); btn.disabled = true; btn.textContent = "범위 테스트 중...";
   $("err").innerHTML = "";
   const started = performance.now();
   try {
     const body = { ...collect(), sweep, objective:"calmar",
                    minTrades:+$("minTrades").value, useOOS:$("useOOS").checked,
-                   presetName: currentPresetName, form: cpSerialize() };       // 상위 조합 랭킹 등록용
+                   presetName: currentPresetName, form: cpSerialize(),         // 상위 조합 랭킹 등록용
+                   aiOpt: !!opts.ai };                                          // AI 최적화 = 프리셋별 누적 조합으로 판정
     const res = await fetch("/api/optimize", {method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify(body)});
     if (!res.ok || !res.body) throw new Error("서버 응답 오류 (" + res.status + ")");
     // NDJSON 스트림 파싱 — 조합이 끝나는 대로 이벤트 도착
     const reader = res.body.getReader(), dec = new TextDecoder();
-    const live = { rows: [], passed: 0, total: combos, objName: "calmar", started };
+    const live = { rows: [], passed: 0, total: combos, objName: "calmar", started, ai: opts.ai };
     let buf = "";
     while (true) {
       const { done, value } = await reader.read();
@@ -1560,6 +1577,7 @@ async function runOptimize() {
         if (line) handleOptEvent(JSON.parse(line), live);
       }
     }
+    return live.result;
   } catch (e) {
     $("err").innerHTML = `<div class="err">에러: ${e.message}</div>`;
   } finally {
@@ -1593,7 +1611,7 @@ function handleOptEvent(ev, live) {
     const el = $("optProgText"); if (el) el.textContent = ev.text;
     return;
   }
-  if (ev.type === "done") { renderOpt(ev); }
+  if (ev.type === "done") { live.result = ev; renderOpt(ev, live.ai); }
 }
 function renderOptLive(live) {
   const box = $("optLive"); if (!box) return;
@@ -1612,14 +1630,18 @@ function renderOptLive(live) {
   box.innerHTML = h;
 }
 
-function renderOpt(d) {
+function renderOpt(d, ai) {
   const names = d.names;
-  let html = `<div class="chartbox"><h3>최적화 결과 · ${d.objective.toUpperCase()} 기준 · `
+  const gateN = d.gateCombos || d.totalCombos;           // AI 최적화면 이 프리셋 누적 시험 조합
+  let html = ai ? `<div class="aibox" id="aiBox"><b class="h">🤖 AI 가 고른 범위</b>${escapeHtml(ai.reason)}`
+      + `<div id="aiExplain" style="margin-top:8px;color:var(--mut)">🤖 결과 읽는 중…</div></div>` : "";
+  html += `<div class="chartbox"><h3>최적화 결과 · ${d.objective.toUpperCase()} 기준 · `
     + `총 ${d.totalCombos}조합 중 ${d.passed}개 통과 (최소 ${d.minTrades}트레이드)`
     + `${d.truncated ? " · ⚠️상한 초과, 일부만" : ""}</h3>`;
   html += '<div class="note">IS=최적화(앞70%) · OOS=검증(뒤30%). '
     + '<b>견고</b>=IS·OOS 둘 다 수익. <b>랜덤보다 나음</b>=OOS 에서 같은 거래들(보유·방향 그대로)을 아무 때나 사고판 랜덤 2,000번 중 '
-    + `이 값보다 잘 번 횟수. 조합을 ${d.totalCombos}개나 뒤졌으니 그중 하나는 운으로도 잘 나와 — 그래서 ✅ 문턱은 '랜덤 ${d.totalCombos}개를 뽑아 그중 최고'보다 높아야 해(칸에 마우스를 올리면 문턱이 보여). `
+    + `이 값보다 잘 번 횟수. 조합을 ${gateN}개나 뒤졌으니 그중 하나는 운으로도 잘 나와 — 그래서 ✅ 문턱은 '랜덤 ${gateN}개를 뽑아 그중 최고'보다 높아야 해(칸에 마우스를 올리면 문턱이 보여). `
+    + (d.gateCombos ? `<b>AI 최적화라 이 프리셋으로 지금까지 시험한 조합 ${d.gateCombos}개를 기준으로 판정했어.</b> ` : "")
     + '<b style="color:var(--up)">둘 다 ✅ 인 값만 의미가 있어.</b> 견고만 ✅ 인 값은 "다른 구간에서도 벌었지만 랜덤과 구별 안 됨"이야.</div>';
   const reg = d.rankingRegistered || [];
   if (reg.length) {
@@ -1646,7 +1668,7 @@ function renderOpt(d) {
     const ns = nl && nl.samples ? nl.samples : 2000;
     const better = nl && !nl.error ? Math.max(0, ns - Math.round(nl.percentile * ns / 100)) : 0;
     html += !nl ? '<td>-</td>' : nl.error ? `<td title="${nl.error}">오류</td>`
-      : `<td title="랜덤 보통(중앙) ${nl.nullMedian}% · 랜덤 상위 5% ${nl.nullP95}% · ✅ 문턱(랜덤 ${d.totalCombos}개 중 최고의 상위 5%) ${nl.bestOfNP95}%">`
+      : `<td title="랜덤 보통(중앙) ${nl.nullMedian}% · 랜덤 상위 5% ${nl.nullP95}% · ✅ 문턱(랜덤 ${gateN}개 중 최고의 상위 5%) ${nl.bestOfNP95}%">`
         + `${lucky ? "✅" : "❌"} <span style="opacity:.7">랜덤 ${ns.toLocaleString()}번 중 ${better.toLocaleString()}번이 더 잘 범</span></td>`;
     html += `<td><button class="apply" data-i="${idx}">적용</button></td></tr>`;
   });
@@ -1656,6 +1678,101 @@ function renderOpt(d) {
   document.querySelectorAll(".apply").forEach(b => b.onclick = () => applyParams(d.top[+b.dataset.i].params));
   if (d.heatmap) drawHeat(d.heatmap);
 }
+
+// ---- 🤖 AI 최적화: 후보(범위를 켤 수 있는 값) → AI 가 1~3개·범위 선택 → 범위 테스트 → AI 설명 ----
+function sweepCandidates() {
+  const out = [], seen = new Set();
+  document.querySelectorAll(".swcb").forEach(cb => {
+    const key = cb.dataset.key;
+    if (seen.has(key) || !sweepApplicable(key)) return;
+    seen.add(key);
+    const def = (cb.dataset.def || "").split(",").map(Number);
+    let value = null;
+    if (key.startsWith("@entry:")) {
+      const [, gi, ci, path] = key.split(":");
+      const c = entryGroups[+gi].conds[+ci];
+      const fld = getFields(c.type, c.f).find(f => f.sweep && f.sweep.path === path);
+      value = fld ? c.f[fld.k] : null;
+    } else if ($(key)) value = $(key).value;
+    const isInt = def.length === 3 && Number.isInteger(def[0]) && Number.isInteger(def[2])
+                  && (value === null || value === "" || Number.isInteger(+value));
+    out.push({ key, label: labelFor(key), value, def, int: isInt });
+  });
+  return out;
+}
+async function postJson(url, body) {
+  const r = await (await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json();
+  if (r.error) throw new Error(r.error);
+  return r;
+}
+// 1단계: AI 가 범위를 고른다 → 예상 조합 수·판정 기준을 먼저 보여 주고 멈춘다(실행은 확인 버튼으로).
+// 고른 범위는 왼쪽 '범위' 칸에 그대로 들어가 있어 손으로 고칠 수 있고, 조합 수는 고치는 대로 다시 센다.
+async function aiOptimize() {
+  if (!entryGroups.length) { $("err").innerHTML = '<div class="err">진입 조건을 하나 이상 추가해줘 (진입 섹션)</div>'; return; }
+  const btn = $("aiOpt"), run = $("run");
+  btn.disabled = run.disabled = true;
+  $("err").innerHTML = ""; aiPlan = null;
+  const started = performance.now();
+  $("out").innerHTML = `<div class="aibox"><b class="h">🤖 AI 최적화</b><span id="aiProg">프리셋을 읽고 탐색할 값과 범위를 고르는 중</span></div>`;
+  const tick = setInterval(() => { const el = $("aiProg");
+    if (el) el.textContent = `프리셋을 읽고 탐색할 값과 범위를 고르는 중 · ${((performance.now() - started) / 1000).toFixed(0)}초`; }, 500);
+  try {
+    const prop = await postJson("/api/ai_propose", { presetName: currentPresetName, candidates: sweepCandidates(), params: collect() });
+    sweepState = {};
+    for (const [k, sp] of Object.entries(prop.sweep)) sweepState[k] = { min: sp.min, max: sp.max, step: sp.step };
+    aiPlan = { reason: prop.reply, testedBefore: prop.testedBefore || 0, costUsd: prop.costUsd };
+    $("out").innerHTML = `<div class="aibox" id="aiPlanBox"></div>`;
+    restoreSweepUI(); updateComboCount();               // → updateAiPlan 이 상자를 채운다
+  } catch (e) {
+    $("out").innerHTML = ""; $("err").innerHTML = `<div class="err">AI 범위 고르기 실패: ${escapeHtml(e.message)}</div>`;
+  } finally {
+    clearInterval(tick);
+    btn.disabled = run.disabled = false; updateRunButton();
+  }
+}
+
+function updateAiPlan() {
+  const box = $("aiPlanBox"); if (!box || !aiPlan) return;
+  const sweep = collectSweep(), keys = Object.keys(sweep);
+  const n = keys.length ? comboCountOf(sweep) : 0, gate = aiPlan.testedBefore + n;
+  const est = Math.max(1, Math.ceil(n * 0.4));
+  box.innerHTML = `<b class="h">🤖 AI 가 고른 범위 — 아직 안 돌렸어요</b>`
+    + (keys.length ? keys.map(k => `· ${escapeHtml(labelFor(k))}: ${sweep[k].min} ~ ${sweep[k].max} (단위 ${sweep[k].step})`).join("\n")
+                   : "· 범위가 다 꺼졌어요 — 왼쪽에서 '범위'를 켜 주세요")
+    + `\n${escapeHtml(aiPlan.reason)}\n\n`
+    + `<b>예상 조합 ${n.toLocaleString()}개</b> · 예상 ~${est}초 · 판정 기준: 이 프리셋 누적 ${aiPlan.testedBefore.toLocaleString()}개 + 이번 ${n.toLocaleString()}개 `
+    + `= <b>${gate.toLocaleString()}개 중 최고</b>보다 나아야 통과\n`
+    + `<span style="color:var(--mut)">범위는 왼쪽 '범위' 칸에 들어가 있어요. 고치면 이 숫자도 바뀌어요.`
+    + `${aiPlan.costUsd != null ? ` · 범위 고르기 비용 약 $${Number(aiPlan.costUsd).toFixed(2)}` : ""}</span>`
+    + `<div style="display:flex;gap:8px;margin-top:10px">`
+    + `<button id="aiGo" style="background:#7c5cff;margin:0"${n ? "" : " disabled"}>▶ 이대로 실행 (${n.toLocaleString()}조합)</button>`
+    + `<button id="aiCancel" style="background:var(--panel2);border:1px solid var(--line);color:var(--fg);margin:0">취소</button></div>`;
+  $("aiGo").onclick = aiRun;
+  $("aiCancel").onclick = () => { aiPlan = null; sweepState = {}; restoreSweepUI(); updateComboCount(); $("out").innerHTML = ""; };
+}
+
+// 2단계: 확인하면 범위 테스트(누적 판정) → AI 해석
+async function aiRun() {
+  if (!aiPlan) return;
+  const plan = aiPlan, btn = $("aiOpt");
+  const sweep = collectSweep();
+  const labels = Object.fromEntries(Object.keys(sweep).map(k => [k, labelFor(k)]));
+  const reason = Object.entries(sweep).map(([k, sp]) => `· ${labels[k]}: ${sp.min} ~ ${sp.max} (단위 ${sp.step})`).join("\n")
+    + `\n${plan.reason}`;
+  aiPlan = null;
+  btn.disabled = true;
+  const res = await runOptimize({ ai: { reason } });
+  btn.disabled = false;
+  if (!res) return;
+  try {
+    const ex = await postJson("/api/ai_explain", { presetName: currentPresetName, labels, reason: plan.reason, result: res });
+    const el = $("aiExplain");
+    if (el) { el.style.color = ""; el.innerHTML = `<b class="h">🤖 결과 해석</b>${escapeHtml(ex.reply)}`; }
+  } catch (e) {
+    const el = $("aiExplain"); if (el) el.textContent = `AI 설명을 못 받았어요: ${e.message}`;
+  }
+}
+$("aiOpt").onclick = aiOptimize;
 
 function setNodePath(node, path, value) {
   let d = node;

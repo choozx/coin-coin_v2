@@ -126,13 +126,15 @@ def resolve_workers(n_combos, workers=None):
 
 def optimize(base, build_preset_fn, fixed_params, sweep_specs, cfg,
              objective="calmar", min_trades=15, is_frac=0.7, top_k=20, max_combos=3000,
-             workers=None, progress_cb=None, null_samples=2000, timeframe=None):
+             workers=None, progress_cb=None, null_samples=2000, timeframe=None, gate_combos=None):
     """그리드 서치 (병렬).
 
     build_preset_fn: params dict → 프리셋 dict (server._build_preset 재사용, 프로세스 간 pickle 가능해야 함)
     fixed_params:    폼 전체 값 (탐색 안 하는 것 포함)
     sweep_specs:     {param: {min,max,step}} 탐색 대상
     progress_cb:     (done, total, row|None) — IS 조합 하나 끝날 때마다 호출. row=통과 결과 dict 또는 None.
+    gate_combos:     귀무 게이트의 '몇 개 중 최고' N. 기본은 이번 격자 크기 — 같은 아이디어를 여러 번 돌렸으면
+                     지금까지 시험한 조합 수 전체를 넘겨야 정직하다(백테스트 'AI 최적화'의 프리셋별 누적).
     """
     names = list(sweep_specs.keys())
     value_lists = [expand_spec(sweep_specs[n]) for n in names]
@@ -199,7 +201,7 @@ def optimize(base, build_preset_fn, fixed_params, sweep_specs, cfg,
         # IS 는 우리가 뒤진 구간이라 거기서 귀무를 넘는 건 당연하다(그러라고 고른 값이다).
         # 정직한 질문은 "안 본 구간에서, 같은 조건의 무근거 진입보다 나았나" 하나다.
         _null_gate(base_oos, top, cfg, build_preset_fn, fixed_params, names,
-                   timeframe, len(combos), null_samples)
+                   timeframe, max(gate_combos or 0, len(combos)), null_samples)
     for r in top:
         r.pop("combo", None)
 

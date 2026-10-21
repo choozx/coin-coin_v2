@@ -633,6 +633,34 @@ def triangle_breakout(high, low, close, pivot: int = 5, lookback: int = 100, tol
     return _hold(sig, int(within))
 
 
+# ---- 직전 박스 고·저 (영상 '5봉 박스 돌파') ----
+def box_levels(open_time, high, low, n: int, tf_ms: int):
+    """시간 경계로 n 봉씩 끊은 블록(예: 1분봉 n=5 → 5분 단위)에서, 각 봉이 속한 블록의 **직전 블록** 고가·저가.
+
+    블록 안에서는 값이 일정하고 새 블록 첫 봉에서 바뀐다 — 직전 블록은 이미 닫혔으니 인과적.
+    값이 캔들 시각으로만 정해져 데이터 창이 어디서 시작하든 같다: 창이 블록 중간에서 시작하면 그 첫 블록은
+    잘린 것이라 '직전 블록'으로 쓰지 않는다(NaN). 블록 하나가 통째로 비면(데이터 구멍) 그다음도 NaN.
+    """
+    t = np.asarray(open_time, dtype=np.int64)
+    h, lo = _d(high), _d(low)
+    nb = len(t)
+    out_h, out_l = np.full(nb, np.nan), np.full(nb, np.nan)
+    if nb == 0 or n < 1 or tf_ms <= 0:
+        return out_h, out_l
+    size = int(n) * int(tf_ms)
+    blk = t // size
+    starts = np.flatnonzero(np.r_[True, blk[1:] != blk[:-1]])
+    lens = np.diff(np.r_[starts, nb])
+    bh, bl = np.maximum.reduceat(h, starts), np.minimum.reduceat(lo, starts)
+    ids = blk[starts]
+    ok = np.r_[False, ids[1:] == ids[:-1] + 1]               # 바로 앞 블록이 있어야
+    if len(ok) > 1 and t[0] % size != 0:
+        ok[1] = False                                         # 첫 블록이 잘렸다
+    prev_h = np.where(ok, np.r_[np.nan, bh[:-1]], np.nan)
+    prev_l = np.where(ok, np.r_[np.nan, bl[:-1]], np.nan)
+    return np.repeat(prev_h, lens), np.repeat(prev_l, lens)
+
+
 # ---- 윌리엄스 프랙탈 · 눌림 → 프랙탈 → 재돌파 (영상 '마하세븐' 이평선 눌림목) ----
 def fractal_points(high, low, n: int = 2):
     """윌리엄스 프랙탈 (저점 중심 인덱스들, 고점 중심 인덱스들). 좌우 n 봉보다 낮은 저점 / 높은 고점.

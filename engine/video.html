@@ -71,6 +71,49 @@
   .grid2 { display:grid; grid-template-columns:110px 1fr; gap:4px 10px; font-size:13px; }
   .grid2 .k { color:var(--mut); padding-top:2px; }
   .empty { color:var(--mut); padding:40px 0; text-align:center; line-height:1.8; }
+  /* 유튜브 검색 — 고르면 그 영상을 분석 */
+  .srow { display:flex; gap:6px; }
+  .srow input { flex:1; min-width:0; }
+  .srow select { background:var(--panel2); border:1px solid var(--line); color:var(--fg); border-radius:7px; padding:0 6px; font-size:12px; }
+  .srow button { width:auto; margin:0; }
+  #sres { max-height:460px; overflow-y:auto; margin-top:8px; }
+  .sitem { padding:6px 8px; border:1px solid var(--line); border-radius:7px; margin-bottom:6px; background:var(--panel); }
+  .sitem.sel { border-color:var(--accent); }
+  .sitem .t { font-size:12px; font-weight:600; line-height:1.35; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .sitem .s { font-size:11px; color:var(--mut); margin-top:2px; line-height:1.35; }
+  .sitem .b { display:flex; gap:4px; margin-top:4px; }
+  .sitem .b button { width:auto; margin:0; padding:3px 8px; font-size:11px; font-weight:500; }
+  .sitem .b .sx { background:var(--panel2); border:1px solid var(--line); color:var(--mut); }
+  .exl { display:flex; justify-content:space-between; gap:6px; font-size:12px; padding:3px 0; }
+  .exl a { color:var(--mut); cursor:pointer; }
+  .or { color:var(--mut); font-size:11px; margin:16px 0 6px; }
+  /* 영상과 대화하며 프리셋 만들기 — 왼쪽 대화 · 오른쪽 현재 초안 */
+  .chat { display:grid; grid-template-columns:minmax(0,1fr) 340px; gap:12px; margin-bottom:12px; }
+  @media (max-width:1000px) { .chat { grid-template-columns:1fr; } }
+  .chat > div { border:1px solid var(--line); border-radius:8px; background:var(--panel2); padding:10px 12px; min-width:0; }
+  .msgs { max-height:460px; overflow-y:auto; display:flex; flex-direction:column; gap:8px; padding:2px 0 8px; }
+  .msg { max-width:88%; padding:8px 11px; border-radius:10px; line-height:1.6; white-space:pre-wrap; word-break:break-word; font-size:13px; }
+  .msg.user { align-self:flex-end; background:#24406b; }
+  .msg.assistant { align-self:flex-start; background:var(--panel); border:1px solid var(--line); }
+  .msg .m { display:block; color:var(--mut); font-size:11px; margin-top:4px; white-space:normal; }
+  .msg .m .ok { font-weight:600; } .msg .m .no { font-weight:600; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; }
+  .chip { width:auto; margin:0; padding:5px 10px; font-size:12px; font-weight:500; background:var(--panel); border:1px solid var(--line); color:var(--fg); border-radius:14px; }
+  .chip:hover { border-color:var(--accent); }
+  .ask { display:flex; gap:8px; align-items:flex-end; border-top:1px solid var(--line); padding-top:8px; }
+  .ask textarea { flex:1; min-width:0; resize:vertical; min-height:42px; max-height:200px; background:var(--panel); border:1px solid var(--line);
+                  color:var(--fg); border-radius:7px; padding:8px 10px; font:inherit; font-size:13px; }
+  .ask button { width:auto; margin:0; }
+  .chat .foot { display:flex; gap:10px; color:var(--mut); font-size:11px; margin-top:6px; flex-wrap:wrap; }
+  .chat .foot a { color:var(--mut); cursor:pointer; text-decoration:underline; margin-left:auto; }
+  .dr h4 { font-size:12px; color:var(--mut); margin:0 0 8px; font-weight:600; display:flex; gap:6px; align-items:center; }
+  .dr .sec { margin-bottom:9px; font-size:12px; line-height:1.55; }
+  .dr .sec > .k { color:var(--mut); font-weight:600; margin-bottom:2px; }
+  .dr .cond code { font-size:11.5px; }
+  .dr .cond .n { color:var(--mut); font-size:11px; }
+  .dr input[type=text] { padding:7px 9px; font-size:12px; }
+  .dr .fresh { animation:flash 1.2s ease-out; }
+  @keyframes flash { from { background:rgba(79,157,255,.25); } to { background:transparent; } }
 </style>
 </head>
 <body>
@@ -83,6 +126,14 @@
 </header>
 <div class="wrap">
   <div class="side">
+    <div class="srow">
+      <input type="text" id="q" placeholder="유튜브 검색 (예: 비트코인 RSI 매매법)">
+      <select id="qsort" title="정렬"><option value="relevance">관련도</option><option value="date">최신</option><option value="views">조회수</option></select>
+      <button id="qgo">검색</button>
+    </div>
+    <div id="sres"></div>
+    <details id="exbox" style="margin-top:6px"><summary id="exsum">제외한 채널</summary><div id="exlist"></div></details>
+    <div class="or">또는 링크로</div>
     <input type="text" id="url" placeholder="유튜브 링크 (youtu.be/… 또는 youtube.com/watch?v=…)">
     <label class="chk"><input type="checkbox" id="force"> 저장된 분석이 있어도 다시 분석</label>
     <button id="go">분석하기</button>
@@ -93,7 +144,7 @@
     <div class="hist"><h3>지난 분석</h3><div id="hist"><div class="note">불러오는 중…</div></div></div>
   </div>
   <div class="main" id="out">
-    <div class="empty">왼쪽에 트레이딩 영상 링크를 넣고 <b>분석하기</b>를 눌러 주세요.<br>
+    <div class="empty">왼쪽에서 유튜브를 검색해 영상을 고르거나, 링크를 넣고 <b>분석하기</b>를 눌러 주세요.<br>
       지표와 진입/청산/손절 규칙마다 ✅ 엔진에 있음 · 🛠 구현 가능 · ⛔ 구현 불가 를 표시해요.</div>
   </div>
 </div>
@@ -154,6 +205,8 @@ function render(r) {
       + `${d("ready", "✅")} · ${d("buildable", "🛠")} · ${d("impossible", "⛔")}</div>`;
   }
 
+  h += `<div class="card"><h3 style="color:var(--fg);font-size:14px">💬 이 영상과 대화하며 프리셋 만들기</h3><div id="chat"><div class="prog">대화 불러오는 중…</div></div></div>`;
+
   h += `<div class="card"><h3>지표</h3>` + ((a.indicators || []).length
     ? `<table><thead><tr><th style="width:150px">지표</th><th style="width:150px">설정</th><th style="width:120px">상태</th><th>엔진에서 / 구현 방법 / 불가 이유</th></tr></thead><tbody>`
       + a.indicators.map(i => `<tr><td><b>${esc(i.name)}</b></td><td>${esc(i.settings)}</td><td>${badge(ST, i.status)}</td>`
@@ -166,8 +219,8 @@ function render(r) {
     h += `<div class="card"><h3 style="color:var(--fg);font-size:14px;display:flex;align-items:center;gap:6px">${esc(s.name)}<span class="tag">${DIR[s.direction] || esc(s.direction)}</span>`
       + `${s.timeframe ? `<span class="tag">${esc(s.timeframe)}</span>` : ""}`
       + (canMake ? `<button class="mk" data-si="${si}">${made(si).length ? "⚙️ 하나 더 만들기" : "⚙️ 프리셋 만들기"}</button>`
-                 : `<span class="note" style="margin-left:auto;font-weight:400">엔진에 있는 진입 규칙이 없어 프리셋 불가</span>`) + `</h3>`
-      + madeHtml(si)
+                 : `<span class="note" style="margin-left:auto;font-weight:400">엔진에 있는 진입 규칙이 없어 바로 만들기는 불가 — 위 대화에서 물어보세요</span>`) + `</h3>`
+      + `<div id="made_${si}">${madeHtml(si)}</div>`
       + `<div class="mkout" id="mk_${si}"></div>`
       + `<table><thead><tr><th style="width:60px">구분</th><th>규칙</th><th style="width:120px">상태</th><th>엔진에서 / 구현 방법 / 불가 이유</th></tr></thead><tbody>`
       + (s.rules || []).map(x => `<tr><td class="part">${esc(x.part)}</td><td>${esc(x.text)}</td><td>${badge(ST, x.status)}</td><td>${esc(x.how)}</td></tr>`).join("")
@@ -178,6 +231,7 @@ function render(r) {
   h += `<div class="card"><details><summary>자막 원문 보기 (${(m.transcript || "").length.toLocaleString()}자)</summary><pre>${esc(m.transcript)}</pre></details></div>`;
   $("out").innerHTML = h;
   document.querySelectorAll(".mk").forEach(b => b.onclick = () => makePreset(m.id, +b.dataset.si, b));
+  openChat(m.id, a.strategies || []);
 }
 
 // 분석의 매매법 하나 → 백테스트 프리셋(✅ 규칙만). 서버가 Claude 로 초안 → 화면과 같은 경로로 빌드·검증 → presets/saved 저장.
@@ -198,12 +252,202 @@ async function makePreset(id, si, btn) {
       + `<div class="note" style="margin-top:6px">심볼은 BTCUSDT·기간 365일로 들어가요. 백테스트 화면에서 바꾸고 실행하세요.`
       + `${r.costUsd != null ? ` · 비용 약 $${Number(r.costUsd).toFixed(2)}` : ""}</div></div>`;
     presetRecs[si] = [...made(si).filter(p => p.name !== r.name), { name: r.name, exists: true }];
+    $("made_" + si).innerHTML = madeHtml(si);
     btn.textContent = "⚙️ 하나 더 만들기";
     loadHist();
   } catch (e) {
     box.innerHTML = `<div class="err" style="margin-bottom:10px">프리셋 실패: ${esc(e.message)}</div>`;
     btn.textContent = "⚙️ 프리셋 만들기";
   } finally { btn.disabled = false; }
+}
+
+// ---- 영상과 대화하며 프리셋 만들기 (영상 하나에 대화 하나) ----
+// 턴마다 서버가 Claude 를 한 번 부른다(도구 없음). 대화·초안은 서버 data/video/<id>/chat.json 에 저장돼 다시 열면 이어진다.
+// AI 는 그 영상의 매매법 전부를 안다. 초안은 하나 — 어느 매매법 기반인지 표시한다.
+// Claude 가 낸 초안은 서버가 엔진 검증을 통과시킨 것만 반영한다. 저장은 여기 버튼으로만.
+let chatC = { id: null, st: null, busy: false, strats: [] };
+const post = async (url, body) => {
+  const r = await (await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json();
+  if (r.error) throw new Error(r.error);
+  return r;
+};
+
+async function openChat(id, strats) {
+  chatC = { id, st: null, busy: false, strats };
+  try {
+    const st = await post("/api/video_chat_load", { id });
+    if (chatC.id !== id) return;                           // 그 사이 다른 영상을 열었다
+    chatC.st = st;
+    renderChat();
+  } catch (e) { $("chat").innerHTML = `<div class="err">대화를 못 불러왔어요: ${esc(e.message)}</div>`; }
+}
+
+// 초안 표시 — 엔진 조건을 사람이 읽는 줄로
+const OPN = { crossOver: "↗ 상향 돌파", crossUnder: "↘ 하향 돌파" };
+function opd(o) {
+  if (!o) return "?";
+  if (o.kind === "number") return String(o.value ?? 0);
+  if (o.kind === "source") return o.source || "close";
+  const pj = (o.params_json || "").trim();
+  return `${o.indicator}${o.period ? `(${o.period})` : ""}${pj ? ` ${pj}` : ""}`;
+}
+const condHtml = c => `<div class="cond"><code>${esc(opd(c.left))} ${esc(OPN[c.op] || c.op)} ${esc(opd(c.right))}</code>`
+  + `${c.note ? ` <span class="n">${esc(c.note)}</span>` : ""}</div>`;
+function targetText(t, isStop) {
+  const v = t && t.value, buf = t && t.buffer_pct ? ` ± ${t.buffer_pct}%` : "";
+  switch (t && t.type) {
+    case "percent": return `${v}%`;
+    case "atrMultiple": return `ATR × ${v}`;
+    case "riskReward": return `손절폭 × ${v}`;
+    case "swing": return `최근 ${t.lookback || 20}봉 ${isStop ? "전저/전고" : "전고/전저"}${buf}`;
+    case "indicator": return `진입 때 ${t.ind || "EMA"}${t.ind_period || 50} 값${buf}`;
+    default: return "없음";
+  }
+}
+function draftHtml(d) {
+  if (!d) return `<div class="note">아직 초안이 없어요. 왼쪽에서 "초안 만들어줘"라고 해 보세요.</div>`;
+  const sec = (k, body) => `<div class="sec"><div class="k">${k}</div>${body}</div>`;
+  const groups = (d.groups || []).filter(g => (g.conds || []).length);
+  const base = chatC.strats[d.strategy_index];
+  let h = sec("이름 · 타임프레임", `${esc(d.name)} <span class="tag">${esc(d.timeframe)}</span>`);
+  h += sec("기반 매매법", base ? esc(base.name) : `<span class="note">특정 매매법 아님(섞음·새로 만듦)</span>`);
+  h += sec("진입 (그룹 안은 모두 충족, 그룹끼리는 하나만)", groups.length ? groups.map((g, i) =>
+    `<div style="margin-bottom:4px"><span class="tag" style="margin:0 0 3px">${DIR[g.side] || esc(g.side)} ${i + 1}</span>${g.conds.map(condHtml).join("")}</div>`).join("")
+    : `<span class="no">진입 조건 없음 — 저장 불가</span>`);
+  const xl = d.exit_long || [], xs = d.exit_short || [];
+  h += sec("청산 조건 (하나라도)", (xl.length || xs.length)
+    ? (xl.length ? `<div>롱: ${xl.map(condHtml).join("")}</div>` : "") + (xs.length ? `<div>숏: ${xs.map(condHtml).join("")}</div>` : "")
+    : `<span class="note">없음</span>`);
+  h += sec("손절 · 익절", `손절 ${esc(targetText(d.stop, true))}<br>익절 ${esc(targetText(d.take, false))}`
+    + (d.time_stop_bars ? `<br>${d.time_stop_bars}봉 뒤 청산` : ""));
+  h += sec(`<span class="mid">기본값·사용자 지정</span>`, list(d.assumed));
+  h += sec(`<span class="no">빠진 규칙</span>`, list(d.excluded));
+  return h;
+}
+
+function suggestions() {
+  return [...chatC.strats.slice(0, 3).map(s => `'${s.name}' 초안 만들어줘`), "영상에서 손절·익절은 뭐라고 했어?",
+          "엔진으로 못 만드는 규칙은 뭐고 대안은 있어?"];
+}
+
+function renderChat(fresh) {
+  const c = chatC, st = c.st, box = $("chat");
+  if (!box || !st) return;
+  const typed = $("chatin") ? $("chatin").value : "";
+  const msgs = (st.messages || []).map(m => {
+    if (m.role === "user") return `<div class="msg user">${esc(m.text)}</div>`;
+    const tags = [m.draftChanged ? `<span class="ok">초안 바뀜</span>` : "",
+                  m.draftError ? `<span class="no">초안이 엔진 검증에 실패해서 반영 안 함: ${esc(m.draftError)}</span>` : "",
+                  m.costUsd != null ? `$${Number(m.costUsd).toFixed(2)}` : "", m.seconds ? `${Math.round(m.seconds)}초` : ""].filter(Boolean);
+    return `<div class="msg assistant">${esc(m.text)}<span class="m">${tags.join(" · ")}</span></div>`;
+  }).join("");
+  const empty = !(st.messages || []).length;
+  const allMade = Object.values(st.presets || {}).flat().filter(p => p.exists);
+  box.innerHTML = `<div class="chat"><div>`
+    + `<div class="msgs" id="msgs">`
+    + (empty ? `<div class="note">AI 가 이 영상의 자막과 분석(매매법 ${c.strats.length}개)을 다 알고 있어요. 궁금한 걸 묻거나 `
+        + `"두 번째 매매법으로 초안 만들어줘", "RSI 기간 21로", "숏은 빼줘"처럼 말하세요.</div>`
+        + `<div class="chips">${suggestions().map(t => `<button class="chip">${esc(t)}</button>`).join("")}</div>` : msgs)
+    + (c.busy ? `<div class="msg user">${esc(c.pending)}</div><div class="msg assistant" id="wait">생각하는 중…</div>` : "")
+    + `</div>`
+    + `<div class="ask"><textarea id="chatin" rows="2" placeholder="메시지 (Enter 보내기 · Shift+Enter 줄바꿈)"${c.busy ? " disabled" : ""}></textarea>`
+    + `<button id="send"${c.busy ? " disabled" : ""}>보내기</button></div>`
+    + `<div class="foot"><span>한 번 보낼 때마다 Claude 호출 1번 (보통 20~60초)</span>`
+    + `${st.costUsd ? `<span>누적 약 $${Number(st.costUsd).toFixed(2)}</span>` : ""}`
+    + `${empty ? "" : `<a id="chatreset">대화 지우기</a>`}</div>`
+    + `</div><div class="dr"><h4>현재 초안</h4><div id="draft"${fresh ? ` class="fresh"` : ""}>${draftHtml(st.draft)}</div>`
+    + (st.draft ? `<div class="sec" style="margin-top:12px"><div class="k">프리셋 이름</div>`
+        + `<input type="text" id="pname" value="${esc(st.draft.name)}">`
+        + `<button id="psave"${c.busy ? " disabled" : ""}>💾 이 초안을 프리셋으로 저장</button>`
+        + `<div class="note" style="margin-top:6px">같은 이름이 있으면 덮어써요. 심볼 BTCUSDT·365일로 들어가요.</div>`
+        + `<div id="psaved"></div></div>` : "")
+    + (allMade.length ? `<div class="hasp" style="margin-top:8px">이 영상으로 만든 프리셋: ` + allMade.map(p =>
+        `<a href="/backtest?preset=${encodeURIComponent(p.name)}" target="_blank" rel="noopener">${esc(p.name)}</a>`).join(" · ") + `</div>` : "")
+    + `</div></div>`;
+
+  const ta = $("chatin");
+  ta.value = typed;
+  ta.addEventListener("keydown", e => {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendChat(); }   // 한글 조합 중 Enter 는 무시
+  });
+  $("send").onclick = sendChat;
+  box.querySelectorAll(".chip").forEach(b => b.onclick = () => { ta.value = b.textContent; sendChat(); });
+  if ($("chatreset")) $("chatreset").onclick = resetChat;
+  if ($("psave")) $("psave").onclick = saveChat;
+  const ms = $("msgs"); ms.scrollTop = ms.scrollHeight;
+}
+
+async function sendChat() {
+  const c = chatC, ta = $("chatin"), text = ta.value.trim();
+  if (!text || c.busy) return;
+  const id = c.id;
+  ta.value = "";
+  c.busy = true; c.pending = text;
+  renderChat();
+  const t0 = performance.now();
+  const tick = setInterval(() => { const w = $("wait"); if (w) w.textContent = `생각하는 중… ${((performance.now() - t0) / 1000).toFixed(0)}초`; }, 500);
+  const before = JSON.stringify(c.st.draft);
+  try {
+    const st = await post("/api/video_chat", { id, message: text });
+    if (chatC !== c) return;                               // 그 사이 다른 영상을 열었다(서버엔 저장됨)
+    c.st = st; c.busy = false;
+    renderChat(JSON.stringify(st.draft) !== before);
+    $("chatin").focus();
+  } catch (e) {
+    if (chatC !== c) return;
+    c.busy = false;
+    renderChat();
+    $("chatin").value = text;                              // 실패하면 쓴 글을 돌려준다
+    $("msgs").insertAdjacentHTML("beforeend", `<div class="err">보내기 실패: ${esc(e.message)}</div>`);
+  } finally { clearInterval(tick); }
+}
+
+// NDJSON 스트림 — 서버 _ndjson_stream 형식(한 줄 = 이벤트)
+async function streamNdjson(url, body, onEvent) {
+  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!res.ok || !res.body) throw new Error("서버 응답 오류 (" + res.status + ")");
+  const reader = res.body.getReader(), dec = new TextDecoder();
+  let buf = "", result = null;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let nl;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
+      if (!line) continue;
+      const ev = JSON.parse(line);
+      if (ev.type === "error") throw new Error(ev.error);
+      if (ev.type === "done") result = ev.result; else onEvent(ev);
+    }
+  }
+  if (!result) throw new Error("결과를 받지 못했어요 (연결이 끊겼을 수 있어요)");
+  return result;
+}
+
+async function resetChat() {
+  if (!confirm("이 영상의 대화와 초안을 지울까요? (저장한 프리셋은 그대로예요)")) return;
+  try { chatC.st = await post("/api/video_chat_reset", { id: chatC.id }); renderChat(); }
+  catch (e) { alert("못 지웠어요: " + e.message); }
+}
+
+async function saveChat() {
+  const c = chatC, btn = $("psave");
+  btn.disabled = true; $("psaved").innerHTML = "";
+  try {
+    const r = await post("/api/video_chat_save", { id: c.id, name: $("pname").value });
+    c.st = r.chat;
+    presetRecs = r.chat.presets || {};
+    c.strats.forEach((_, si) => { if ($("made_" + si)) $("made_" + si).innerHTML = madeHtml(si); });   // 기반 매매법 카드에도 표시
+    renderChat();
+    $("psaved").innerHTML = `<div class="made" style="margin-top:8px"><b>✅ 저장: ${esc(r.name)}</b>`
+      + `<a class="open" href="/backtest?preset=${encodeURIComponent(r.name)}" target="_blank" rel="noopener">백테스트에서 열기 →</a>`
+      + `<div class="note" style="margin-top:4px">파라미터 최적화는 백테스트 화면의 🤖 AI 최적화로 돌려요.</div></div>`;
+    loadHist();
+  } catch (e) {
+    $("psaved").innerHTML = `<div class="err" style="margin-top:8px">저장 실패: ${esc(e.message)}</div>`;
+    btn.disabled = false;
+  }
 }
 
 async function analyze() {
@@ -215,28 +459,12 @@ async function analyze() {
   $("out").innerHTML = `<div class="prog" id="prog"></div>`;
   const tick = setInterval(() => { const el = $("prog"); if (el) el.textContent = `${text} · ${((performance.now() - started) / 1000).toFixed(0)}초`; }, 500);
   try {
-    const res = await fetch("/api/video_analyze", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, force: $("force").checked }) });
-    if (!res.ok || !res.body) throw new Error("서버 응답 오류 (" + res.status + ")");
-    const reader = res.body.getReader(), dec = new TextDecoder();
-    let buf = "", result = null;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let nl;
-      while ((nl = buf.indexOf("\n")) >= 0) {
-        const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
-        if (!line) continue;
-        const ev = JSON.parse(line);
-        if (ev.type === "error") throw new Error(ev.error);
-        if (ev.type === "progress") text = ev.text;
-        else if (ev.type === "done") result = ev.result;
-      }
-    }
-    if (!result) throw new Error("결과를 받지 못했어요 (연결이 끊겼을 수 있어요)");
+    const result = await streamNdjson("/api/video_analyze", { url, force: $("force").checked },
+                                      ev => { if (ev.type === "progress") text = ev.text; });
     render(result);
     loadHist();
+    const hit = sItems.find(x => x.id === result.meta.id);          // 검색 결과에도 '분석함'
+    if (hit && !hit.analyzed) { hit.analyzed = true; renderSearch(); }
   } catch (e) {
     $("out").innerHTML = `<div class="err">에러: ${esc(e.message)}</div>`;
   } finally {
@@ -244,6 +472,83 @@ async function analyze() {
     btn.disabled = false; btn.textContent = "분석하기";
   }
 }
+// ---- 유튜브 검색: 결과에서 고르면 그 영상을 분석. 제외한 채널(채널 ID 기준)은 서버가 거른다 ----
+let sItems = [], sHidden = 0;
+const fmtLen = s => { if (!s) return ""; s = Math.round(s); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = String(s % 60).padStart(2, "0");
+                      return h ? `${h}:${String(m).padStart(2, "0")}:${x}` : `${m}:${x}`; };
+const fmtViews = v => v == null ? "" : v >= 1e8 ? `${(v / 1e8).toFixed(1)}억회` : v >= 1e4 ? `${(v / 1e4).toFixed(v >= 1e5 ? 0 : 1)}만회` : `${v}회`;
+const postJ = async (url, body) => {
+  const r = await (await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json();
+  if (r.error) throw new Error(r.error);
+  return r;
+};
+
+async function ytSearch() {
+  const q = $("q").value.trim();
+  if (!q) return;
+  const btn = $("qgo"); btn.disabled = true;
+  $("sres").innerHTML = `<div class="note">검색 중…</div>`;
+  try {
+    const sort = $("qsort").value;
+    const r = await postJ("/api/video_search", { q, sort: sort === "date" ? "date" : "relevance" });
+    sItems = r.items;
+    if (sort === "views") sItems.sort((a, b) => (b.views || 0) - (a.views || 0));    // 관련도 상위 50개 안에서
+    sHidden = r.hidden;
+    renderSearch();
+  } catch (e) { $("sres").innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+  finally { btn.disabled = false; }
+}
+function renderSearch() {
+  const cur = (() => { try { return video_id_of($("url").value); } catch (e) { return ""; } })();
+  $("sres").innerHTML = (sItems.length ? sItems.map((it, i) =>
+    `<div class="sitem${it.id === cur ? " sel" : ""}">`
+    + `<div class="t" title="${esc(it.title)}">${esc(it.title)}</div>`
+    + `<div class="s">${esc(it.channel)}${it.duration ? ` · ${fmtLen(it.duration)}` : ""}${it.views != null ? ` · ${fmtViews(it.views)}` : ""}`
+    + `${it.analyzed ? ` · <span class="ok">분석함</span>` : ""}</div>`
+    + `<div class="b"><button class="sa" data-i="${i}">${it.analyzed ? "열기" : "분석"}</button>`
+    + `<a href="${esc(it.url)}" target="_blank" rel="noopener" class="note" style="align-self:center">유튜브</a>`
+    + `${it.channelId ? `<button class="sx" data-i="${i}" title="이 채널을 앞으로 검색에서 빼요">🚫 채널 제외</button>` : ""}</div></div>`).join("")
+    : `<div class="note">결과가 없어요</div>`)
+    + (sHidden ? `<div class="note">제외한 채널이라 ${sHidden}개를 뺐어요</div>` : "");
+  document.querySelectorAll("#sres .sa").forEach(b => b.onclick = () => {
+    const it = sItems[+b.dataset.i];
+    $("url").value = it.url; $("force").checked = false;
+    document.querySelectorAll("#sres .sitem").forEach(x => x.classList.remove("sel"));
+    b.closest(".sitem").classList.add("sel");
+    analyze();
+  });
+  document.querySelectorAll("#sres .sx").forEach(b => b.onclick = async () => {
+    const it = sItems[+b.dataset.i];
+    try {
+      renderExcluded((await postJ("/api/video_exclude", { channelId: it.channelId, channel: it.channel })).excluded);
+      const before = sItems.length;
+      sItems = sItems.filter(x => x.channelId !== it.channelId);
+      sHidden += before - sItems.length;
+      renderSearch();
+    } catch (e) { alert("제외 실패: " + e.message); }
+  });
+}
+// 링크 → 영상 ID (서버 video_id 와 같은 규칙) — 지금 열린 영상을 결과에서 표시하는 데만 쓴다
+function video_id_of(url) {
+  const m = /(?:youtu\.be\/|youtube\.com\/(?:watch\?(?:.*&)?v=|shorts\/|live\/|embed\/))([A-Za-z0-9_-]{11})/.exec(url || "");
+  if (!m) throw new Error("not youtube");
+  return m[1];
+}
+function renderExcluded(list) {
+  $("exsum").textContent = `제외한 채널 ${list.length}개`;
+  $("exlist").innerHTML = list.length ? list.map(x =>
+    `<div class="exl"><span>${esc(x.channel)}</span><a data-id="${esc(x.channelId)}" title="다시 보이게">✕ 풀기</a></div>`).join("")
+    : `<div class="note">없어요. 검색 결과의 🚫 로 추가해요.</div>`;
+  document.querySelectorAll("#exlist a").forEach(a => a.onclick = async () => {
+    try { renderExcluded((await postJ("/api/video_unexclude", { channelId: a.dataset.id })).excluded); }
+    catch (e) { alert("풀기 실패: " + e.message); }
+  });
+}
+$("qgo").onclick = ytSearch;
+$("q").addEventListener("keydown", e => { if (e.key === "Enter" && !e.isComposing) ytSearch(); });
+$("qsort").onchange = () => { if ($("q").value.trim()) ytSearch(); };
+postJ("/api/video_excluded", {}).then(r => renderExcluded(r.excluded)).catch(() => {});
+
 $("go").onclick = analyze;
 $("url").addEventListener("keydown", e => { if (e.key === "Enter") analyze(); });
 loadHist();
