@@ -58,6 +58,51 @@ def add_tested(name, n: int) -> int:
         return d[_key(name)]
 
 
+# ---- 판정 기록 — AI 최적화 한 번의 결론(통과/기각과 숫자)을 남긴다 ----
+# 누적 시험 수(LEDGER)만으로는 '왜 버렸나'를 나중에 못 본다. 한 줄 = 한 번의 AI 최적화. 영상 관리 탭·폐기 근거가 읽는다.
+VERDICTS = os.path.join(ROOT, "data", "ai_optimize_verdicts.jsonl")
+
+
+def _cand(t: dict) -> dict:
+    """상위 조합 하나 → 판정에 필요한 숫자만. 통과 = 뒤 30%(OOS) 수익 > 0 이고 best-of-N 랜덤 문턱을 넘음."""
+    oos, isr, nl = t.get("oos") or {}, t.get("is") or {}, t.get("null") or {}
+    ok = bool((oos.get("return") or 0) > 0 and nl.get("beatsBestOfN"))
+    return {"params": t.get("params"), "isReturn": isr.get("return"), "oosReturn": oos.get("return"),
+            "oosTrades": oos.get("trades"), "oosMdd": oos.get("mdd"), "oosWinRate": oos.get("winRate"), "oosPf": oos.get("pf"),
+            "threshold": nl.get("bestOfNP95"), "pass": ok}
+
+
+def record_verdict(name: str, result: dict, form: dict, source: str = None, at: int = None) -> dict:
+    top = [_cand(t) for t in (result.get("top") or [])[:5]]
+    rec = {"at": at or int(time.time() * 1000), "preset": _key(name), "symbol": form.get("symbol"),
+           "timeframe": form.get("timeframe"), "days": form.get("days"), "combos": result.get("evaluated"),
+           "gateN": result.get("gateCombos") or result.get("evaluated"), "pass": any(c["pass"] for c in top), "top": top}
+    if source:
+        rec["source"] = source
+    with _LOCK:
+        os.makedirs(os.path.dirname(VERDICTS), exist_ok=True)
+        with open(VERDICTS, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    return rec
+
+
+def verdicts(name: str = None) -> list:
+    """판정 기록(오래된 순). name 을 주면 그 프리셋 것만."""
+    out = []
+    try:
+        with open(VERDICTS, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if name is None or r.get("preset") == _key(name):
+                    out.append(r)
+    except OSError:
+        pass
+    return out
+
+
 # ---- 시간 예산 → 조합 수 상한 ----
 # 실측 보정(8코어, BTC 1년, 2026-10-22): 영상 프리셋 6개 AI 최적화(15m·5m, 175~468조합)와 1m 60조합.
 # 처음 식(조합당 0.27×1회, 소수 조합 실측에서 뽑음)은 15m·5m 에서 실제의 약 2배였다 — 조합이 많아지면 워커가

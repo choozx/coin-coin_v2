@@ -29,6 +29,7 @@ FORM = {"symbol": "BTCUSDT", "timeframe": "5m", "days": "30", "equity": "10000",
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     monkeypatch.setattr(ai, "LEDGER", str(tmp_path / "ai_optimize.json"))
+    monkeypatch.setattr(ai, "VERDICTS", str(tmp_path / "ai_optimize_verdicts.jsonl"))
     calls = []
 
     def fake(replies):
@@ -99,6 +100,8 @@ def test_ai_optimize_run_accumulates_gate(env, monkeypatch):
     # 일반 범위 테스트(aiOpt 없음)는 누적에 안 들어간다
     server._run_optimize(dict(p, aiOpt=False), outs.append)
     assert ai.tested("P") == 4
+    vs = ai.verdicts("P")                                        # AI 최적화 두 번만 판정 기록(일반 범위 테스트는 아님)
+    assert [v["gateN"] for v in vs] == [2, 4] and all("pass" in v and v["top"] for v in vs)
 
 
 def test_explain_passes_gate_n(env):

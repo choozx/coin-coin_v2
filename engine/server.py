@@ -769,6 +769,10 @@ def _run_optimize(p: dict, emit) -> None:
     )
     if gate_n is not None:
         result["gateCombos"] = ai_optimize.add_tested(p.get("presetName"), result["evaluated"])
+        try:                                    # 판정 기록 — 나중에 '왜 버렸나'를 볼 수 있게(영상 관리 탭·폐기 근거)
+            ai_optimize.record_verdict(p.get("presetName"), result, p)
+        except Exception as e:
+            print(f"  [AI 최적화 판정 기록 실패] {type(e).__name__}: {e}", flush=True)
     result["rankingRegistered"] = _register_range_top(p, result, base, emit)
     result["type"] = "done"
     emit(result)
@@ -1108,6 +1112,7 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/video_chat_save": video_analyze.chat_save,         # 대화의 현재 초안 → 프리셋 저장
                   "/api/video_discard": video_analyze.discard,             # 못 쓸 프리셋 → presets/discarded 보관함
                   "/api/video_restore": video_analyze.restore,             # 보관함 → presets/saved
+                  "/api/video_manage": video_analyze.manage_list,          # '영상 관리' 탭 — 영상·프리셋·시험 결과 한눈에
                   "/api/video_search": video_analyze.search,               # 유튜브 검색(제외 채널 거름)
                   "/api/video_excluded": video_analyze.excluded_list, "/api/video_exclude": video_analyze.exclude_channel,
                   "/api/video_unexclude": video_analyze.unexclude_channel,

@@ -123,6 +123,7 @@ def fetch_transcript(url: str) -> dict:
         with open(ip, encoding="utf-8") as f:
             info = json.load(f)
     meta = {"id": vid, "url": clean_url, "title": info.get("title", ""), "channel": info.get("channel", ""),
+            "channelId": info.get("channel_id") or "",                    # 영상 관리 탭의 '채널 제외'용
             "duration": info.get("duration"), "uploadDate": info.get("upload_date", ""),
             "description": (info.get("description") or "")[:4000], "subtitle": pick,
             "transcript": _vtt_to_text(os.path.join(d, pick))}
@@ -377,6 +378,28 @@ def _live_strategy_file() -> str | None:
         return None
 
 
+def _runs_by_preset() -> dict:
+    from . import ranking
+    out: dict = {}
+    for r in ranking.list_results():
+        out.setdefault(r.get("presetName"), []).append(r)
+    return out
+
+
+def preset_evidence(name: str, runs_by_preset: dict = None) -> dict:
+    """프리셋 하나의 시험 근거 — AI 최적화 누적 시험 수 · 판정 기록(최근 3번) · 랭킹 백테스트(수익 순 상위 5).
+    폐기할 때 이걸 보관본에 같이 박아 둔다 — 나중에 랭킹을 지워도 '왜 버렸나'가 남게."""
+    from . import ai_optimize
+    rk = (runs_by_preset if runs_by_preset is not None else _runs_by_preset()).get(name) or []
+    keep = ("at", "symbol", "timeframe", "days", "returnPct", "mddPct", "trades", "winRatePct", "profitFactor", "beatsRandom")
+    runs = [dict({k: r.get(k) for k in keep}, kind=(r.get("source") or {}).get("kind", "single"),
+                 rank=(r.get("source") or {}).get("rank"), combos=(r.get("source") or {}).get("combos"))
+            for r in sorted(rk, key=lambda r: -(r.get("returnPct") if r.get("returnPct") is not None else -1e9))[:5]]
+    vs = ai_optimize.verdicts(name)
+    return {"tested": ai_optimize.tested(name), "runCount": len(rk), "runs": runs,
+            "verdictCount": len(vs), "passCount": sum(1 for v in vs if v.get("pass")), "verdicts": vs[-3:]}
+
+
 def _video_names(vid: str) -> list:
     return list(dict.fromkeys(x["name"] for v in preset_records(vid).values() for x in v))
 
@@ -396,11 +419,12 @@ def discard(params: dict) -> dict:
             raise ValueError(f"'{n}' 은 대시보드 봇이 쓰는 전략이라 폐기 못 해요 — 봇 전략을 먼저 바꿔 주세요")
     os.makedirs(DISCARD_DIR, exist_ok=True)
     now = int(time.time() * 1000)
+    runs = _runs_by_preset() if moving else {}
     for n in moving:
         src = os.path.join(_SAVED_DIR, _safe_name(n) + ".json")
         with open(src, encoding="utf-8") as f:
             rec = json.load(f)
-        rec["discarded"] = {"at": now, "reason": reason, "videoId": vid}
+        rec["discarded"] = {"at": now, "reason": reason, "videoId": vid, "evidence": preset_evidence(n, runs)}
         with open(os.path.join(DISCARD_DIR, _safe_name(n) + ".json"), "w", encoding="utf-8") as f:
             json.dump(rec, f, ensure_ascii=False, indent=2)
         os.remove(src)                                         # 보관함에 다 쓴 뒤에 원본을 지운다
@@ -483,7 +507,8 @@ def unexclude_channel(params: dict) -> dict:
 
 
 def search(params: dict) -> dict:
-    """{q, sort: relevance|date} → {items: [...], hidden: 제외 채널이라 뺀 개수}. 이미 분석한 영상은 analyzed=True."""
+    """{q, sort: relevance|date} → {items: [...], hidden: 제외 채널이라 뺀 개수}. 이미 분석한 영상은 analyzed=True,
+    폐기한 영상은 discarded={at, reason, presets}."""
     q = (params.get("q") or "").strip()[:200]
     if not q:
         raise ValueError("검색어를 넣어 주세요")
@@ -512,7 +537,8 @@ def search(params: dict) -> dict:
         items.append({"id": vid, "url": f"https://www.youtube.com/watch?v={vid}", "title": e.get("title") or "",
                       "channel": e.get("channel") or "", "channelId": e.get("channel_id") or "",
                       "duration": e.get("duration"), "views": e.get("view_count"),
-                      "analyzed": os.path.exists(os.path.join(CACHE_DIR, vid, "analysis.json"))})
+                      "analyzed": os.path.exists(os.path.join(CACHE_DIR, vid, "analysis.json")),
+                      "discarded": discard_state(vid)})                 # 폐기한 영상은 검색에서도 표시(이유 포함)
     return {"items": items, "hidden": hidden}
 
 
@@ -535,10 +561,53 @@ def list_analyses() -> list:
             continue
         recs = preset_records(vid)
         out.append({"id": vid, "url": m.get("url"), "title": m.get("title"), "channel": m.get("channel"),
+                    "channelId": m.get("channelId") or "",
                     "presetCount": sum(1 for v in recs.values() for x in v if x["exists"]),
                     "discarded": bool(discard_state(vid)),
                     "oneLine": a.get("one_line"), "at": a.get("_analyzedAt") or int(os.path.getmtime(ap) * 1000)})
     return sorted(out, key=lambda x: (x["discarded"], -x["at"]))          # 폐기한 영상은 아래로
+
+
+def manage_list(params: dict = None) -> dict:
+    """'영상 관리' 탭 — 분석한 영상마다 프리셋 상태와 시험 결과를 한 번에.
+    프리셋마다: 어느 매매법(또는 대화)에서 나왔나 · 지금 있나/폐기됐나(이유) · AI 최적화 누적 시험 수 ·
+    랭킹 기록 수·최고 수익률·랜덤을 이긴 적 있나. 폐기 판단에 필요한 숫자를 이 화면 하나에서 보게 한다."""
+    from .server import _safe_name
+    by_preset = _runs_by_preset()
+    rows = []
+    for v in list_analyses():
+        vid = v["id"]
+        try:
+            with open(os.path.join(CACHE_DIR, vid, "analysis.json"), encoding="utf-8") as f:
+                ana = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            ana = {}
+        strats = [s.get("name") for s in ana.get("strategies") or []]
+        presets, seen = [], set()
+        for idx, recs in sorted(preset_records(vid).items(), key=lambda kv: (kv[0] == "chat", str(kv[0]))):
+            for x in recs:
+                if x["name"] in seen:
+                    continue
+                seen.add(x["name"])
+                reason, ev, at = None, None, None
+                if x["discarded"]:
+                    try:
+                        with open(os.path.join(DISCARD_DIR, _safe_name(x["name"]) + ".json"), encoding="utf-8") as f:
+                            d = json.load(f).get("discarded") or {}
+                        reason, ev, at = d.get("reason"), d.get("evidence"), d.get("at")
+                    except (OSError, json.JSONDecodeError):
+                        pass
+                ev = ev or preset_evidence(x["name"], by_preset)      # 폐기 때 박아 둔 근거가 우선(그 뒤 랭킹을 지워도 남게)
+                best = ev["runs"][0] if ev["runs"] else None
+                presets.append({**x, "from": "대화" if idx == "chat" else (strats[idx] if isinstance(idx, int) and idx < len(strats) else f"매매법 {idx}"),
+                                "discardReason": reason, "discardedAt": at, "evidence": ev,
+                                "tested": ev["tested"], "runs": ev["runCount"],
+                                "bestReturnPct": best.get("returnPct") if best else None,
+                                "bestTimeframe": best.get("timeframe") if best else None,
+                                "beatsRandom": any(r.get("beatsRandom") for r in ev["runs"])})
+        rows.append({**v, "verdict": (ana.get("verdict") or {}).get("status"), "discardInfo": discard_state(vid),
+                     "presets": presets})
+    return {"videos": rows}
 
 
 # ---- 분석 결과 → 백테스트 프리셋 (presets/saved/, 화면에서 바로 불러와 돌릴 수 있게) ----

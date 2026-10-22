@@ -87,3 +87,47 @@ def test_list_puts_discarded_last(env):
     va.discard({"id": VID, "video": True})
     rows = va.list_analyses()
     assert [x["id"] for x in rows] == [other, VID] and rows[1]["discarded"] and rows[1]["presetCount"] == 0
+
+
+def test_manage_list_summarizes_presets(env, monkeypatch):
+    root, saved, disc = env
+    from engine import ai_optimize, ranking
+    (root / "data" / "video" / VID / "meta.json").write_text(json.dumps({"title": "영상", "url": "u", "channel": "c"}), encoding="utf-8")
+    (root / "data" / "video" / VID / "analysis.json").write_text(json.dumps(
+        {"_analyzedAt": 5, "verdict": {"status": "ready"}, "strategies": [{"name": "매매법 하나"}]}), encoding="utf-8")
+    led = root / "ledger.json"
+    led.write_text(json.dumps({"🎬 A": 120}), encoding="utf-8")
+    monkeypatch.setattr(ai_optimize, "LEDGER", str(led))
+    rk = root / "rk.jsonl"
+    rk.write_text("\n".join(json.dumps(r) for r in [
+        {"key": "1", "presetName": "🎬 A", "days": 365, "returnPct": -12.0, "timeframe": "15m", "beatsRandom": False},
+        {"key": "2", "presetName": "🎬 A", "days": 365, "returnPct": 3.5, "timeframe": "5m", "beatsRandom": True}]), encoding="utf-8")
+    monkeypatch.setattr(ranking, "PATH", str(rk))
+    monkeypatch.setattr(ai_optimize, "VERDICTS", str(root / "verdicts.jsonl"))
+    top = [{"params": {"tpValue": 2}, "is": {"return": 5.0}, "oos": {"return": -12.4, "trades": 72, "mdd": 13.2, "winRate": 40.3, "pf": 0.59},
+            "null": {"bestOfNP95": 30.2, "beatsBestOfN": False}}]
+    ai_optimize.record_verdict("🎬 A", {"top": top, "evaluated": 396, "gateCombos": 396}, {"symbol": "BTCUSDT", "timeframe": "15m", "days": "365"})
+    va.discard({"id": VID, "names": ["🎬 A"], "reason": "기각"})
+    rk.write_text("", encoding="utf-8")                   # 폐기 뒤에 랭킹을 지워도
+    v = va.manage_list()["videos"][0]
+    assert v["verdict"] == "ready" and v["discardInfo"] is None
+    a, b = v["presets"]
+    assert {k: a[k] for k in ("name", "exists", "discarded", "from", "discardReason", "tested", "runs", "bestReturnPct",
+                              "bestTimeframe", "beatsRandom")} == {
+        "name": "🎬 A", "exists": False, "discarded": True, "from": "매매법 하나", "discardReason": "기각", "tested": 120,
+        "runs": 2, "bestReturnPct": 3.5, "bestTimeframe": "5m", "beatsRandom": True}      # 폐기 때 박아 둔 근거가 남는다
+    ev = a["evidence"]
+    assert ev["verdictCount"] == 1 and ev["passCount"] == 0
+    vd = ev["verdicts"][0]
+    assert vd["pass"] is False and vd["combos"] == 396 and vd["top"][0]["oosReturn"] == -12.4 and vd["top"][0]["threshold"] == 30.2
+    assert b["name"] == "🎬 B" and b["from"] == "대화" and b["exists"] and b["runs"] == 0 and b["evidence"]["verdictCount"] == 0
+
+
+def test_verdict_pass_rule(tmp_path, monkeypatch):
+    from engine import ai_optimize
+    monkeypatch.setattr(ai_optimize, "VERDICTS", str(tmp_path / "v.jsonl"))
+    mk = lambda oos, beats: {"oos": {"return": oos}, "null": {"bestOfNP95": 10, "beatsBestOfN": beats}}
+    f = {"symbol": "X", "timeframe": "5m", "days": "365"}
+    assert not ai_optimize.record_verdict("p", {"top": [mk(-1, True), mk(5, False)]}, f)["pass"]   # 음수 OOS 는 랜덤을 넘어도 기각
+    assert ai_optimize.record_verdict("p", {"top": [mk(-1, False), mk(15, True)]}, f)["pass"]
+    assert [r["pass"] for r in ai_optimize.verdicts("p")] == [False, True] and ai_optimize.verdicts("q") == []

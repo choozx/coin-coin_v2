@@ -40,9 +40,12 @@ def test_search_filters_and_marks(env):
     r = va.search({"q": "비트코인"})
     assert [x["id"] for x in r["items"]] == ["AAAAAAAAAAA", "BBBBBBBBBBB"]      # 채널 결과는 빠짐
     assert r["items"][0]["analyzed"] and not r["items"][1]["analyzed"]
+    assert r["items"][0]["discarded"] is None
+    (env["dir"] / "AAAAAAAAAAA" / "discarded.json").write_text('{"at": 1, "reason": "기각", "presets": []}')
+    assert va.search({"q": "비트코인"})["items"][0]["discarded"]["reason"] == "기각"     # 폐기한 영상은 검색에서도 표시
     assert env["calls"][0][-1] == f"ytsearch{va.SEARCH_N}:비트코인"
     va.search({"q": "x", "sort": "date"})
-    assert env["calls"][1][-1].startswith("ytsearchdate")
+    assert env["calls"][-1][-1].startswith("ytsearchdate")
 
 
 def test_exclude_by_channel_id_persists(env):
