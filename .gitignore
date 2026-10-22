@@ -10,6 +10,7 @@ venv/
 
 # 사용자가 GUI에서 저장한 개인 프리셋 (로컬 전용)
 presets/saved/
+presets/discarded/
 
 # 배포 설정·시크릿 (API키 등) — 커밋 금지
 # .env 만 막으면 .env.bak / .env.local / .env.prod 같은 사본이 그대로 커밋된다
