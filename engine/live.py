@@ -36,7 +36,7 @@ from . import ledger
 from . import indicators as ind
 from .candles import resample, signal_close_index, TIMEFRAME_MINUTES, MINUTE_MS
 from .conditions import (SeriesResolver, collect_operands, operand_label,
-                         required_warmup_bars)
+                         referenced_symbols, required_warmup_bars)
 from .preset import Preset, load_preset_file, merge_bot_config
 from .executor import PaperExecutor, LiveExecutor
 from .backtest import BacktestConfig, Stepper
@@ -136,10 +136,10 @@ class LiveTrader:
         #   (10일 = 4h 61봉 / 1d 11봉), NaN 은 항상 false 라 **한 번도 진입하지 않는다**.
         #   그런데 조용해서 '조건 미충족'과 구별되지 않는다. 줄이지는 않는다 — 기존 저TF
         #   동작을 바꾸지 않기 위해 기본값과 큰 쪽을 쓴다.
-        need_bars = required_warmup_bars(preset.data.get("entry"),
-                                         *[r.get("when") for r in (preset.data.get("entryRules") or [])],
-                                         (preset.exit or {}).get("condition"),
-                                         *((preset.exit or {}).get("conditionBySide") or {}).values())
+        nodes = [preset.data.get("entry"), *[r.get("when") for r in (preset.data.get("entryRules") or [])],
+                 (preset.exit or {}).get("condition"), *((preset.exit or {}).get("conditionBySide") or {}).values()]
+        need_bars = required_warmup_bars(*nodes, tf_min=self.tf_min)
+        self.other_symbols = sorted(referenced_symbols(*nodes) - {preset.symbol})   # 조건이 보는 다른 심볼(BTC 필터 등)
         need_days = need_bars * self.tf_min / (24 * 60)
         if need_days > self.warmup_days:
             print(f"  [워밍업] {preset.timeframe} · 지표 수렴에 {need_bars}봉 필요 → "
@@ -429,6 +429,11 @@ class LiveTrader:
         """최신 1분봉을 캐시에 채우고, '닫힌' 봉까지의 Candles 반환. (진행 중 봉 제외)"""
         base = candle_store.ensure_days(self.preset.symbol, self.warmup_days,
                                         end_ms=now_ms, verbose=False)
+        for sym in getattr(self, "other_symbols", ()):      # 조건이 다른 심볼을 보면 그 캔들도 같은 창으로 채워 둔다
+            try:
+                candle_store.ensure_days(sym, self.warmup_days, end_ms=now_ms, verbose=False)
+            except Exception as e:                           # 못 받으면 그 조건만 NaN(=거짓) — 매매 루프는 계속
+                print(f"  [{sym} 캔들 수집 실패] {e}", flush=True)
         # 진행 중(아직 안 닫힌) 마지막 봉 제거: open_time + 1분 > now 이면 미완성.
         n = len(base)
         while n > 0 and int(base.open_time[n - 1]) + MINUTE_MS > now_ms:
@@ -462,7 +467,7 @@ class LiveTrader:
         self._signal = signal
         bar_of, is_close = signal_close_index(base, self.tf_min)
         atr_series = ind.atr(signal.high, signal.low, signal.close, 14)
-        resolver = SeriesResolver(signal)
+        resolver = SeriesResolver(signal, self.preset.symbol)
 
         self._events = []                # hook(_on_open/_on_close)이 여기에 쌓는다
         self._maybe_flatten(now_ms)      # 사용자 즉시청산 요청 처리(있으면 시장가 청산 + 자동 정지)
@@ -653,7 +658,7 @@ class LiveTrader:
             if len(base) < 2:
                 return
             signal = resample(base, self.tf_min)
-            r = SeriesResolver(signal)
+            r = SeriesResolver(signal, self.preset.symbol)
             i = len(signal) - 1
             nodes = [self.preset.data.get("entry")]
             nodes += [rule.get("when") for rule in (self.preset.data.get("entryRules") or [])]
@@ -724,7 +729,9 @@ class LiveTrader:
             entry_fee=(saved.get("entryFee") if same else None) or bm.trade_fee(
                 pos["entry_price"], pos["qty"], taker=True,
                 taker_fee=self.cfg.taker_fee, maker_fee=self.cfg.maker_fee),
-            peak=(saved.get("peak") if same_side else None) or pos["entry_price"])
+            peak=(saved.get("peak") if same_side else None) or pos["entry_price"],
+            be_moved=bool(saved.get("beMoved")) if same else False,
+            be_trigger=(saved.get("beTrigger") if same else None) or nan)
         self.ex.position = p
         self.ex._save_position()
         side_k = "롱" if p.side > 0 else "숏"

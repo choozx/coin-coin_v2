@@ -59,14 +59,15 @@ def add_tested(name, n: int) -> int:
 
 
 # ---- 시간 예산 → 조합 수 상한 ----
-# 실측(8코어, BTC): 15m 300일 백테스트 1회 1.3초 → 범위 테스트 8조합 7.5초·32조합 15.4초,
-# 1m 365일 1회 2.5초 → 11.2초·27.7초. 조합당 ≈ 0.27×(1회) (앞 70% 만 돌리고 8개 병렬),
-# 고정 ≈ 3초 + 1.2×(1회) (프로세스 기동·OOS 재검증·귀무 판정). 1년 이상이면 상위 5개를 전체 기간으로 다시 돌려 랭킹에 올린다(+5회).
+# 실측 보정(8코어, BTC 1년, 2026-10-22): 영상 프리셋 6개 AI 최적화(15m·5m, 175~468조합)와 1m 60조합.
+# 처음 식(조합당 0.27×1회, 소수 조합 실측에서 뽑음)은 15m·5m 에서 실제의 약 2배였다 — 조합이 많아지면 워커가
+# 데워져 조합당 시간이 줄어든다. 최소제곱: 조합당 ≈ 0.11×(1회), 고정 ≈ 2초 + 6.2×(1회)
+# (프로세스 기동·OOS 재검증 20개·귀무 판정) + 1년 이상이면 상위 5개 전체 기간 재실행(랭킹 등록) 5×(1회). 큰 실행 오차 ±10%.
 def time_model(one_run_sec: float, days: float, workers: int = None) -> dict:
     from .optimize import resolve_workers
     w = resolve_workers(HARD_MAX_COMBOS, workers)
-    per = one_run_sec * 0.7 * 3.0 / w
-    fixed = 3.0 + 1.2 * one_run_sec + (5 * one_run_sec if days >= 365 else 0.0)
+    per = one_run_sec * 0.11 * 8 / w
+    fixed = 2.0 + 6.2 * one_run_sec + (5 * one_run_sec if days >= 365 else 0.0)
     return {"secPerCombo": round(per, 3), "overheadSec": round(fixed, 1), "workers": w}
 
 

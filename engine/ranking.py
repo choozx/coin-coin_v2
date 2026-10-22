@@ -40,6 +40,8 @@ def _opnd(o) -> str:
     if "source" in o:
         return _SRC.get(o["source"], o["source"])
     s = o["indicator"] + (f"({o['period']})" if o.get("period") else "")
+    if o.get("symbol"):
+        s = f"{o['symbol']}·{s}"
     pr = o.get("params") or {}
     if pr:
         s += "{" + ",".join(f"{k}={v:g}" if isinstance(v, (int, float)) else f"{k}={v}" for k, v in pr.items()) + "}"
@@ -55,6 +57,9 @@ def _node(n) -> str:
         return f"NOT({inner})" if n["op"] == "NOT" else (f"({inner})" if n["op"] == "OR" else inner)
     if "cross" in n:
         return f"{_opnd(n['left'])} {'▲' if n['cross'] == 'crossOver' else '▼'} {_opnd(n['right'])}"
+    if "dist" in n:
+        d = f"{_opnd(n['left'])}−{_opnd(n['right'])}"
+        return f"{'|' + d + '|' if n['dist'] == 'absAtr' else '(' + d + ')'}÷ATR {n['cmp']} {n['value']:g}"
     return f"{_opnd(n['left'])} {n['cmp']} {_opnd(n['right'])}"
 
 
@@ -68,6 +73,8 @@ def _target(t: dict) -> str:
         return f"손절폭×{t['value']:g}"
     if ty in ("swing", "swingLow", "swingHigh"):
         return f"전저·전고 {t.get('lookback')}봉" + (f"±{t['bufferPercent']:g}%" if t.get("bufferPercent") else "")
+    if ty == "retrace":
+        return f"직전 {t.get('lookback', 50)}봉 파동 {t['value']:g}% 되돌림"
     if ty == "indicator":
         return f"진입 때 {_opnd(t['indicator'])}" + (f"±{t['bufferPercent']:g}%" if t.get("bufferPercent") else "")
     return str(ty)
@@ -76,7 +83,8 @@ def _target(t: dict) -> str:
 def describe(p: dict) -> dict:
     """빌드된 프리셋 → {entry, exit, sizing} 짧은 문장."""
     rules = p.get("entryRules") or [{"side": (p.get("market") or {}).get("direction", "long"), "when": p.get("entry")}]
-    entry = " | ".join(f"{'롱' if r['side'] == 'long' else '숏'}: {_node(r['when'])}" for r in rules)
+    entry = " | ".join(f"{'롱' if r['side'] == 'long' else '숏'}{'×%g' % r['sizeScale'] if r.get('sizeScale', 1) != 1 else ''}: "
+                       f"{_node(r['when'])}" for r in rules)
     ex = p.get("exit") or {}
     parts = []
     if ex.get("stopLoss"):
@@ -90,7 +98,8 @@ def describe(p: dict) -> dict:
         parts.append(f"트레일링 {ex['trailing'].get('callbackPercent'):g}%")
     if ex.get("breakeven"):
         be = ex["breakeven"]
-        trig = f"{be.get('value'):g}R" if be.get("type", "riskReward") == "riskReward" else f"+{be.get('value'):g}%"
+        trig = {"riskReward": f"{be.get('value'):g}R", "retrace": f"파동 {be.get('value'):g}% 되돌림"}.get(
+            be.get("type", "riskReward"), f"+{be.get('value'):g}%")
         parts.append(f"{trig} 에 본전 손절")
     if ex.get("condition"):
         parts.append("청산조건 " + _node(ex["condition"]))

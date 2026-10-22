@@ -45,7 +45,9 @@
         "additionalProperties": false,
         "properties": {
           "side": { "type": "string", "enum": ["long", "short"] },
-          "when": { "$ref": "#/$defs/condition" }
+          "when": { "$ref": "#/$defs/condition" },
+          "sizeScale": { "type": "number", "exclusiveMinimum": 0, "maximum": 10, "default": 1,
+            "description": "이 규칙으로 진입할 때 비중 배수(sizing.size × 이 값). 예: 평소 10% · 강한 신호 규칙 ×3. 증거금 상한 클램프는 그대로" }
         }
       }
     },
@@ -92,9 +94,11 @@
           "required": ["type", "value"],
           "description": "본전 손절 — 진입 후 최고가(롱)/최저가(숏)가 트리거에 닿으면 손절을 진입가(± offsetPercent)로 옮긴다. 손절이 더 좁아질 때만 옮긴다.",
           "properties": {
-            "type": { "type": "string", "enum": ["riskReward", "percent"],
-              "description": "riskReward=처음 손절폭의 value 배 수익에서(손절 필요) · percent=진입가 대비 value% 수익에서" },
+            "type": { "type": "string", "enum": ["riskReward", "percent", "retrace"],
+              "description": "riskReward=처음 손절폭의 value 배 수익에서(손절 필요) · percent=진입가 대비 value% 수익에서 · retrace=진입 때 직전 파동(lookback 봉)의 value% 되돌림 가격에서" },
             "value": { "type": "number", "exclusiveMinimum": 0 },
+            "lookback": { "type": "integer", "minimum": 2, "default": 50,
+              "description": "retrace 타입: 직전 파동 고·저를 찾을 봉 수(신호봉 포함)" },
             "offsetPercent": { "type": "number", "minimum": 0, "maximum": 5, "default": 0,
               "description": "진입가에서 수익 쪽으로 이만큼 띄운 곳에 손절(수수료 보전용). 0=정확히 진입가" }
           }
@@ -225,19 +229,19 @@
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["percent", "atrMultiple", "price", "swing", "swingLow", "swingHigh", "riskReward", "indicator"],
-          "description": "percent=진입가대비%, atrMultiple=ATR배수, price=절대가격, swing=스윙 고저점(방향 자동: 롱손절·숏익절=전저점, 숏손절·롱익절=전고점), swingLow/swingHigh=방향 고정(레거시), riskReward=손익비(익절 거리=손절 거리×value, 익절 전용·손절 필수), indicator=진입 시점 지표 값(예: EMA50) ± bufferPercent 에 고정(손절용)"
+          "enum": ["percent", "atrMultiple", "price", "swing", "swingLow", "swingHigh", "riskReward", "indicator", "retrace"],
+          "description": "percent=진입가대비%, atrMultiple=ATR배수, price=절대가격, swing=스윙 고저점(방향 자동: 롱손절·숏익절=전저점, 숏손절·롱익절=전고점), swingLow/swingHigh=방향 고정(레거시), riskReward=손익비(익절 거리=손절 거리×value, 익절 전용·손절 필수), indicator=진입 시점 지표 값(예: EMA50) ± bufferPercent 에 고정(손절용), retrace=직전 파동(lookback 봉)의 value% 되돌림 가격(익절 전용 — 롱=하락폭의 value% 반등, 숏=상승폭의 value% 눌림)"
         },
         "value": { "type": "number", "exclusiveMinimum": 0 },
         "lookback": { "type": "integer", "minimum": 1,
-          "description": "swing 타입: 전저/전고를 찾을 과거 봉 개수 (현재 신호봉 포함, 1 = 신호봉 저가·고가만)" },
+          "description": "swing·retrace 타입: 전저/전고(파동)를 찾을 과거 봉 개수 (현재 신호봉 포함, 1 = 신호봉 저가·고가만)" },
         "bufferPercent": { "type": "number", "minimum": 0,
           "description": "swing·indicator 타입: 스탑사냥 회피용 버퍼 %. 롱 손절 -buffer%, 숏 손절 +buffer%" },
         "indicator": { "$ref": "#/$defs/operand",
           "description": "indicator 타입: 기준 지표 operand (예: EMA 기간 50)" }
       },
       "allOf": [
-        { "if": { "properties": { "type": { "enum": ["percent", "atrMultiple", "price", "riskReward"] } } },
+        { "if": { "properties": { "type": { "enum": ["percent", "atrMultiple", "price", "riskReward", "retrace"] } } },
           "then": { "required": ["value"] } },
         { "if": { "properties": { "type": { "const": "indicator" } } },
           "then": { "required": ["indicator"] } },
@@ -251,7 +255,8 @@
       "oneOf": [
         { "$ref": "#/$defs/logicNode" },
         { "$ref": "#/$defs/compareNode" },
-        { "$ref": "#/$defs/crossNode" }
+        { "$ref": "#/$defs/crossNode" },
+        { "$ref": "#/$defs/distNode" }
       ]
     },
 
@@ -266,6 +271,20 @@
           "minItems": 1,
           "items": { "$ref": "#/$defs/condition" }
         }
+      }
+    },
+
+    "distNode": {
+      "type": "object",
+      "required": ["dist", "left", "right", "cmp", "value"],
+      "additionalProperties": false,
+      "description": "두 값의 거리를 ATR(14) 배수로 비교. (left − right) ÷ ATR cmp value. 예: 고가가 직전 고가보다 ATR 0.3배 이상 높다 · 두 선이 ATR 0.5배 안으로 붙었다(absAtr)",
+      "properties": {
+        "dist":  { "type": "string", "enum": ["atr", "absAtr"], "description": "atr=부호 있는 거리 · absAtr=절댓값" },
+        "left":  { "$ref": "#/$defs/operand" },
+        "right": { "$ref": "#/$defs/operand" },
+        "cmp":   { "type": "string", "enum": ["<", "<=", ">", ">="] },
+        "value": { "type": "number" }
       }
     },
 
@@ -302,7 +321,9 @@
           "required": ["source"],
           "additionalProperties": false,
           "properties": {
-            "source": { "type": "string", "enum": ["open", "high", "low", "close", "price", "volume"] }
+            "source": { "type": "string", "enum": ["open", "high", "low", "close", "price", "volume"] },
+            "symbol": { "type": "string", "pattern": "^[A-Z0-9]{2,20}$",
+              "description": "다른 심볼의 시세(예: BTCUSDT) — 같은 TF 같은 시각 봉. 없으면 프리셋 심볼" }
           }
         },
         {
@@ -320,6 +341,7 @@
                        "SUPERTREND", "SUPERTREND_DIR", "RSI_DIV", "ATR_RANK", "PIN_BAR", "TRIANGLE_BREAK", "FRACTAL", "PULLBACK_FRACTAL", "BOX_HIGH", "BOX_LOW",
                        "PREV_HIGH", "PREV_LOW", "RSI_PREV_HIGH", "RSI_PREV_LOW", "PIVOT_LOW", "PIVOT_HIGH",
                        "VP_ABOVE", "VP_BELOW", "BB_TOUCH_UP", "BB_TOUCH_DN", "BB_PULLBACK", "BIG_CANDLE",
+                       "MA_DIST", "RETRACE_UP", "RETRACE_DN", "TRENDLINE_HIGH", "TRENDLINE_LOW",
                        "CDL_BULLREV", "CDL_BEARREV", "CDL_ENGULFING", "CDL_HAMMER",
                        "CDL_HANGINGMAN", "CDL_MORNINGSTAR", "CDL_EVENINGSTAR",
                        "CDL_PIERCING", "CDL_DARKCLOUDCOVER"]
@@ -327,9 +349,11 @@
             "period": { "type": "integer", "minimum": 1 },
             "params": {
               "type": "object",
-              "description": "지표별 추가 파라미터 (예: MACD의 fast/slow/signal, BB의 stddev)",
+              "description": "지표별 추가 파라미터 (예: MACD의 fast/slow/signal, BB의 stddev). htf=상위 TF(분, 예: 1440=일봉) — 그 TF 의 다 닫힌 봉 값",
               "additionalProperties": { "type": "number" }
-            }
+            },
+            "symbol": { "type": "string", "pattern": "^[A-Z0-9]{2,20}$",
+              "description": "다른 심볼에서 계산(예: BTCUSDT) — 같은 TF 같은 시각 봉. 없으면 프리셋 심볼" }
           }
         }
       ]

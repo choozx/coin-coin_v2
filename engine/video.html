@@ -64,6 +64,13 @@
   .hasp { font-size:12px; color:var(--up); margin:-4px 0 10px; line-height:1.6; }
   .hasp a { color:#4c9be8; text-decoration:none; } .hasp a:hover { text-decoration:underline; }
   .hasp .gone { color:var(--mut); text-decoration:line-through; }
+  .hasp .dsc { color:var(--mut); }
+  .hasp a.act { color:var(--mut); cursor:pointer; font-size:11px; margin-left:3px; text-decoration:none; }
+  .hasp a.act:hover { color:var(--fg); }
+  .hitem.dis { opacity:.5; }
+  .disc { border:1px solid rgba(255,92,108,.35); background:rgba(255,92,108,.06); border-radius:8px; padding:10px 12px;
+          margin-bottom:14px; font-size:13px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .disc button { width:auto; margin:0; padding:5px 10px; font-size:12px; background:var(--panel2); border:1px solid var(--line); color:var(--fg); }
   .hitem .pc { color:var(--up); }
   .mk { width:auto; margin:0 0 0 auto; padding:5px 12px; font-size:12px; background:#7c5cff; }
   .made { border:1px solid rgba(38,208,124,.4); background:rgba(38,208,124,.06); border-radius:8px; padding:10px 12px; margin-bottom:12px; font-size:13px; }
@@ -160,8 +167,8 @@ async function loadHist() {
   try {
     const rows = await (await fetch("/api/video_list", { cache: "no-store" })).json();
     $("hist").innerHTML = rows.length ? rows.map(r =>
-      `<div class="hitem" data-url="${esc(r.url)}"><div class="t">${esc(r.title)}</div>`
-      + `<div class="s">${esc(r.channel)} · ${new Date(r.at).toLocaleDateString("ko-KR")}`
+      `<div class="hitem${r.discarded ? " dis" : ""}" data-url="${esc(r.url)}"><div class="t">${r.discarded ? "🗑 " : ""}${esc(r.title)}</div>`
+      + `<div class="s">${esc(r.channel)} · ${new Date(r.at).toLocaleDateString("ko-KR")}${r.discarded ? " · 폐기" : ""}`
       + `${r.presetCount ? ` · <span class="pc">⚙️ 프리셋 ${r.presetCount}</span>` : ""}</div></div>`).join("")
       : `<div class="note">아직 없어요</div>`;
     document.querySelectorAll(".hitem").forEach(el => el.onclick = () => { $("url").value = el.dataset.url; $("force").checked = false; analyze(); });
@@ -176,8 +183,56 @@ function madeHtml(si) {
   if (!list.length) return "";
   return `<div class="hasp">✅ 만든 프리셋 ${list.length}개: ` + list.map(p => p.exists
       ? `<a href="/backtest?preset=${encodeURIComponent(p.name)}" target="_blank" rel="noopener">${esc(p.name)}</a>`
+        + `<a class="act" data-dact="discard" data-name="${esc(p.name)}" title="못 쓸 프리셋 — presets/discarded 보관함으로(되살리기 가능)">🗑</a>`
+      : p.discarded
+      ? `<span class="dsc" title="presets/discarded 보관함에 있어요">🗑 ${esc(p.name)} (폐기)</span>`
+        + `<a class="act" data-dact="restore" data-name="${esc(p.name)}" title="presets/saved 로 되돌리기">↩ 되살리기</a>`
       : `<span class="gone" title="presets/saved 에서 지워졌어요">${esc(p.name)} (삭제됨)</span>`).join(" · ") + `</div>`;
 }
+// 폐기 — 프리셋 파일을 보관함(presets/discarded)으로. 엔진 지표·기능, AI 최적화 누적 기록, 랭킹은 그대로
+let discardSt = null, curVid = null;
+const DISCARD_NOTE = "프리셋 파일은 지우지 않고 presets/discarded 보관함으로 옮겨요(되살리기 가능).\n"
+  + "이 영상 때문에 엔진에 넣은 지표·기능, AI 최적화 누적 기록, 랭킹 기록은 그대로예요.";
+function discardBar() {
+  if (discardSt) return `<div class="disc">🗑 <b>폐기한 영상</b> · ${new Date(discardSt.at).toLocaleDateString("ko-KR")}`
+    + `${discardSt.reason ? ` · ${esc(discardSt.reason)}` : ""} · 보관함 프리셋 ${(discardSt.presets || []).length}개`
+    + `<button data-dact="restoreAll" style="margin-left:auto">↩ 되살리기</button></div>`;
+  return "";
+}
+function allVideoNames() { return [...new Set(Object.values(presetRecs).flat().filter(p => p.exists).map(p => p.name))]; }
+async function discardAct(act, name) {
+  try {
+    let r;
+    if (act === "discard") {
+      const why = prompt(`'${name}' 을 폐기할까요?\n\n${DISCARD_NOTE}\n\n이유(선택):`, "AI 최적화 판정 기각");
+      if (why === null) return;
+      r = await post("/api/video_discard", { id: curVid, names: [name], reason: why });
+    } else if (act === "discardAll") {
+      const n = allVideoNames().length;
+      const why = prompt(`이 영상을 폐기할까요? 이 영상으로 만든 프리셋 ${n}개를 함께 보관함으로 옮겨요.\n\n${DISCARD_NOTE}\n\n이유(선택):`, "AI 최적화 판정 기각");
+      if (why === null) return;
+      r = await post("/api/video_discard", { id: curVid, reason: why, video: true });
+    } else if (act === "restore") {
+      r = await post("/api/video_restore", { id: curVid, names: [name] });
+    } else {
+      r = await post("/api/video_restore", { id: curVid });
+    }
+    if (r.skipped && r.skipped.length) alert(`같은 이름이 이미 있어서 건너뛰었어요: ${r.skipped.join(", ")}`);
+    presetRecs = r.presets || {}; discardSt = r.discarded || null;
+    refreshDiscardUI();
+    loadHist();
+  } catch (e) { alert(`실패: ${e.message}`); }
+}
+function refreshDiscardUI() {
+  if ($("discbar")) $("discbar").innerHTML = discardBar();
+  if ($("discbtn")) $("discbtn").style.display = discardSt ? "none" : "";
+  document.querySelectorAll("[id^=made_]").forEach(el => el.innerHTML = madeHtml(el.id === "made_chat" ? "chat" : +el.id.slice(5)));
+  if (chatC && chatC.st) { chatC.st.presets = presetRecs; renderChat(); }
+}
+document.addEventListener("click", e => {
+  const a = e.target.closest("[data-dact]");
+  if (a) { e.preventDefault(); discardAct(a.dataset.dact, a.dataset.name); }
+});
 const ST = { ready: ["✅ 엔진에 있음", "ok"], buildable: ["🛠 구현 가능", "mid"], impossible: ["⛔ 구현 불가", "no"] };
 const VD = { ready: ["✅ 지금 바로 백테스트 가능", "ok"], partial: ["🛠 일부 구현하면 가능", "mid"], impossible: ["⛔ 핵심이 구현 불가", "no"] };
 const badge = (map, k) => { const [t, c] = map[k] || [esc(k), ""]; return `<span class="badge ${c}">${t}</span>`; };
@@ -185,10 +240,12 @@ const badge = (map, k) => { const [t, c] = map[k] || [esc(k), ""]; return `<span
 function render(r) {
   const m = r.meta, a = r.analysis;
   presetRecs = r.presets || {};
+  discardSt = r.discarded || null; curVid = m.id;
   const v = a.verdict || {};
   let h = `<div class="card"><h2>${esc(m.title)}</h2>`
     + `<div class="meta">${esc(m.channel)} · ${fmtDur(m.duration)} · <a href="${esc(m.url)}" target="_blank" rel="noopener">유튜브에서 보기</a>`
-    + `${r.cached ? " · 저장된 분석" : ""}${a._cost_usd != null ? ` · 분석 비용 약 $${Number(a._cost_usd).toFixed(2)}` : ""}</div>`
+    + `${r.cached ? " · 저장된 분석" : ""}${a._cost_usd != null ? ` · 분석 비용 약 $${Number(a._cost_usd).toFixed(2)}` : ""}`
+    + ` · <a class="discbtn" id="discbtn" data-dact="discardAll" href="#" style="color:var(--mut);${discardSt ? "display:none" : ""}" title="못 쓸 영상 — 프리셋을 보관함으로">🗑 이 영상 폐기</a></div>`
     + `<div class="one">${esc(a.one_line)}</div>`
     + `<div class="verdict">${badge(VD, v.status)}<span>${esc(v.text)}</span></div></div>`;
 
@@ -205,6 +262,7 @@ function render(r) {
       + `${d("ready", "✅")} · ${d("buildable", "🛠")} · ${d("impossible", "⛔")}</div>`;
   }
 
+  h += `<div id="discbar">${discardBar()}</div>`;
   h += `<div class="card"><h3 style="color:var(--fg);font-size:14px">💬 이 영상과 대화하며 프리셋 만들기</h3><div id="chat"><div class="prog">대화 불러오는 중…</div></div></div>`;
 
   h += `<div class="card"><h3>지표</h3>` + ((a.indicators || []).length
@@ -287,12 +345,18 @@ const OPN = { crossOver: "↗ 상향 돌파", crossUnder: "↘ 하향 돌파" };
 function opd(o) {
   if (!o) return "?";
   if (o.kind === "number") return String(o.value ?? 0);
-  if (o.kind === "source") return o.source || "close";
+  const sym = (o.symbol || "").trim() ? o.symbol.trim().toUpperCase() + "·" : "";
+  if (o.kind === "source") return sym + (o.source || "close");
   const pj = (o.params_json || "").trim();
-  return `${o.indicator}${o.period ? `(${o.period})` : ""}${pj ? ` ${pj}` : ""}`;
+  return `${sym}${o.indicator}${o.period ? `(${o.period})` : ""}${pj ? ` ${pj}` : ""}`;
 }
-const condHtml = c => `<div class="cond"><code>${esc(opd(c.left))} ${esc(OPN[c.op] || c.op)} ${esc(opd(c.right))}</code>`
-  + `${c.note ? ` <span class="n">${esc(c.note)}</span>` : ""}</div>`;
+const condHtml = c => {
+  const dist = c.dist === "atr" || c.dist === "absAtr";            // 거리 조건: (왼 − 오) ÷ ATR 비교
+  const body = dist
+    ? `${c.dist === "absAtr" ? "|" : "("}${opd(c.left)} − ${opd(c.right)}${c.dist === "absAtr" ? "|" : ")"} ÷ ATR ${c.op} ${c.dist_value ?? 0}`
+    : `${opd(c.left)} ${OPN[c.op] || c.op} ${opd(c.right)}`;
+  return `<div class="cond"><code>${esc(body)}</code>${c.note ? ` <span class="n">${esc(c.note)}</span>` : ""}</div>`;
+};
 function targetText(t, isStop) {
   const v = t && t.value, buf = t && t.buffer_pct ? ` ± ${t.buffer_pct}%` : "";
   switch (t && t.type) {
@@ -301,6 +365,7 @@ function targetText(t, isStop) {
     case "riskReward": return `손절폭 × ${v}`;
     case "swing": return `최근 ${t.lookback || 20}봉 ${isStop ? "전저/전고" : "전고/전저"}${buf}`;
     case "indicator": return `진입 때 ${t.ind || "EMA"}${t.ind_period || 50} 값${buf}`;
+    case "retrace": return `직전 ${t.lookback || 50}봉 파동의 ${v}% 되돌림 가격`;
     default: return "없음";
   }
 }
@@ -312,17 +377,22 @@ function draftHtml(d) {
   let h = sec("이름 · 타임프레임", `${esc(d.name)} <span class="tag">${esc(d.timeframe)}</span>`);
   h += sec("기반 매매법", base ? esc(base.name) : `<span class="note">특정 매매법 아님(섞음·새로 만듦)</span>`);
   h += sec("진입 (그룹 안은 모두 충족, 그룹끼리는 하나만)", groups.length ? groups.map((g, i) =>
-    `<div style="margin-bottom:4px"><span class="tag" style="margin:0 0 3px">${DIR[g.side] || esc(g.side)} ${i + 1}</span>${g.conds.map(condHtml).join("")}</div>`).join("")
+    `<div style="margin-bottom:4px"><span class="tag" style="margin:0 0 3px">${DIR[g.side] || esc(g.side)} ${i + 1}`
+    + `${g.size_scale && g.size_scale !== 1 ? ` · 비중×${esc(g.size_scale)}` : ""}</span>${g.conds.map(condHtml).join("")}</div>`).join("")
     : `<span class="no">진입 조건 없음 — 저장 불가</span>`);
   const xl = d.exit_long || [], xs = d.exit_short || [];
-  h += sec("청산 조건 (하나라도)", (xl.length || xs.length)
-    ? (xl.length ? `<div>롱: ${xl.map(condHtml).join("")}</div>` : "") + (xs.length ? `<div>숏: ${xs.map(condHtml).join("")}</div>` : "")
+  // 청산 항목 = 그룹 {conds:[…]}(안은 모두 충족) — 예전 초안은 조건 하나짜리라 그대로 그린다
+  const exitHtml = x => x.conds ? `<div>${x.conds.map(condHtml).join(`<span class="note">그리고</span>`)}</div>` : condHtml(x);
+  h += sec("청산 조건 (줄끼리는 하나라도, 한 줄 안은 모두)", (xl.length || xs.length)
+    ? (xl.length ? `<div>롱: ${xl.map(exitHtml).join("")}</div>` : "") + (xs.length ? `<div>숏: ${xs.map(exitHtml).join("")}</div>` : "")
     : `<span class="note">없음</span>`);
   h += sec("손절 · 익절", `손절 ${esc(targetText(d.stop, true))}<br>익절 ${esc(targetText(d.take, false))}`
     + (d.time_stop_bars ? `<br>${d.time_stop_bars}봉 뒤 청산` : "")
-    + (d.breakeven && d.breakeven.value ? `<br>본전 손절: ${d.breakeven.type === "percent" ? "+" + d.breakeven.value + "%" : d.breakeven.value + "R"} 수익에서` : ""));
+    + (d.trailing && d.trailing.callback_pct ? `<br>트레일링: 고점 대비 ${d.trailing.callback_pct}% 되돌림${d.trailing.activation_pct ? ` (+${d.trailing.activation_pct}% 이후)` : ""}` : "")
+    + (d.breakeven && d.breakeven.value ? `<br>본전 손절: ${d.breakeven.type === "percent" ? "+" + d.breakeven.value + "% 수익에서"
+        : d.breakeven.type === "retrace" ? `직전 ${d.breakeven.lookback || 50}봉 파동 ${d.breakeven.value}% 되돌림에서` : d.breakeven.value + "R 수익에서"}` : ""));
   h += sec(`<span class="mid">기본값·사용자 지정</span>`, list(d.assumed));
-  h += sec(`<span class="no">빠진 규칙</span>`, list(d.excluded));
+  h += sec(`<span class="no">빠진 규칙</span>${chatC.st && chatC.st.engineChanged ? ` <span class="note">(엔진이 바뀌기 전 기준)</span>` : ""}`, list(d.excluded));
   return h;
 }
 
@@ -344,7 +414,10 @@ function renderChat(fresh) {
   }).join("");
   const empty = !(st.messages || []).length;
   const allMade = Object.values(st.presets || {}).flat().filter(p => p.exists);
-  box.innerHTML = `<div class="chat"><div>`
+  const STALE_ASK = "엔진에 기능이 추가됐어. 지금 엔진 기준으로 빠진 규칙을 다시 확인해서 넣을 수 있는 건 초안에 넣어줘";
+  box.innerHTML = (st.engineChanged ? `<div class="made" style="margin-bottom:10px">🔄 이 대화 뒤로 엔진에 기능이 추가됐어요 — `
+      + `예전 답의 '엔진에 없음'과 초안의 '빠진 규칙'은 옛 기준이에요. <button id="restale"${c.busy ? " disabled" : ""}>지금 엔진 기준으로 초안 다시 보기</button></div>` : "")
+    + `<div class="chat"><div>`
     + `<div class="msgs" id="msgs">`
     + (empty ? `<div class="note">AI 가 이 영상의 자막과 분석(매매법 ${c.strats.length}개)을 다 알고 있어요. 궁금한 걸 묻거나 `
         + `"두 번째 매매법으로 초안 만들어줘", "RSI 기간 21로", "숏은 빼줘"처럼 말하세요.</div>`
@@ -363,7 +436,8 @@ function renderChat(fresh) {
         + `<div class="note" style="margin-top:6px">같은 이름이 있으면 덮어써요. 심볼 BTCUSDT·365일로 들어가요.</div>`
         + `<div id="psaved"></div></div>` : "")
     + (allMade.length ? `<div class="hasp" style="margin-top:8px">이 영상으로 만든 프리셋: ` + allMade.map(p =>
-        `<a href="/backtest?preset=${encodeURIComponent(p.name)}" target="_blank" rel="noopener">${esc(p.name)}</a>`).join(" · ") + `</div>` : "")
+        `<a href="/backtest?preset=${encodeURIComponent(p.name)}" target="_blank" rel="noopener">${esc(p.name)}</a>`
+        + `<a class="act" data-dact="discard" data-name="${esc(p.name)}" title="못 쓸 프리셋 — 보관함으로(되살리기 가능)">🗑</a>`).join(" · ") + `</div>` : "")
     + `</div></div>`;
 
   const ta = $("chatin");
@@ -374,6 +448,7 @@ function renderChat(fresh) {
   $("send").onclick = sendChat;
   box.querySelectorAll(".chip").forEach(b => b.onclick = () => { ta.value = b.textContent; sendChat(); });
   if ($("chatreset")) $("chatreset").onclick = resetChat;
+  if ($("restale")) $("restale").onclick = () => { ta.value = STALE_ASK; sendChat(); };
   if ($("psave")) $("psave").onclick = saveChat;
   const ms = $("msgs"); ms.scrollTop = ms.scrollHeight;
 }

@@ -10,15 +10,48 @@ import json
 import numpy as np
 
 from . import indicators as ind
-from .candles import Candles
+from .candles import Candles, MINUTE_MS, resample
+
+_OTHER_CACHE: dict = {}          # (심볼, 시작, 끝) → 1분봉 — 최적화가 같은 구간을 수백 번 읽는다
+
+
+def _load_other(symbol: str, start_ms: int, end_ms: int):
+    """다른 심볼 1분봉을 캐시(DB)에서만 읽는다 — 네트워크 수집은 라이브가 폴마다 따로 한다. 없으면 None."""
+    key = (symbol, int(start_ms), int(end_ms))
+    if key not in _OTHER_CACHE:
+        from . import candle_store                      # 지연 임포트(테스트는 loader 를 주입)
+        try:
+            _OTHER_CACHE.clear()
+            _OTHER_CACHE[key] = candle_store.load_range(symbol, start_ms, end_ms)
+        except ValueError:
+            _OTHER_CACHE[key] = None
+    return _OTHER_CACHE[key]
+
+
+def referenced_symbols(*nodes) -> set:
+    """조건 트리들이 참조하는 다른 심볼(operand.symbol) — 라이브가 그 심볼 캔들도 받아 두게."""
+    out = set()
+    for node in nodes:
+        for op in collect_operands(node if isinstance(node, dict) else {}):
+            if isinstance(op, dict) and op.get("symbol"):
+                out.add(op["symbol"])
+    return out
 
 
 class SeriesResolver:
-    """operand → numpy 시계열. 지표는 키 기준 캐싱."""
+    """operand → numpy 시계열. 지표는 키 기준 캐싱.
 
-    def __init__(self, candles: Candles):
+    operand 확장 두 가지(어느 지표에나 붙는다):
+      params.htf = 상위 TF(분) — 그 TF 로 묶은 봉에서 계산하고, **다 닫힌** 상위 봉 값만 신호봉에 내린다(일봉 EMA21 수평선).
+      symbol     = 다른 심볼(예: BTCUSDT) — 그 심볼을 같은 TF 로 묶어 계산하고 같은 시각 봉에 맞춘다(알트 진입의 BTC 필터).
+    """
+
+    def __init__(self, candles: Candles, symbol: str = None, loader=None):
         self.c = candles
+        self.symbol = symbol
+        self._loader = loader or _load_other
         self._cache: dict = {}
+        self._subs: dict = {}
 
     def _key(self, operand) -> str:
         return json.dumps(operand, sort_keys=True)
@@ -38,8 +71,61 @@ class SeriesResolver:
         self._cache[key] = series
         return series
 
+    def _sub(self, key, make):
+        if key not in self._subs:
+            self._subs[key] = make()
+        return self._subs[key]
+
+    def _htf(self, operand: dict, htf: int) -> np.ndarray:
+        """상위 TF 값 — 상위 봉 k 는 ot_k + htf 에 닫힌다. 신호봉 i(ot_i + tf 에 닫힘)는 그때까지 닫힌 마지막 k 의 값."""
+        c = self.c
+        tf = int(c.timeframe_min)
+        if htf % tf:
+            raise ValueError(f"상위 TF {htf}분은 신호 TF {tf}분의 배수여야 해요")
+        hc = self._sub(("htf", htf), lambda: resample(c, htf))
+        sub = self._sub(("htfr", htf), lambda: SeriesResolver(hc, self.symbol, self._loader))
+        inner = dict(operand, params={k: v for k, v in operand["params"].items() if k != "htf"})
+        vals = sub.resolve(inner)
+        k = np.searchsorted(hc.open_time + htf * MINUTE_MS, c.open_time + tf * MINUTE_MS, side="right") - 1
+        out = np.full(len(c), np.nan)
+        ok = k >= 0
+        out[ok] = vals[k[ok]]
+        return out
+
+    def _other(self, operand: dict) -> np.ndarray:
+        """다른 심볼 값 — 그 심볼 1분봉을 같은 TF 로 묶어 계산, 같은 open_time 신호봉에 맞춘다.
+        그 심볼 데이터가 그 신호봉 구간을 다 못 채웠으면(빠진 1분봉) NaN — 덜 닫힌 봉으로 판정하지 않는다."""
+        c = self.c
+        sym, tf = operand["symbol"], int(c.timeframe_min)
+        tf_ms = tf * MINUTE_MS
+
+        def make():
+            base = self._loader(sym, int(c.open_time[0]), int(c.open_time[-1]) + tf_ms - MINUTE_MS)
+            if base is None or not len(base):
+                return None
+            sig = resample(base, tf) if tf > 1 else base
+            cnt = np.bincount(np.searchsorted(sig.open_time, (base.open_time // tf_ms) * tf_ms), minlength=len(sig))
+            return sig, cnt[:len(sig)] >= tf
+        got = self._sub(("sym", sym), make)
+        out = np.full(len(c), np.nan)
+        if got is None:
+            return out
+        sig, full = got
+        sub = self._sub(("symr", sym), lambda: SeriesResolver(sig, sym, self._loader))
+        vals = sub.resolve({k: v for k, v in operand.items() if k != "symbol"})
+        j = np.searchsorted(sig.open_time, c.open_time)
+        ok = j < len(sig)
+        ok[ok] = (sig.open_time[j[ok]] == c.open_time[ok]) & full[j[ok]]
+        out[ok] = vals[j[ok]]
+        return out
+
     def _compute(self, operand: dict) -> np.ndarray:
         c = self.c
+        if operand.get("symbol") and operand["symbol"] != self.symbol:
+            return self._other(operand)
+        htf = int((operand.get("params") or {}).get("htf") or 0)
+        if htf and htf != int(c.timeframe_min):
+            return self._htf(operand, htf)
         if "source" in operand:
             src = operand["source"]
             return {
@@ -158,6 +244,12 @@ class SeriesResolver:
         if name == "BB_PULLBACK":                           # 하단 터치 → 중간선 반등 → 고점 프랙탈: +1 롱 대기 · −1 숏 거울
             return ind.bb_pullback(c.high, c.low, c.close, period or 20, float(params.get("stddev", 2.0)),
                                    int(params.get("n", 2)), int(params.get("window", 60)))
+        if name == "MA_DIST":                               # 이평 괴리 (종가 − 이평) ÷ ATR. params sma 1/0 · atr
+            return ind.ma_dist(c.high, c.low, c.close, period or 22, bool(params.get("sma", 1)), int(params.get("atr", 14)))
+        if name in ("RETRACE_UP", "RETRACE_DN"):            # 직전 파동 되돌림 %. UP=하락 뒤 반등 · DN=상승 뒤 눌림. period=창
+            return ind.retrace(c.high, c.low, c.close, period or 50, name == "RETRACE_UP")
+        if name in ("TRENDLINE_HIGH", "TRENDLINE_LOW"):     # 마지막 두 프랙탈 고점·저점을 이은 선을 지금 봉까지 연장. period=좌우 봉
+            return ind.pivot_line(c.high, c.low, period or 2, name == "TRENDLINE_HIGH")
         if name == "FRACTAL":                               # 프랙탈 확정 봉: +1 저점(빨강) · -1 고점(파랑). period=좌우 봉
             return ind.fractal(c.high, c.low, period or 2)
         if name == "PULLBACK_FRACTAL":                      # 눌림 → 프랙탈 → 이평 재돌파: +1 롱 · -1 숏. period=이평 기간
@@ -195,6 +287,22 @@ _CMP = {
 }
 
 
+_ATR14 = {"indicator": "ATR", "period": 14}
+
+
+def dist_series(node: dict, resolver: SeriesResolver) -> np.ndarray:
+    """거리 노드 {dist: atr|absAtr, left, right, cmp, value} 의 값 — (left − right) ÷ ATR(14), absAtr 면 절댓값.
+    '고가가 직전 고가보다 ATR 0.3배 이상 높다' = dist atr (고가, PREV_HIGH 1) ≥ 0.3,
+    '5분 EMA21 과 일봉 EMA21 이 ATR 0.5배 안으로 붙었다' = dist absAtr (EMA21, EMA21@1d) < 0.5."""
+    key = ("dist", node["dist"], json.dumps(node["left"], sort_keys=True), json.dumps(node["right"], sort_keys=True))
+    if key not in resolver._cache:
+        a = resolver.resolve(_ATR14)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            d = np.where(a > 0, (resolver.resolve(node["left"]) - resolver.resolve(node["right"])) / a, np.nan)
+        resolver._cache[key] = np.abs(d) if node["dist"] == "absAtr" else d
+    return resolver._cache[key]
+
+
 def evaluate(node: dict, resolver: SeriesResolver, i: int) -> bool:
     """조건 노드를 인덱스 i에서 평가. NaN 포함 시 false."""
     if node is None:
@@ -226,6 +334,11 @@ def evaluate(node: dict, resolver: SeriesResolver, i: int) -> bool:
             return a0 <= b0 and a1 > b1
         else:  # crossUnder
             return a0 >= b0 and a1 < b1
+
+    # 거리 노드
+    if "dist" in node:
+        d = dist_series(node, resolver)[i]
+        return bool(not np.isnan(d) and _CMP[node["cmp"]](d, node["value"]))
 
     # 비교 노드
     left = resolver.resolve(node["left"])[i]
@@ -261,14 +374,24 @@ def operand_label(operand) -> str:
     if isinstance(operand, (int, float)):
         return fmt_value(operand)
     if "source" in operand:
-        return {"open": "시가", "high": "고가", "low": "저가", "close": "종가",
-                "price": "가격", "volume": "거래량"}.get(operand["source"], operand["source"])
+        lab = {"open": "시가", "high": "고가", "low": "저가", "close": "종가",
+               "price": "가격", "volume": "거래량"}.get(operand["source"], operand["source"])
+        return f"{operand['symbol']}·{lab}" if operand.get("symbol") else lab
     name = operand["indicator"]
     # 파라미터는 이름 없이 값만 — 'SUPERTREND_DIR(10,3.0)' / 'MACD(12,26,9)' 처럼
     # 차트에서 쓰는 표기와 같다. 'multiplier=3.0' 은 정확하지만 매분 찍히는 줄에선 자리만 먹는다.
+    params = dict(operand.get("params") or {})
+    htf = params.pop("htf", None)
     parts = [str(operand["period"])] if operand.get("period") else []
-    parts += [str(v) for v in (operand.get("params") or {}).values()]
-    return f"{name}({','.join(parts)})" if parts else name
+    parts += [str(v) for v in params.values()]
+    lab = f"{name}({','.join(parts)})" if parts else name
+    if htf:
+        lab += f"@{_tf_label(int(htf))}"
+    return f"{operand['symbol']}·{lab}" if operand.get("symbol") else lab
+
+
+def _tf_label(minutes: int) -> str:
+    return f"{minutes // 1440}d" if minutes % 1440 == 0 else f"{minutes // 60}h" if minutes % 60 == 0 else f"{minutes}m"
 
 
 def collect_operands(node: dict, out: list = None) -> list:
@@ -335,6 +458,13 @@ def explain(node: dict, resolver: SeriesResolver, i: int) -> dict:
         ok = (a0 <= b0 and a1 > b1) if node["cross"] == "crossOver" else (a0 >= b0 and a1 < b1)
         return {"ok": bool(ok), "text": text, "children": []}
 
+    if "dist" in node:
+        d = dist_series(node, resolver)[i]
+        ln, rn = operand_label(node["left"]), operand_label(node["right"])
+        expr = f"|{ln} − {rn}|÷ATR" if node["dist"] == "absAtr" else f"({ln} − {rn})÷ATR"
+        text = f"{expr}={fmt_value(d)} {_CMP_KO[node['cmp']]} {fmt_value(node['value'])}"
+        return {"ok": bool(not np.isnan(d) and _CMP[node["cmp"]](d, node["value"])), "text": text, "children": []}
+
     lv, rv = resolver.resolve(node["left"])[i], resolver.resolve(node["right"])[i]
     # 상수는 '30' 으로, 지표는 'RSI(14)=27.4' 로 — 상수에 '30=30' 을 붙이면 읽기만 어렵다.
     lt = fmt_value(lv) if isinstance(node["left"], (int, float)) else f"{operand_label(node['left'])}={fmt_value(lv)}"
@@ -388,8 +518,9 @@ UNSTABLE_MULT = 3
 MIN_WARMUP_BARS = 200
 
 
-def operand_lookback(operand) -> int:
-    """이 operand 가 필요로 하는 과거 봉 수(대략). 상수·시세는 0."""
+def operand_lookback(operand, tf_min: int = None) -> int:
+    """이 operand 가 필요로 하는 과거 봉 수(대략). 상수·시세는 0.
+    상위 TF(params.htf) 지표는 그 TF 봉 수라 신호봉으로 환산한다(tf_min 을 주면) — 5분봉 위 일봉 EMA21 = 21×288 봉."""
     if not isinstance(operand, dict) or "indicator" not in operand:
         return 0
     n = int(operand.get("period") or 0)
@@ -397,18 +528,21 @@ def operand_lookback(operand) -> int:
         v = (operand.get("params") or {}).get(k)
         if isinstance(v, (int, float)):
             n = max(n, int(v))
+    htf = (operand.get("params") or {}).get("htf")
+    if htf and tf_min:
+        n *= max(1, int(htf) // int(tf_min))
     return n
 
 
-def max_lookback(*nodes) -> int:
+def max_lookback(*nodes, tf_min: int = None) -> int:
     """여러 조건 트리를 훑어 가장 긴 lookback. 진입·청산 조건을 다 넣어 부른다."""
     best = 0
     for node in nodes:
         for op in collect_operands(node if isinstance(node, dict) else {}):
-            best = max(best, operand_lookback(op))
+            best = max(best, operand_lookback(op, tf_min))
     return best
 
 
-def required_warmup_bars(*nodes) -> int:
+def required_warmup_bars(*nodes, tf_min: int = None) -> int:
     """지표가 '수렴한' 값을 갖기까지 필요한 신호봉 수."""
-    return max(MIN_WARMUP_BARS, max_lookback(*nodes) * UNSTABLE_MULT)
+    return max(MIN_WARMUP_BARS, max_lookback(*nodes, tf_min=tf_min) * UNSTABLE_MULT)

@@ -269,12 +269,13 @@
           <option value="atrMultiple">ATR 배수</option>
           <option value="riskReward">손익비 (손절 거리×n)</option>
           <option value="swing">스윙 고저점 (롱=전고점 / 숏=전저점)</option>
+          <option value="retrace">직전 파동 되돌림 % (롱=하락폭의 n% 반등)</option>
           <option value="supertrend">SuperTrend 전환 (추세이탈 익절)</option>
         </select></div>
       <div class="row" data-when="tp-value"><label id="tpValueLabel">익절 % (가격)</label>
         <input type="number" id="tpValue" value="3" step="0.1" min="0"></div>
       <div class="note" id="tpNote" style="color:var(--mut)"></div>
-      <div class="row" data-when="tp-swing"><label>룩백(봉)</label>
+      <div class="row" data-when="tp-lb"><label>룩백(봉)</label>
         <input type="number" id="tpLookback" value="20" min="1"></div>
       <div class="row" data-when="tp-swing"><label>버퍼 %</label>
         <input type="number" id="tpBuffer" value="0.05" step="0.05" min="0"></div>
@@ -320,12 +321,14 @@
       <div class="row"><label class="hint">활성화 %</label>
         <input type="number" id="trailingActivation" value="1" step="0.05" min="0"></div>
       <div class="row" style="margin-top:8px"><label><input type="checkbox" id="beEnabled"> 본전 손절</label>
-        <select id="beType"><option value="riskReward">손절폭 배수(R) 수익에서</option><option value="percent">진입가 대비 % 수익에서</option></select></div>
-      <div class="row"><label class="hint">트리거 (R 또는 %)</label>
+        <select id="beType"><option value="riskReward">손절폭 배수(R) 수익에서</option><option value="percent">진입가 대비 % 수익에서</option><option value="retrace">직전 파동 n% 되돌림에서</option></select></div>
+      <div class="row"><label class="hint">트리거 (R · % · 되돌림 %)</label>
         <input type="number" id="beValue" value="1" step="0.1" min="0"></div>
+      <div class="row" data-when="be-lb"><label class="hint">파동 룩백(봉)</label>
+        <input type="number" id="beLookback" value="50" min="2"></div>
       <div class="row"><label class="hint">진입가 + 여유 %</label>
         <input type="number" id="beOffset" value="0" step="0.01" min="0" max="5"></div>
-      <div class="note">최고가(롱)·최저가(숏)가 트리거에 닿으면 손절을 진입가로 올려요(다음 봉부터). R 방식은 손절이 있어야 해요. 여유 %는 수수료 보전용.</div>
+      <div class="note">최고가(롱)·최저가(숏)가 트리거에 닿으면 손절을 진입가로 올려요(다음 봉부터). R 방식은 손절이 있어야 해요. 되돌림 방식은 진입 때 직전 파동의 n% 가격을 트리거로 고정해요(예: 25% 에서 본전 · 익절은 50%). 여유 %는 수수료 보전용.</div>
     </div>
 
     <div class="band"><span class="bnum">3</span> 포지션 · 리스크 <span class="bsub">수량 · 레버리지 · 필터</span></div>
@@ -403,7 +406,7 @@ const FIELDS = ["symbol","timeframe","days","equity",
   "tpType","tpValue","tpLookback","tpBuffer","tpStPeriod","tpStMult",
   "exitCondEnabled","exitCondInd","exitCondPeriod","exitCondCmp","exitCondValue","exitCustom","timeStopBars",
   "exitStEnabled","exitStPeriod","exitStMult",
-  "trailingEnabled","trailingCallback","trailingActivation","beEnabled","beType","beValue","beOffset",
+  "trailingEnabled","trailingCallback","trailingActivation","beEnabled","beType","beValue","beOffset","beLookback",
   "leverage","levTierEnabled","sizeType","sizeValue","minLiqBuffer","cooldownBars","avoidFundingMin",
   "entryType","makerTimeoutSeconds"];
 
@@ -442,7 +445,8 @@ function collect() {
     const el = $(f);
     p[f] = el.type === "checkbox" ? el.checked : el.value;
   }
-  p.entryGroups = entryGroups.map(g => ({ side: g.side, conditions: g.conds.map(c => c.node) }));
+  p.entryGroups = entryGroups.map(g => ({ side: g.side, conditions: g.conds.map(c => c.node),
+                                          ...(+g.scale && +g.scale !== 1 ? { sizeScale: +g.scale } : {}) }));
   p.levTiers = levTiers;                          // 서버는 levTierEnabled일 때만 사용
   return p;   // ((A&B)→롱) or ((C&D)→숏)
 }
@@ -456,21 +460,27 @@ const _MODE_MA = {k:"mode",label:"방식",type:"select",opts:[["price","가격 �
 const _MODE_OSC = {k:"mode",label:"방식",type:"select",opts:[["level","기준값 비교"],["cross","크로스(K·D)"]],v:"level",reflow:true};
 const _MODE_ST = {k:"mode",label:"방식",type:"select",opts:[["trend","추세 필터(가격 대비)"],["flip","전환 신호(플립)"]],v:"trend",reflow:true};
 // '직접 조건(고급)'용 — 엔진 지표 전부(schema/preset.schema.json 의 operand.indicator) + 가격 소스
-const ENGINE_INDICATORS = ["SMA", "EMA", "RSI", "MACD", "MACD_signal", "MACD_hist", "BB_upper", "BB_lower", "BB_mid", "ATR", "ADX", "PLUS_DI", "MINUS_DI", "STOCH_K", "STOCH_D", "STOCHRSI_K", "STOCHRSI_D", "CCI", "MFI", "RVOL", "VWAP", "VWAP_Z", "SMA_SLOPE", "MA_ANGLE", "MA_GAP", "MA_CROSSES", "BODY_ATR", "TAKER_DELTA", "TAKER_DELTA_RATIO", "CVD", "CVD_EMA", "HAWKEYE", "QQE_MOD", "QQE_RSI", "QQE_LINE", "SUPERTREND", "SUPERTREND_DIR", "RSI_DIV", "ATR_RANK", "PIN_BAR", "TRIANGLE_BREAK", "FRACTAL", "PULLBACK_FRACTAL", "BOX_HIGH", "BOX_LOW", "PREV_HIGH", "PREV_LOW", "RSI_PREV_HIGH", "RSI_PREV_LOW", "PIVOT_LOW", "PIVOT_HIGH", "VP_ABOVE", "VP_BELOW", "BB_TOUCH_UP", "BB_TOUCH_DN", "BB_PULLBACK", "BIG_CANDLE", "CDL_BULLREV", "CDL_BEARREV", "CDL_ENGULFING", "CDL_HAMMER", "CDL_HANGINGMAN", "CDL_MORNINGSTAR", "CDL_EVENINGSTAR", "CDL_PIERCING", "CDL_DARKCLOUDCOVER"];
+const ENGINE_INDICATORS = ["SMA", "EMA", "RSI", "MACD", "MACD_signal", "MACD_hist", "BB_upper", "BB_lower", "BB_mid", "ATR", "ADX", "PLUS_DI", "MINUS_DI", "STOCH_K", "STOCH_D", "STOCHRSI_K", "STOCHRSI_D", "CCI", "MFI", "RVOL", "VWAP", "VWAP_Z", "SMA_SLOPE", "MA_ANGLE", "MA_GAP", "MA_CROSSES", "BODY_ATR", "TAKER_DELTA", "TAKER_DELTA_RATIO", "CVD", "CVD_EMA", "HAWKEYE", "QQE_MOD", "QQE_RSI", "QQE_LINE", "SUPERTREND", "SUPERTREND_DIR", "RSI_DIV", "ATR_RANK", "PIN_BAR", "TRIANGLE_BREAK", "FRACTAL", "PULLBACK_FRACTAL", "BOX_HIGH", "BOX_LOW", "PREV_HIGH", "PREV_LOW", "RSI_PREV_HIGH", "RSI_PREV_LOW", "PIVOT_LOW", "PIVOT_HIGH", "VP_ABOVE", "VP_BELOW", "BB_TOUCH_UP", "BB_TOUCH_DN", "BB_PULLBACK", "BIG_CANDLE", "MA_DIST", "RETRACE_UP", "RETRACE_DN", "TRENDLINE_HIGH", "TRENDLINE_LOW", "CDL_BULLREV", "CDL_BEARREV", "CDL_ENGULFING", "CDL_HAMMER", "CDL_HANGINGMAN", "CDL_MORNINGSTAR", "CDL_EVENINGSTAR", "CDL_PIERCING", "CDL_DARKCLOUDCOVER"];
 const PRICE_SOURCES = [["close","종가"],["open","시가"],["high","고가"],["low","저가"],["volume","거래량"]];
 const OPERAND_OPTS = [...PRICE_SOURCES, ...ENGINE_INDICATORS.map(x => [x, x])];
-function customOperand(name, per, params) {
-  if (PRICE_SOURCES.some(([k]) => k === name)) return { source: name };
+function customOperand(name, per, params, sym) {
+  sym = String(sym || "").trim().toUpperCase();
+  if (PRICE_SOURCES.some(([k]) => k === name)) return sym ? { source: name, symbol: sym } : { source: name };
   const o = { indicator: name };
+  if (sym) o.symbol = sym;
   if (per !== "" && per != null && !isNaN(+per)) o.period = +per;
   if (params && String(params).trim()) { try { const pr = JSON.parse(params); if (pr && typeof pr === "object") o.params = pr; } catch (e) {} }
   return o;
 }
 function operandText(o) {
   if (typeof o === "number") return String(o);
-  if (o.source) return (PRICE_SOURCES.find(([k]) => k === o.source) || [0, o.source])[1];
-  return `${o.indicator}${o.period ? `(${o.period})` : ""}${o.params ? " " + JSON.stringify(o.params) : ""}`;
+  const sym = o.symbol ? o.symbol + "·" : "";
+  if (o.source) return sym + (PRICE_SOURCES.find(([k]) => k === o.source) || [0, o.source])[1];
+  const pr = { ...(o.params || {}) }; const htf = pr.htf; delete pr.htf;
+  return `${sym}${o.indicator}${o.period ? `(${o.period})` : ""}${Object.keys(pr).length ? " " + JSON.stringify(pr) : ""}${htf ? " @" + tfText(htf) : ""}`;
 }
+function tfText(m) { return m == 1440 ? "일봉" : m % 1440 === 0 ? `${m/1440}일봉` : m % 60 === 0 ? `${m/60}시간봉` : `${m}분봉`; }
+const HTF_OPTS = [["60","1시간봉"],["240","4시간봉"],["1440","일봉"]];
 const COND_TYPES = {
   rsi: { label:"RSI",
     fields:[{k:"period",label:"기간",v:14,sweep:{path:"left.period",def:[7,21,7]}},{k:"cmp",label:"조건",type:"cmp"},{k:"value",label:"기준값",v:30,sweep:{path:"right",def:[15,35,5]}}],
@@ -655,11 +665,13 @@ const COND_TYPES = {
     desc:n=>`RSI(${n.left.period}) ${n.cross==="crossOver"?"▲ 직전 "+n.right.period+"봉 RSI 고점 돌파":"▼ 직전 "+n.right.period+"봉 RSI 저점 이탈"}` },
   doubleBottom: { label:"쌍바닥·쌍봉(두 번째가 전저점·전고점을 깸)",
     // 확정된 프랙탈 저점 두 개: 마지막 < 그 전 (두 번째 바닥이 전저점 아래). 다음 저점이 확정될 때까지 참이 유지된다
-    fields:[{k:"dir",label:"종류",type:"select",opts:[["bottom","쌍바닥 — 두 번째 저점 < 전저점"],["top","쌍봉 — 두 번째 고점 > 전고점"]],v:"bottom"},
+    fields:[{k:"dir",label:"종류",type:"select",opts:[["bottom","쌍바닥 — 두 번째 저점 < 전저점"],["top","쌍봉 — 두 번째 고점 > 전고점"],
+              ["lh","낮아지는 고점 — 마지막 고점 < 전고점(하락 추세선)"],["hl","높아지는 저점 — 마지막 저점 > 전저점(상승 추세선)"]],v:"bottom"},
             {k:"n",label:"저점·고점 확인(좌우 봉)",v:5,sweep:{path:"left.period",def:[3,9,2]}}],
-    build:f=>{ const ind = f.dir==="bottom" ? "PIVOT_LOW" : "PIVOT_HIGH";
-      return {left:{indicator:ind,period:+f.n,params:{nth:0}},cmp:f.dir==="bottom"?"<":">",right:{indicator:ind,period:+f.n,params:{nth:1}}}; },
-    desc:n=>`${n.left.indicator==="PIVOT_LOW"?"쌍바닥 — 마지막 저점 < 전저점":"쌍봉 — 마지막 고점 > 전고점"} (좌우 ${n.left.period}봉)` },
+    build:f=>{ const ind = (f.dir==="bottom"||f.dir==="hl") ? "PIVOT_LOW" : "PIVOT_HIGH";
+      return {left:{indicator:ind,period:+f.n,params:{nth:0}},cmp:(f.dir==="bottom"||f.dir==="lh")?"<":">",right:{indicator:ind,period:+f.n,params:{nth:1}}}; },
+    desc:n=>`${{"PIVOT_LOW<":"쌍바닥 — 마지막 저점 < 전저점","PIVOT_HIGH>":"쌍봉 — 마지막 고점 > 전고점",
+               "PIVOT_HIGH<":"낮아지는 고점(하락 추세선)","PIVOT_LOW>":"높아지는 저점(상승 추세선)"}[n.left.indicator+n.cmp]} (좌우 ${n.left.period}봉)` },
   vpThin: { label:"매물대 두께(VPVR 근사)",
     // 최근 N봉 거래량 중 지금 종가 위(또는 아래) band% 구간에 쌓인 비중(%). 작으면 얇은 매물대 → 뚫기 쉽다
     fields:[{k:"side",label:"구간",type:"select",opts:[["above","종가 위(롱 저항)"],["below","종가 아래(숏 지지)"]],v:"above"},
@@ -691,6 +703,65 @@ const COND_TYPES = {
             {k:"within",label:"최근 N봉 안",v:10,sweep:{path:"left.params.within",def:[5,20,5]}}],
     build:f=>({left:{indicator:"BIG_CANDLE",period:14,params:{mult:+f.mult,within:+f.within}},cmp:f.dir==="bull"?">":"<",right:0}),
     desc:n=>`최근 ${n.left.params.within}봉 안 ${n.cmp===">"?"장대양봉":"장대음봉"}(몸통 ≥ ATR×${n.left.params.mult})` },
+  maDist: { label:"이평 괴리(ATR 배수)",
+    // (종가 − 이평) ÷ ATR(14). −2 = 이평보다 ATR 2배 아래로 벌어짐(과매도 괴리). 코인·봉 크기와 무관
+    fields:[{k:"ma",label:"이평",type:"select",opts:[["sma","SMA"],["ema","EMA"]],v:"sma"},
+            {k:"period",label:"기간",v:22,sweep:{path:"left.period",def:[10,40,10]}},
+            {k:"cmp",label:"조건",type:"cmp",v:"<"},
+            {k:"value",label:"괴리(ATR 배수, 아래는 음수)",v:-2,sweep:{path:"right",def:[-3,-1,0.5]}}],
+    build:f=>({left:{indicator:"MA_DIST",period:+f.period,params:{sma:f.ma==="sma"?1:0}},cmp:f.cmp,right:+f.value}),
+    desc:n=>`(종가 − ${n.left.params.sma?"SMA":"EMA"}(${n.left.period})) ÷ ATR ${n.cmp} ${n.right}` },
+  retrace: { label:"직전 파동 되돌림 %",
+    // 반등: 최근 N봉 최고가 → 그 뒤 최저가 사이에서 지금 종가가 몇 % 되돌렸나. 눌림: 상승폭의 몇 % 내려왔나
+    fields:[{k:"dir",label:"파동",type:"select",opts:[["up","하락 뒤 반등(하락폭의 %)"],["dn","상승 뒤 눌림(상승폭의 %)"]],v:"up"},
+            {k:"n",label:"파동 찾을 봉 수",v:50,sweep:{path:"left.period",def:[30,90,20]}},
+            {k:"cmp",label:"조건",type:"cmp",v:">"},
+            {k:"value",label:"되돌림 %",v:75,sweep:{path:"right",def:[50,90,10]}}],
+    build:f=>({left:{indicator:f.dir==="up"?"RETRACE_UP":"RETRACE_DN",period:+f.n},cmp:f.cmp,right:+f.value}),
+    desc:n=>`최근 ${n.left.period}봉 ${n.left.indicator==="RETRACE_UP"?"하락폭 반등":"상승폭 눌림"} ${n.cmp} ${n.right}%` },
+  trendline: { label:"추세선 돌파(두 고점·저점을 이은 선)",
+    // 확정된 마지막 두 프랙탈 고점을 이은 선을 지금 봉까지 연장 → 종가가 그 선을 상향 교차. 하락 추세선만 보려면 '낮아지는 고점'과 같이
+    fields:[{k:"dir",label:"방향",type:"select",opts:[["up","▲ 고점 추세선 상향 돌파"],["down","▼ 저점 추세선 하향 이탈"]],v:"up"},
+            {k:"n",label:"고점·저점 확인(좌우 봉)",v:3,sweep:{path:"right.period",def:[2,6,1]}}],
+    build:f=>({cross:f.dir==="up"?"crossOver":"crossUnder",left:{source:"close"},
+               right:{indicator:f.dir==="up"?"TRENDLINE_HIGH":"TRENDLINE_LOW",period:+f.n}}),
+    desc:n=>`종가가 ${n.right.indicator==="TRENDLINE_HIGH"?"고점 추세선 ▲돌파":"저점 추세선 ▼이탈"} (좌우 ${n.right.period}봉 피벗 두 개)` },
+  htfMa: { label:"상위 TF 이평(일봉 EMA 수평선 등)",
+    // 상위 TF 의 다 닫힌 봉에서 계산한 이평 값과 비교 — 5분봉 위에 '일봉 EMA21 마지막 값' 수평선
+    fields:[{k:"tf",label:"상위 TF",type:"select",opts:HTF_OPTS,v:"1440"},
+            {k:"ma",label:"이평",type:"select",opts:[["EMA","EMA"],["SMA","SMA"]],v:"EMA"},
+            {k:"period",label:"기간",v:21,sweep:{path:"right.period",def:[10,50,10]}},
+            {k:"op",label:"조건",type:"select",opts:[[">","종가 > 선"],["<","종가 < 선"],["crossOver","▲ 종가 상향 돌파"],["crossUnder","▼ 종가 하향 이탈"]],v:">"}],
+    build:f=>{ const R = {indicator:f.ma,period:+f.period,params:{htf:+f.tf}};
+      return String(f.op).startsWith("cross") ? {cross:f.op,left:{source:"close"},right:R} : {left:{source:"close"},cmp:f.op,right:R}; },
+    desc:n=>`종가 ${n.cross ? (n.cross==="crossOver"?"▲돌파":"▼이탈") : n.cmp} ${tfText(n.right.params.htf)} ${n.right.indicator}(${n.right.period})` },
+  lineGap: { label:"두 선이 붙음(ATR 배수 안)",
+    // |이 TF 이평 − 상위 TF 이평| ÷ ATR < k — 두 선 사이 공간이 좁아짐(탈출 대기)
+    fields:[{k:"ma",label:"이평",type:"select",opts:[["EMA","EMA"],["SMA","SMA"]],v:"EMA"},
+            {k:"period",label:"기간",v:21},
+            {k:"tf",label:"상위 TF",type:"select",opts:HTF_OPTS,v:"1440"},
+            {k:"k",label:"거리 < ATR×",v:0.5,sweep:{path:"value",def:[0.25,1,0.25]}}],
+    build:f=>({dist:"absAtr",left:{indicator:f.ma,period:+f.period},right:{indicator:f.ma,period:+f.period,params:{htf:+f.tf}},cmp:"<",value:+f.k}),
+    desc:n=>`|${n.left.indicator}(${n.left.period}) − ${tfText(n.right.params.htf)} ${n.right.indicator}(${n.right.period})| < ATR×${n.value}` },
+  barDiff: { label:"가격 차이 ≥ ATR 배수(크게 넘음)",
+    // (이 봉 값 − 기준) ÷ ATR ≥ k. 예: 고가 − 직전 봉 고가 ≥ ATR×0.3 = '양봉 고점이 음봉 고점보다 훨씬 높다'
+    fields:[{k:"src",label:"이 봉의",type:"select",opts:[["high","고가"],["close","종가"],["low","저가"]],v:"high"},
+            {k:"ref",label:"기준",type:"select",opts:[["PREV_HIGH","직전 N봉 최고 고가"],["PREV_LOW","직전 N봉 최저 저가"],["EMA","EMA(N)"],["SMA","SMA(N)"]],v:"PREV_HIGH"},
+            {k:"n",label:"N",v:1},
+            {k:"cmp",label:"조건",type:"select",opts:[[">=","≥ 위로"],["<=","≤ 아래로(음수)"]],v:">="},
+            {k:"k",label:"ATR 배수",v:0.3,sweep:{path:"value",def:[0.1,0.6,0.1]}}],
+    build:f=>({dist:"atr",left:{source:f.src},right:{indicator:f.ref,period:+f.n},cmp:f.cmp,value:+f.k}),
+    desc:n=>`(${operandText(n.left)} − ${n.right.indicator}(${n.right.period})) ÷ ATR ${n.cmp} ${n.value}` },
+  otherSym: { label:"다른 코인 필터(BTC 이평 위 등)",
+    // 다른 심볼을 같은 TF 로 — 알트 진입을 BTC 상태로 거른다. 그 심볼 데이터가 수집돼 있어야 해요(📥 데이터 수집)
+    fields:[{k:"sym",label:"심볼",v:"BTCUSDT"},
+            {k:"ma",label:"이평",type:"select",opts:[["EMA","EMA"],["SMA","SMA"]],v:"EMA"},
+            {k:"period",label:"기간",v:21,sweep:{path:"right.period",def:[10,50,10]}},
+            {k:"op",label:"조건",type:"select",opts:[[">","그 코인 종가 > 이평"],["<","그 코인 종가 < 이평"],["crossOver","▲ 상향 돌파"],["crossUnder","▼ 하향 이탈"]],v:">"}],
+    build:f=>{ const sym = String(f.sym||"BTCUSDT").trim().toUpperCase();
+      const L = {source:"close",symbol:sym}, R = {indicator:f.ma,period:+f.period,symbol:sym};
+      return String(f.op).startsWith("cross") ? {cross:f.op,left:L,right:R} : {left:L,cmp:f.op,right:R}; },
+    desc:n=>`${n.left.symbol} 종가 ${n.cross ? (n.cross==="crossOver"?"▲돌파":"▼이탈") : n.cmp} ${n.right.indicator}(${n.right.period})` },
   fractal: { label:"윌리엄스 프랙탈",
     fields:[{k:"dir",label:"종류",type:"select",opts:[["low","저점 프랙탈(빨강) 확정"],["high","고점 프랙탈(파랑) 확정"]],v:"low"},
             {k:"n",label:"좌우 봉",v:2,sweep:{path:"left.period",def:[2,7,5]}}],
@@ -719,21 +790,40 @@ const COND_TYPES = {
     fields:f=>[
       {k:"left",label:"왼쪽",type:"select",opts:OPERAND_OPTS,v:"RSI"},
       {k:"lp",label:"기간",v:"14",sweep:{path:"left.period",def:[7,21,7]}},
-      {k:"lparams",label:"파라미터(JSON)",v:""},
+      {k:"lparams",label:"파라미터(JSON · 상위TF는 {\"htf\":1440})",v:""},
+      {k:"lsym",label:"심볼(비우면 이 코인)",v:""},
       {k:"op",label:"조건",type:"select",opts:[["<","< 미만"],["<=","≤ 이하"],[">","> 초과"],[">=","≥ 이상"],["crossOver","▲ 상향 교차"],["crossUnder","▼ 하향 교차"]],v:">"},
       {k:"rk",label:"오른쪽",type:"select",opts:[["num","숫자"],["ind","지표·가격"]],v:"num",reflow:true},
       ...(f.rk==="ind"
         ? [{k:"right",label:"지표",type:"select",opts:OPERAND_OPTS,v:"SMA"},
            {k:"rp",label:"기간",v:"100",sweep:{path:"right.period",def:[50,200,50]}},
-           {k:"rparams",label:"파라미터(JSON)",v:""}]
+           {k:"rparams",label:"파라미터(JSON)",v:""},
+           {k:"rsym",label:"심볼(비우면 이 코인)",v:""}]
         : [{k:"rv",label:"값",v:"50",sweep:{path:"right",def:[30,70,10]}}])],
     build:f=>{
-      const L = customOperand(f.left, f.lp, f.lparams);
-      const R = f.rk==="ind" ? customOperand(f.right, f.rp, f.rparams) : +f.rv;
+      const L = customOperand(f.left, f.lp, f.lparams, f.lsym);
+      const R = f.rk==="ind" ? customOperand(f.right, f.rp, f.rparams, f.rsym) : +f.rv;
       return String(f.op).startsWith("cross") ? {cross:f.op,left:L,right:R} : {left:L,cmp:f.op,right:R}; },
     desc:n=> n.cross!==undefined
       ? `${operandText(n.left)} ${n.cross==="crossOver"?"▲상향 교차":"▼하향 교차"} ${operandText(n.right)}`
       : `${operandText(n.left)} ${n.cmp} ${operandText(n.right)}` },
+  customDist: { label:"직접 거리 조건(고급 · ATR 배수)",
+    // (왼쪽 − 오른쪽) ÷ ATR(14) 비교. 절댓값이면 '두 값이 붙었나'. 영상 분석의 '크게·훨씬' 규칙이 이 종류로 만들어진다
+    fields:[
+      {k:"left",label:"왼쪽",type:"select",opts:OPERAND_OPTS,v:"high"},
+      {k:"lp",label:"기간",v:""},
+      {k:"lparams",label:"파라미터(JSON)",v:""},
+      {k:"lsym",label:"심볼(비우면 이 코인)",v:""},
+      {k:"right",label:"오른쪽",type:"select",opts:OPERAND_OPTS,v:"PREV_HIGH"},
+      {k:"rp",label:"기간",v:"1"},
+      {k:"rparams",label:"파라미터(JSON)",v:""},
+      {k:"rsym",label:"심볼(비우면 이 코인)",v:""},
+      {k:"mode",label:"거리",type:"select",opts:[["atr","(왼 − 오) ÷ ATR"],["absAtr","|왼 − 오| ÷ ATR"]],v:"atr"},
+      {k:"cmp",label:"조건",type:"select",opts:[[">=","≥"],[">",">"],["<=","≤"],["<","<"]],v:">="},
+      {k:"k",label:"ATR 배수",v:"0.3",sweep:{path:"value",def:[0.1,1,0.1]}}],
+    build:f=>({dist:f.mode,left:customOperand(f.left, f.lp, f.lparams, f.lsym),right:customOperand(f.right, f.rp, f.rparams, f.rsym),
+               cmp:f.cmp,value:+f.k}),
+    desc:n=>`${n.dist==="absAtr"?"|":"("}${operandText(n.left)} − ${operandText(n.right)}${n.dist==="absAtr"?"|":")"} ÷ ATR ${n.cmp} ${n.value}` },
 };
 let entryGroups = [];   // [{side, conds:[{type,node}...AND]}, ...(OR)]  →  ((A&B)→롱) or ((C&D)→숏)
 
@@ -815,7 +905,9 @@ function renderGroups() {
     + `<span>그룹 ${gi+1} · 모두 만족(AND) → 진입</span>`
     + `<select class="gside" data-g="${gi}" style="width:auto;padding:2px 5px;font-size:11px">`
     + `<option value="long"${g.side==="long"?" selected":""}>롱 long</option>`
-    + `<option value="short"${g.side==="short"?" selected":""}>숏 short</option></select></div>`
+    + `<option value="short"${g.side==="short"?" selected":""}>숏 short</option></select>`
+    + `<label style="font-size:11px;color:var(--mut)" title="이 그룹으로 진입할 때 비중 배수 — 사이징 값 × 이 값(증거금 상한은 그대로)">비중×`
+    + `<input class="mini gscale" data-g="${gi}" value="${g.scale || 1}" style="width:42px"></label></div>`
     + g.conds.map((c, ci) => condItemHtml(gi, ci, c)).join("")
     + `<button class="addcond" data-g="${gi}">+ 조건 추가 (AND)</button>`
     + `</div>`).join("");
@@ -827,6 +919,9 @@ function renderGroups() {
   document.querySelectorAll(".addcond").forEach(b => b.onclick = () => addCondToGroup(+b.dataset.g));
   document.querySelectorAll(".gside").forEach(s => s.onchange = () => {
     entryGroups[+s.dataset.g].side = s.value; updateHints();
+  });
+  document.querySelectorAll(".gscale").forEach(s => s.oninput = () => {
+    entryGroups[+s.dataset.g].scale = +s.value > 0 ? +s.value : 1; updateHints();
   });
   // 지표 종류 변경 → 그 조건을 새 지표 기본값으로 교체
   document.querySelectorAll("#groupsView .ctype").forEach(s => s.onchange = () => {
@@ -858,6 +953,7 @@ $("addGroup").onclick = addGroup;
 function setEntryGroups(groups) {
   entryGroups = (groups || []).map(g => ({
     side: g.side || "long",
+    scale: g.sizeScale || 1,
     conds: (g.conds || []).map(s => {
       const f = { ...s }; delete f.type;
       seedDefaults(s.type, f);                                  // 프리셋에 빠진 필드는 기본값
@@ -880,8 +976,10 @@ function sync() {
   show("sl-ind", slT === "indicator");
   show("sl-buf", slT === "swing" || slT === "indicator");
   show("sl-st", slT === "supertrend");
-  show("tp-value", tpT === "percent" || tpT === "atrMultiple" || tpT === "riskReward");
+  show("tp-value", tpT === "percent" || tpT === "atrMultiple" || tpT === "riskReward" || tpT === "retrace");
   show("tp-swing", tpT === "swing");
+  show("tp-lb", tpT === "swing" || tpT === "retrace");
+  show("be-lb", $("beType").value === "retrace");
   show("tp-st", tpT === "supertrend");
   show("exit-st", $("exitStEnabled").checked);
   const maker = $("entryType").value === "makerLimit";
@@ -905,12 +1003,14 @@ function sync() {
     ? "포지션 반대로 SuperTrend 전환 시 손절(신호봉 종가). 롱=하락전환, 숏=상승전환. 가격 레벨이 없어 손익비·리스크% 사이징과는 함께 못 씀."
     : "";
   $("tpValueLabel").textContent = tpT === "atrMultiple" ? "익절 ATR 배수"
-    : tpT === "riskReward" ? "손익비 (손절 거리 × 배수)" : "익절 % (가격)";
+    : tpT === "riskReward" ? "손익비 (손절 거리 × 배수)" : tpT === "retrace" ? "되돌림 % (직전 파동)" : "익절 % (가격)";
   $("tpNote").textContent = tpT === "riskReward"
     ? (!slPrice ? "⚠️ 손익비는 가격 손절이 필요해 — 손절을 %·ATR·스윙으로 켜줘 (SuperTrend/없음은 불가)"
                      : "익절 거리 = 손절 거리 × 배수 (예: 2 → 손절 1% 시 익절 2%)")
     : tpT === "supertrend"
     ? "포지션 방향과 반대로 SuperTrend가 전환하면 청산(신호봉 종가). 롱=하락전환, 숏=상승전환. 추세를 끝까지 타고 이탈 시 익절."
+    : tpT === "retrace"
+    ? "진입 때 룩백 안의 직전 파동으로 익절가를 고정. 롱: 최고가 → 그 뒤 최저가 사이에서 n% 반등한 가격(25 = 하락폭의 25%). 숏은 상승폭의 n% 눌림. 진입가보다 불리하면 그 거래는 익절 없음."
     : "";
 
   const risk = $("sizeType").value === "riskPercent";
@@ -920,7 +1020,7 @@ function sync() {
     : "";
   if (typeof updateHints === "function") updateHints();
 }
-["slType","tpType","sizeType","exitStEnabled","entryType","levTierEnabled","makerTimeoutSeconds"].forEach(id => $(id).addEventListener("change", sync));
+["slType","tpType","sizeType","exitStEnabled","entryType","levTierEnabled","makerTimeoutSeconds","beType"].forEach(id => $(id).addEventListener("change", sync));
 $("levTierAdd").onclick = () => { levTiers.push({maxBalance:null, leverage:5}); renderLevTiers(); saveTiers(); };
 renderLevTiers();
 loadTiers();                                        // 글로벌 티어 로드(대시보드 봇 설정과 공유)
@@ -1001,7 +1101,8 @@ function cpStore(obj){ localStorage.setItem(CP_KEY, JSON.stringify(obj)); }
 function cpSerialize(){
   const p = {};
   for (const f of FIELDS){ const el = $(f); p[f] = el.type === "checkbox" ? el.checked : el.value; }
-  p.entry = entryGroups.map(g => ({ side: g.side, conds: g.conds.map(c => ({ type: c.type, ...c.f })) }));
+  p.entry = entryGroups.map(g => ({ side: g.side, conds: g.conds.map(c => ({ type: c.type, ...c.f })),
+                                    ...(+g.scale && +g.scale !== 1 ? { sizeScale: +g.scale } : {}) }));
   p.levTiers = JSON.parse(JSON.stringify(levTiers));
   return p;
 }
@@ -1569,7 +1670,7 @@ function sweepApplicable(key) {
     return !!(c && getFields(c.type, c.f).some(f => f.sweep && f.sweep.path === path));
   }
   if (key === "slValue") return ["percent","atrMultiple"].includes($("slType").value);
-  if (key === "tpValue") return ["percent","atrMultiple","riskReward"].includes($("tpType").value);
+  if (key === "tpValue") return ["percent","atrMultiple","riskReward","retrace"].includes($("tpType").value);
   if (key === "exitCondValue" || key === "exitCondPeriod") return $("exitCondEnabled").checked;
   if (key === "beValue") return $("beEnabled").checked;
   return true;   // timeStopBars · leverage · sizeValue
@@ -2016,6 +2117,7 @@ function updateHints() {
   setH("tp", tpT==="off" ? "없음" : tpT==="percent" ? `${v("tpValue")}%`
         : tpT==="atrMultiple" ? `ATR×${v("tpValue")}`
         : tpT==="riskReward" ? `R:R ${v("tpValue")}`
+        : tpT==="retrace" ? `파동 ${v("tpValue")}% 되돌림(${v("tpLookback")}봉)`
         : tpT==="supertrend" ? `ST전환(${v("tpStPeriod")},×${v("tpStMult")})` : `스윙${v("tpLookback")}봉`);
   const parts = [];
   if ($("exitCondEnabled").checked) parts.push(`${EXIT_IND_LABEL[v("exitCondInd")]||v("exitCondInd")}${v("exitCondCmp")}${v("exitCondValue")}`);
@@ -2024,7 +2126,7 @@ function updateHints() {
   setH("cond", parts.join(" · ") || "없음");
   const trail = [];
   if ($("trailingEnabled").checked) trail.push(`${v("trailingCallback")}%`);
-  if ($("beEnabled").checked) trail.push(`본전 ${v("beType")==="percent" ? "+"+v("beValue")+"%" : v("beValue")+"R"}`);
+  if ($("beEnabled").checked) trail.push(`본전 ${v("beType")==="percent" ? "+"+v("beValue")+"%" : v("beType")==="retrace" ? "파동 "+v("beValue")+"%" : v("beValue")+"R"}`);
   setH("trail", trail.join(" · ") || "없음");
   setH("sizing", `${v("leverage")}x · ${v("sizeType")==="riskPercent"?"리스크":"증거금"} ${v("sizeValue")}%`);
   setH("filter", `쿨다운 ${v("cooldownBars")} · 펀딩 ${v("avoidFundingMin")}분`);

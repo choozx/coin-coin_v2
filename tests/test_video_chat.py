@@ -97,7 +97,7 @@ def test_save_writes_preset_and_record(env):
     assert r["name"] == "🎬 내 RSI" and r["built"]
     rec = json.loads((env["saved"] / (server._safe_name(r["name"]) + ".json")).read_text())
     assert rec["preset"]                                         # 스키마형 프리셋까지 빌드됨
-    assert r["chat"]["presets"] == {0: [{"name": "🎬 내 RSI", "exists": True}]}   # 기반 매매법 카드에
+    assert r["chat"]["presets"] == {0: [{"name": "🎬 내 RSI", "exists": True, "discarded": False}]}   # 기반 매매법 카드에
 
 
 def test_save_without_draft_fails(env):
@@ -110,7 +110,7 @@ def test_save_without_strategy_goes_to_chat_record(env):
     va.chat({"id": VID, "message": "둘 섞어줘"})
     r = va.chat_save({"id": VID})
     assert r["name"] == "🎬 섞음"
-    assert r["chat"]["presets"] == {"chat": [{"name": "🎬 섞음", "exists": True}]}
+    assert r["chat"]["presets"] == {"chat": [{"name": "🎬 섞음", "exists": True, "discarded": False}]}
     assert va.list_analyses()[0]["presetCount"] == 1                # 왼쪽 목록 개수에도 잡힌다
 
 

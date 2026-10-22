@@ -855,6 +855,85 @@ def bb_pullback(high, low, close, period: int = 20, stddev: float = 2.0, n: int 
     return out
 
 
+def ma_dist(high, low, close, period: int = 22, sma_type: bool = True, atr_period: int = 14) -> np.ndarray:
+    """이평 괴리 — (종가 − 이평) ÷ ATR. 부호 있음: −2 = 이평보다 ATR 2배 아래로 벌어짐. 코인·봉 크기와 무관하게 비교된다."""
+    c = _d(close)
+    m = sma(c, period) if sma_type else ema(c, period)
+    a = talib.ATR(_d(high), _d(low), c, timeperiod=atr_period)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.where(a > 0, (c - m) / a, np.nan)
+
+
+def retrace(high, low, close, n: int = 50, up: bool = True, chunk: int = 4096) -> np.ndarray:
+    """직전 파동 대비 되돌림 비율(%) — 최근 n 봉(현재 포함) 안에서.
+
+    up=True (하락 뒤 반등): 창의 최고 고가 H(그 봉 a) → a 이후 최저 저가 L. 값 = (종가 − L) ÷ (H − L) × 100.
+                           75 = 하락폭의 75% 를 되돌렸다. 고점이 창 안의 가장 최근 고점보다 앞서야 '하락'이 성립한다.
+    up=False(상승 뒤 눌림): 창의 최저 저가 L(그 봉 b) → b 이후 최고 고가 H. 값 = (H − 종가) ÷ (H − L) × 100.
+    H == L 이거나 창이 덜 찼으면 NaN. 인과적(현재 봉까지만 본다).
+    """
+    h, l, c = _d(high), _d(low), _d(close)
+    nb = len(c)
+    out = np.full(nb, np.nan)
+    if n < 2 or nb < n:
+        return out
+    wh, wl = swv(h, n), swv(l, n)
+    col = np.arange(n)
+    for a in range(0, len(wh), chunk):
+        H, L = wh[a:a + chunk], wl[a:a + chunk]
+        cur = c[a + n - 1:a + n - 1 + len(H)]
+        if up:
+            k = H.argmax(axis=1)
+            top = H[np.arange(len(H)), k]
+            bot = np.where(col[None, :] >= k[:, None], L, np.inf).min(axis=1)
+            num = cur - bot
+        else:
+            k = L.argmin(axis=1)
+            bot = L[np.arange(len(L)), k]
+            top = np.where(col[None, :] >= k[:, None], H, -np.inf).max(axis=1)
+            num = top - cur
+        rng = top - bot
+        with np.errstate(invalid="ignore", divide="ignore"):
+            out[a + n - 1:a + n - 1 + len(H)] = np.where(rng > 0, num / rng * 100.0, np.nan)
+    return out
+
+
+def retrace_price(high, low, i: int, n: int, frac: float, up: bool) -> float:
+    """봉 i 에서 본 직전 파동의 frac(0~1) 되돌림 가격 — retrace() 와 같은 H·L.
+    up=True: L + frac×(H − L) (하락 뒤 반등 목표) · up=False: H − frac×(H − L) (상승 뒤 눌림 목표). 못 구하면 NaN."""
+    s = max(0, i - n + 1)
+    h, l = _d(high)[s:i + 1], _d(low)[s:i + 1]
+    if len(h) == 0:
+        return float("nan")
+    if up:
+        k = int(h.argmax()); top, bot = h[k], l[k:].min()
+    else:
+        k = int(l.argmin()); bot, top = l[k], h[k:].max()
+    if not top > bot:
+        return float("nan")
+    return float(bot + frac * (top - bot)) if up else float(top - frac * (top - bot))
+
+
+def pivot_line(high, low, n: int = 2, top: bool = True) -> np.ndarray:
+    """추세선 — 확정된 마지막 두 프랙탈 고점(top) / 저점을 이은 직선을 현재 봉까지 연장한 값. 인과적.
+
+    고점선이 내려가면 '하락 추세선', 저점선이 올라가면 '상승 추세선'. 새 피벗이 확정되면 선이 바뀐다.
+    방향을 가리려면 PIVOT_HIGH{nth:0} < PIVOT_HIGH{nth:1}(내려가는 고점) 같은 조건을 같이 건다.
+    """
+    lows, highs = fractal_points(high, low, n)
+    idx = highs if top else lows
+    src = _d(high) if top else _d(low)
+    nb = len(src)
+    out = np.full(nb, np.nan)
+    k = np.searchsorted(idx + n, np.arange(nb), side="right") - 1      # 봉 t 에서 확정된 마지막 피벗
+    ok = k >= 1
+    t = np.arange(nb)[ok]
+    i1, i0 = idx[k[ok]], idx[k[ok] - 1]
+    p1, p0 = src[i1], src[i0]
+    out[ok] = p1 + (p1 - p0) / (i1 - i0) * (t - i1)
+    return out
+
+
 # ---- 캔들스틱 반전 패턴 (TA-Lib CDL*) ----
 # 각 CDL 함수는 봉마다 +100/+200(강세) · -100/-200(약세) · 0(없음) 반환.
 # 종합 반전 = 아래 세트 중 하나라도 뜨면 신호(강세 +100 / 약세 -100).

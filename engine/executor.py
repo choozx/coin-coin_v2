@@ -518,7 +518,7 @@ class LiveExecutor(Executor):
                            "entryPrice": p.entry_price, "entryTime": p.entry_time,
                            "leverage": p.leverage, "stop": _jnum(p.stop_price),
                            "tp": _jnum(p.tp_price), "entryFee": p.entry_fee,
-                           "peak": p.peak}, f)
+                           "peak": p.peak, "beMoved": p.be_moved, "beTrigger": _jnum(p.be_trigger)}, f)
             os.replace(tmp, self.position_path)
         except Exception as e:
             print(f"  [포지션 사이드카 기록 실패] {e}", flush=True)

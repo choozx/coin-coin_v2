@@ -5,6 +5,7 @@ PREV_HIGH/LOW · RSI_PREV_HIGH/LOW(지표 수평선 돌파) · PIVOT_LOW/HIGH(�
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 
@@ -246,3 +247,35 @@ def test_big_candle_holds_within():
     c.open[30] = 100.0                                              # 몸통 3 — ATR 보다 훨씬 큼
     s = ind.big_candle(c.open, c.high, c.low, c.close, 14, 2.0, 5)
     assert (s[:30] == 0).all() and (s[30:35] == 1).all() and (s[35:] == 0).all()
+
+
+def _leaf(ind, op, val, period=14):
+    return {"left": {"kind": "indicator", "indicator": ind, "period": period}, "op": op,
+            "right": {"kind": "number", "value": val}, "note": ""}
+
+
+def _draft(**kw):
+    d = {"name": "t", "timeframe": "15m", "stop": {"type": "swing", "lookback": 10}, "take": {"type": "off"},
+         "groups": [{"side": "long", "conds": [_leaf("RSI", ">", 50)]}], "exit_long": [], "exit_short": [],
+         "time_stop_bars": 0, "assumed": [], "excluded": []}
+    d.update(kw)
+    return d
+
+
+def test_draft_exit_groups_and_trailing():
+    """영상 초안: 청산 그룹 안은 AND(예: 횡보일 때만 RSI 저점 이탈 청산), 그룹끼리 OR · 트레일링 칸 · 예전 초안(맨 조건)도 읽힘."""
+    from engine import video_analyze as va
+    d = _draft(exit_long=[{"conds": [_leaf("ADX", "<", 20), _leaf("RSI", "<", 40)]}, {"conds": [_leaf("RSI", ">", 80)]}],
+               exit_short=[_leaf("RSI", "<", 20)],                                           # 예전 모양
+               trailing={"callback_pct": 2, "activation_pct": 0.5})
+    form, params = va._check_draft(d)
+    xc = json.loads(form["exitCustom"])
+    assert xc["long"]["op"] == "OR"
+    first, second = xc["long"]["children"]
+    assert first["op"] == "AND" and [c["left"]["indicator"] for c in first["children"]] == ["ADX", "RSI"]
+    assert second["left"]["indicator"] == "RSI" and xc["short"]["left"]["indicator"] == "RSI"
+    assert form["trailingEnabled"] and form["trailingCallback"] == "2" and form["trailingActivation"] == "0.5"
+    ex = server._build_preset(params)["exit"]
+    assert ex["trailing"]["callbackPercent"] == 2.0 and ex["conditionBySide"]["long"]["op"] == "OR"
+    form2, _ = va._check_draft(_draft())
+    assert not form2["trailingEnabled"] and form2["exitCustom"] == ""

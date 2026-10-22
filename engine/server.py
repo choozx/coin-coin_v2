@@ -49,6 +49,23 @@ def _get_candles(symbol, days):
     return base, fr_rate
 
 
+def _check_other_symbols(preset_dict: dict, base) -> None:
+    """조건이 다른 코인(operand.symbol)을 보면 그 코인 1분봉이 같은 기간에 있어야 한다 — 없으면 그 조건이
+    조용히 늘 거짓이 되어 '거래 0건'으로만 보인다. 95% 미만이면 ValueError 로 수집을 안내한다."""
+    from . import candle_store
+    from .conditions import referenced_symbols
+    ex = preset_dict.get("exit") or {}
+    nodes = [preset_dict.get("entry"), *[r.get("when") for r in preset_dict.get("entryRules") or []],
+             ex.get("condition"), *(ex.get("conditionBySide") or {}).values()]
+    own = (preset_dict.get("market") or {}).get("symbol")
+    s, e = int(base.open_time[0]), int(base.open_time[-1])
+    for sym in sorted(referenced_symbols(*nodes) - {own}):
+        have, want = candle_store.count_range(sym, s, e), len(base)
+        if have < want * 0.95:
+            raise ValueError(f"조건이 {sym} 를 보는데 이 기간 {sym} 1분봉이 {have / max(1, want):.0%} 만 있어요 — "
+                             f"📥 데이터 수집에서 {sym} 를 먼저 받아 주세요")
+
+
 def _price_target(p: dict, prefix: str):
     """폼 파라미터 → 익절/손절 블록. prefix='sl' 또는 'tp'. 'off'면 None."""
     t = p.get(prefix + "Type", "off")
@@ -64,6 +81,9 @@ def _price_target(p: dict, prefix: str):
         if buf > 0:
             d["bufferPercent"] = buf
         return d
+    if t == "retrace":                       # 직전 파동의 value% 되돌림 가격 — 익절 전용
+        v = float(p.get(prefix + "Value", 0) or 0)
+        return {"type": t, "value": v, "lookback": int(p.get(prefix + "Lookback", 50) or 50)} if v > 0 else None
     if t in ("swing", "swingLow", "swingHigh"):
         d = {"type": t, "lookback": int(p.get(prefix + "Lookback", 20))}
         buf = float(p.get(prefix + "Buffer", 0) or 0)
@@ -82,7 +102,8 @@ def _build_preset(p: dict) -> dict:
     groups = []
     for g in groups_in:
         if isinstance(g, dict):
-            groups.append({"side": g.get("side", "long"), "conds": copy.deepcopy(g.get("conditions") or [])})
+            groups.append({"side": g.get("side", "long"), "conds": copy.deepcopy(g.get("conditions") or []),
+                           "scale": float(g.get("sizeScale") or 1)})
         elif isinstance(g, list) and g:
             groups.append({"side": "long", "conds": copy.deepcopy(g)})
     groups = [g for g in groups if g["conds"]]
@@ -98,15 +119,16 @@ def _build_preset(p: dict) -> dict:
             continue
         d, parts = node, path.split(".")
         for k in parts[:-1]:
-            d = d.setdefault(k, {})
-        d[parts[-1]] = val
+            d = d[int(k)] if isinstance(d, list) else d.setdefault(k, {})
+        d[int(parts[-1]) if isinstance(d, list) else parts[-1]] = val
 
     if not groups:
         raise ValueError("진입 조건을 하나 이상 추가해줘 (진입 섹션에서 조건 추가)")
 
     def _grp(nodes):
         return nodes[0] if len(nodes) == 1 else {"op": "AND", "children": nodes}
-    entry_rules = [{"side": g["side"], "when": _grp(g["conds"])} for g in groups]
+    entry_rules = [{"side": g["side"], "when": _grp(g["conds"]),
+                    **({"sizeScale": g["scale"]} if g.get("scale", 1) != 1 else {})} for g in groups]
     # entry(폴백/스키마용) = 모든 when을 OR
     whens = [r["when"] for r in entry_rules]
     entry = whens[0] if len(whens) == 1 else {"op": "OR", "children": whens}
@@ -151,6 +173,8 @@ def _build_preset(p: dict) -> dict:
             "value": float(p["beValue"]),
             "offsetPercent": float(p.get("beOffset", 0) or 0),
         }
+        if exit_block["breakeven"]["type"] == "retrace":
+            exit_block["breakeven"]["lookback"] = int(p.get("beLookback", 50) or 50)
     # 지표 조건 청산 (지표 평균 복귀) — 역추세 매매의 핵심 청산. 지표는 선택 가능(RSI/Stoch 등)
     if p.get("exitCondEnabled"):
         exit_block["condition"] = {
@@ -273,7 +297,7 @@ def _ohlc_for_chart(base, tf_min: int, max_bars: int = 200000):
 
 # ---- 전략에 쓰인 지표 추출·계산 (차트 표시용) ----
 _OVERLAY_INDS = {"SMA", "EMA", "VWAP", "SUPERTREND", "BB_upper", "BB_mid", "BB_lower", "BOX_HIGH", "BOX_LOW",
-                 "PREV_HIGH", "PREV_LOW", "PIVOT_LOW", "PIVOT_HIGH"}
+                 "PREV_HIGH", "PREV_LOW", "PIVOT_LOW", "PIVOT_HIGH", "TRENDLINE_HIGH", "TRENDLINE_LOW"}
 # 오실레이터 → 패널 그룹키 (같은 그룹은 한 패널에 겹쳐 그림)
 _IND_PANE = {
     "RSI": "rsi", "MACD": "macd", "MACD_signal": "macd", "MACD_hist": "macd",
@@ -301,6 +325,8 @@ _IND_NAME = {
     "TAKER_DELTA_RATIO": "테이커델타비율", "TAKER_DELTA": "테이커델타", "CVD_EMA": "CVD EMA",
     "QQE_MOD": "QQE MOD", "QQE_RSI": "QQE RSI", "QQE_LINE": "QQE 라인", "HAWKEYE": "HawkEye",
     "RSI_DIV": "RSI 다이버전스", "ATR_RANK": "변동성 순위", "MA_ANGLE": "이평 각도", "MA_CROSSES": "이평 교차 횟수",
+    "MA_DIST": "이평 괴리(ATR)", "RETRACE_UP": "반등 되돌림%", "RETRACE_DN": "눌림 되돌림%",
+    "TRENDLINE_HIGH": "고점 추세선", "TRENDLINE_LOW": "저점 추세선",
 }
 
 
@@ -317,7 +343,11 @@ def _ind_label(op: dict) -> str:
         parts.append("σ" + str(pr["stddev"]))
     if "fast" in pr:
         parts.append(f"{pr.get('fast')}/{pr.get('slow')}/{pr.get('signal')}")
-    return f"{disp}({','.join(parts)})" if parts else disp
+    lab = f"{disp}({','.join(parts)})" if parts else disp
+    if pr.get("htf"):
+        from .conditions import _tf_label
+        lab += f" {_tf_label(int(pr['htf']))}"
+    return f"{op['symbol']} {lab}" if op.get("symbol") else lab
 
 
 def _chart_indicators(base, tf_min: int, preset_dict: dict, max_bars: int = 200000):
@@ -335,7 +365,7 @@ def _chart_indicators(base, tf_min: int, preset_dict: dict, max_bars: int = 2000
         return []
     dv = max(4, price_decimals(base))          # 가격 스케일 지표(SMA·밴드 등)도 싼 코인에서 안 뭉개지게
     k = 1 if n <= max_bars else math.ceil(n / max_bars)
-    resolver = SeriesResolver(cs)
+    resolver = SeriesResolver(cs, (preset_dict.get("market") or {}).get("symbol"))
 
     operands = []
     div_sides: dict = {}
@@ -549,7 +579,7 @@ def _chart_indicators(base, tf_min: int, preset_dict: dict, max_bars: int = 2000
             series = resolver.resolve(op)
         except Exception:
             continue
-        overlay = name in _OVERLAY_INDS
+        overlay = name in _OVERLAY_INDS and not op.get("symbol")     # 다른 심볼 가격선은 이 차트 축척이 아니다
         result.append({
             "label": _ind_label(op),
             "overlay": overlay,
@@ -588,6 +618,7 @@ def _run_backtest(p: dict, emit=None) -> dict:
     base, fr_rate = _get_candles(p["symbol"], float(p["days"]))
     preset_dict = _build_preset(p)
     preset = Preset.from_dict(preset_dict, validate=True)  # 스키마 검증
+    _check_other_symbols(preset_dict, base)
     maker_fee, taker_fee = bm.fees_for_symbol(p["symbol"])
     cfg = BacktestConfig(initial_equity=float(p["equity"]), funding_rate=fr_rate,
                          maker_fee=maker_fee, taker_fee=taker_fee)
@@ -695,6 +726,10 @@ def _run_optimize(p: dict, emit) -> None:
     cfg = BacktestConfig(initial_equity=float(p["equity"]), funding_rate=fr_rate,
                          maker_fee=maker_fee, taker_fee=taker_fee)
     sweep = p.get("sweep", {})              # {param: {min,max,step}}
+    try:
+        _check_other_symbols(_build_preset(p), base)
+    except ValueError as e:
+        emit({"type": "error", "error": str(e)}); return
     if not sweep:
         emit({"type": "error", "error": "탐색할 파라미터를 하나 이상 체크해줘"})
         return
@@ -1071,6 +1106,8 @@ class Handler(BaseHTTPRequestHandler):
                   "/api/video_chat": video_analyze.chat,                   # 대화하며 초안 다듬기(한 턴)
                   "/api/video_chat_load": video_analyze.chat_load, "/api/video_chat_reset": video_analyze.chat_reset,
                   "/api/video_chat_save": video_analyze.chat_save,         # 대화의 현재 초안 → 프리셋 저장
+                  "/api/video_discard": video_analyze.discard,             # 못 쓸 프리셋 → presets/discarded 보관함
+                  "/api/video_restore": video_analyze.restore,             # 보관함 → presets/saved
                   "/api/video_search": video_analyze.search,               # 유튜브 검색(제외 채널 거름)
                   "/api/video_excluded": video_analyze.excluded_list, "/api/video_exclude": video_analyze.exclude_channel,
                   "/api/video_unexclude": video_analyze.unexclude_channel,

@@ -160,15 +160,25 @@ def _engine_capabilities() -> str:
             "BB_PULLBACK=볼린저 눌림 상태(+1 롱 대기: 하단 터치 → 중간선 도달 → 고점 프랙탈 확정 후 종가가 그 고점을 넘을 때까지, −1 숏 거울; params stddev·n·window), "
             "PULLBACK_FRACTAL=눌림→프랙탈→이평 재돌파(롱 +1: 종가<이평 → 저점 프랙탈 확정 → 이평 상향 돌파, 숏 −1 거울; "
             "period=이평 기간, params sma(1=SMA, 0=EMA)·n 프랙탈 봉·window), "
+            "MA_DIST=이평 괴리 (종가 − 이평) ÷ ATR(부호 있음, params sma 1/0 — '22이평 아래로 크게 벌어짐'은 MA_DIST(22) < −2), "
+            "RETRACE_UP·RETRACE_DN=직전 파동 되돌림 %(최근 period 봉: UP=최고가 → 그 뒤 최저가 사이에서 종가가 반등한 비율, "
+            "DN=최저가 → 그 뒤 최고가 사이에서 눌린 비율 — '하락폭의 75% 이상 반등'은 RETRACE_UP > 75), "
+            "TRENDLINE_HIGH·TRENDLINE_LOW=확정된 마지막 두 프랙탈 고점·저점을 이은 직선을 지금 봉까지 연장한 값(period=좌우 봉 — "
+            "'하락 추세선 돌파'는 close crossOver TRENDLINE_HIGH AND PIVOT_HIGH{nth:0} < PIVOT_HIGH{nth:1}), "
             "HAWKEYE·QQE_MOD=트레이딩뷰 공개 지표 재현, CDL_*=캔들 반전 패턴, PLUS_DI/MINUS_DI/ADX=DMI)\n"
-            "- 조건: 비교(<,>,…), 교차(crossOver/crossUnder), AND/OR/NOT, 롱/숏 규칙 따로\n"
+            "- 어느 지표든: params htf=상위 TF 분(60·240·1440 — 그 TF 의 다 닫힌 봉 값. '일봉 EMA21 수평선을 5분봉에서'는 EMA(21){htf:1440}), "
+            "symbol=다른 코인(예: BTCUSDT — 같은 TF 같은 시각. '비트가 EMA21 위일 때만 알트 진입'은 BTCUSDT 종가 > BTCUSDT EMA(21))\n"
+            "- 조건: 비교(<,>,…), 교차(crossOver/crossUnder), AND/OR/NOT, 롱/숏 규칙 따로, "
+            "거리 비교 (A − B) ÷ ATR(14) cmp k (절댓값 옵션 — '고가가 직전 고가보다 훨씬 높다'=(high − PREV_HIGH(1))÷ATR ≥ 0.3, "
+            "'두 선 사이가 좁아짐'=|EMA21 − 일봉 EMA21|÷ATR < 0.5)\n"
             f"- 손절·익절 가격: {', '.join(targets)} (swing=최근 N봉 전저/전고 — N=1 이면 진입 신호봉의 저가/고가, riskReward=손절폭 n배, "
-            "indicator=진입 시점 지표 값 ± 여유% 에 손절 고정 — 예: EMA50 바로 아래)\n"
+            "indicator=진입 시점 지표 값 ± 여유% 에 손절 고정 — 예: EMA50 바로 아래, "
+            "retrace=진입 때 직전 파동(lookback 봉)의 n% 되돌림 가격에 익절 — '직전 하락폭의 25% 반등에서 익절')\n"
             "- 청산: 조건 청산(지표 조건), 트레일링, 시간 청산(N봉), SuperTrend 뒤집힘 청산, "
-            "본전 손절(수익이 손절폭 n배 또는 n% 에 닿으면 손절을 진입가 ± 여유%로 옮김)\n"
-            "- 필터: 쿨다운, 펀딩 시각 회피 · 사이징: 자본%·고정금액·리스크% · 타임프레임 1m~1d\n"
-            "- 없는 것: 추세선·사선 그리기, 한 조건 안의 산술(예: 고가가 직전 고가보다 'X% 이상' 높음 — 비교는 지표·가격끼리나 상수와만), "
-            "분할 진입/청산, 물타기")
+            "본전 손절(수익이 손절폭 n배 · n% · 직전 파동 n% 되돌림 가격에 닿으면 손절을 진입가 ± 여유%로 옮김)\n"
+            "- 필터: 쿨다운, 펀딩 시각 회피 · 사이징: 자본%·고정금액·리스크%, 진입 규칙마다 비중 배수(예: 평소 10% · 강한 신호 규칙 ×3) · 타임프레임 1m~1d\n"
+            "- 없는 것: 손으로 고른 점을 잇는 사선(피벗 두 개를 잇는 TRENDLINE 은 있음), 거리 비교 말고 한 조건 안의 임의 산술, "
+            "분할 진입/청산, 물타기, 주식·지수(코스피 등) 데이터")
 
 
 def _claude(prompt: str, schema: dict, system: str, timeout: int = 600) -> tuple[dict, dict]:
@@ -274,7 +284,7 @@ def run(params: dict, emit) -> None:
             meta = json.load(f)
         if old.get("_engine") == engine_hash():
             emit({"type": "progress", "text": "저장된 분석을 불러오는 중"})
-            emit({"type": "done", "result": {"meta": meta, "analysis": old, "cached": True, "presets": preset_records(vid)}})
+            emit({"type": "done", "result": {"meta": meta, "analysis": old, "cached": True, "presets": preset_records(vid), "discarded": discard_state(vid)}})
             return
         emit({"type": "progress", "text": "엔진 기능이나 판정 기준이 바뀌어서 규칙 상태를 다시 판정하는 중 — 보통 20~60초"})
         res = rejudge(old)
@@ -283,7 +293,7 @@ def run(params: dict, emit) -> None:
             json.dump(old, f, ensure_ascii=False, indent=1)               # 직전 판정은 남겨 둔다
         with open(ap, "w", encoding="utf-8") as f:
             json.dump(res, f, ensure_ascii=False, indent=1)
-        emit({"type": "done", "result": {"meta": meta, "analysis": res, "cached": True, "presets": preset_records(vid)}})
+        emit({"type": "done", "result": {"meta": meta, "analysis": res, "cached": True, "presets": preset_records(vid), "discarded": discard_state(vid)}})
         return
     emit({"type": "progress", "text": "자막 받는 중 (yt-dlp)"})
     meta = fetch_transcript(url)
@@ -291,7 +301,7 @@ def run(params: dict, emit) -> None:
     res = analyze(meta)
     with open(ap, "w", encoding="utf-8") as f:
         json.dump(res, f, ensure_ascii=False, indent=1)
-    emit({"type": "done", "result": {"meta": meta, "analysis": res, "cached": False, "presets": preset_records(vid)}})
+    emit({"type": "done", "result": {"meta": meta, "analysis": res, "cached": False, "presets": preset_records(vid), "discarded": discard_state(vid)}})
 
 
 # ---- 매매법별로 만든 프리셋 기록 (data/video/<id>/preset_<매매법 번호>.json) ----
@@ -314,7 +324,8 @@ def add_preset_record(vid: str, idx, name: str, strategy: str = None, draft: dic
 
 
 def preset_records(vid: str) -> dict:
-    """{매매법 번호 | "chat": [{name, exists}]} — exists = presets/saved 에 아직 그 파일이 있나(지웠으면 False)."""
+    """{매매법 번호 | "chat": [{name, exists, discarded}]} — exists = presets/saved 에 아직 그 파일이 있나(지웠으면 False),
+    discarded = 폐기돼서 presets/discarded 보관함에 있나."""
     from .server import _SAVED_DIR, _safe_name              # 지연 임포트(순환 회피)
     out = {}
     d = os.path.join(CACHE_DIR, vid)
@@ -330,9 +341,103 @@ def preset_records(vid: str) -> dict:
         except (OSError, json.JSONDecodeError):
             continue
         names = rec.get("names") or ([rec["name"]] if rec.get("name") else [])
-        out[int(m.group(1)) if m.group(1).isdigit() else m.group(1)] = [{"name": n, "exists": os.path.exists(os.path.join(_SAVED_DIR, _safe_name(n) + ".json"))}
-                                for n in names]
+        out[int(m.group(1)) if m.group(1).isdigit() else m.group(1)] = [
+            {"name": n, "exists": os.path.exists(os.path.join(_SAVED_DIR, _safe_name(n) + ".json")),
+             "discarded": os.path.exists(os.path.join(DISCARD_DIR, _safe_name(n) + ".json"))} for n in names]
     return out
+
+
+# ---- 폐기 — 못 쓸 프리셋을 presets/discarded 보관함으로 (지우지 않음 · 되살리기 가능) ----
+# 영상 때문에 엔진에 넣은 지표·기능은 코드라 여기서 안 건드린다. AI 최적화 누적 기록(data/ai_optimize.json)도 그대로 —
+# 그건 '몇 번 시험했나'라 귀무 판정 문턱(N)이 줄어들면 안 된다. 랭킹 기록도 이력이라 남긴다.
+DISCARD_DIR = os.path.join(ROOT, "presets", "discarded")
+
+
+def _discard_path(vid: str) -> str:
+    _chat_path(vid)                                            # 영상 ID 검증
+    return os.path.join(CACHE_DIR, vid, "discarded.json")
+
+
+def discard_state(vid: str) -> dict | None:
+    """영상 폐기 표시 {at, reason, presets} 또는 None."""
+    try:
+        with open(_discard_path(vid), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _live_strategy_file() -> str | None:
+    """대시보드가 라이브 봇에 걸어 둔 프리셋 파일(data/control.json strategy) — 이건 폐기 못 하게."""
+    try:
+        with open(os.path.join(ROOT, "data", "control.json"), encoding="utf-8") as f:
+            st = json.load(f).get("strategy")
+        return os.path.abspath(os.path.join(ROOT, st)) if st else None
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return None
+
+
+def _video_names(vid: str) -> list:
+    return list(dict.fromkeys(x["name"] for v in preset_records(vid).values() for x in v))
+
+
+def discard(params: dict) -> dict:
+    """{id, names?, reason?, video?} → 프리셋을 보관함으로 옮긴다. names 없으면 이 영상으로 만든 프리셋 전부.
+    video=True 면 영상 자체도 '폐기'로 표시(목록 아래로·흐리게). 라이브 봇이 쓰는 프리셋이 끼어 있으면 아무것도 안 옮긴다."""
+    from .server import _SAVED_DIR, _safe_name
+    vid = params["id"]
+    reason = (params.get("reason") or "").strip()[:300]
+    mine = _video_names(vid)
+    names = [n for n in (params.get("names") or mine) if n in mine]           # 이 영상 프리셋만
+    live = _live_strategy_file()
+    moving = [n for n in names if os.path.exists(os.path.join(_SAVED_DIR, _safe_name(n) + ".json"))]
+    for n in moving:
+        if live and os.path.abspath(os.path.join(_SAVED_DIR, _safe_name(n) + ".json")) == live:
+            raise ValueError(f"'{n}' 은 대시보드 봇이 쓰는 전략이라 폐기 못 해요 — 봇 전략을 먼저 바꿔 주세요")
+    os.makedirs(DISCARD_DIR, exist_ok=True)
+    now = int(time.time() * 1000)
+    for n in moving:
+        src = os.path.join(_SAVED_DIR, _safe_name(n) + ".json")
+        with open(src, encoding="utf-8") as f:
+            rec = json.load(f)
+        rec["discarded"] = {"at": now, "reason": reason, "videoId": vid}
+        with open(os.path.join(DISCARD_DIR, _safe_name(n) + ".json"), "w", encoding="utf-8") as f:
+            json.dump(rec, f, ensure_ascii=False, indent=2)
+        os.remove(src)                                         # 보관함에 다 쓴 뒤에 원본을 지운다
+    if params.get("video"):
+        prev = discard_state(vid) or {}
+        with open(_discard_path(vid), "w", encoding="utf-8") as f:
+            json.dump({"at": now, "reason": reason or prev.get("reason", ""),
+                       "presets": sorted(set(prev.get("presets") or []) | set(moving))}, f, ensure_ascii=False, indent=1)
+    return {"moved": moving, "discarded": discard_state(vid), "presets": preset_records(vid)}
+
+
+def restore(params: dict) -> dict:
+    """{id, names?} → 보관함에서 presets/saved 로 되돌린다. names 없으면 이 영상 것 전부 + 영상 폐기 표시도 지운다.
+    같은 이름이 이미 presets/saved 에 있으면(그 사이 새로 만듦) 덮어쓰지 않고 건너뛴다."""
+    from .server import _SAVED_DIR, _safe_name
+    vid = params["id"]
+    mine = _video_names(vid)
+    names = [n for n in (params.get("names") or mine) if n in mine]
+    back, skipped = [], []
+    for n in names:
+        src = os.path.join(DISCARD_DIR, _safe_name(n) + ".json")
+        dst = os.path.join(_SAVED_DIR, _safe_name(n) + ".json")
+        if not os.path.exists(src):
+            continue
+        if os.path.exists(dst):
+            skipped.append(n); continue
+        with open(src, encoding="utf-8") as f:
+            rec = json.load(f)
+        rec.pop("discarded", None)
+        os.makedirs(_SAVED_DIR, exist_ok=True)
+        with open(dst, "w", encoding="utf-8") as f:
+            json.dump(rec, f, ensure_ascii=False, indent=2)
+        os.remove(src)
+        back.append(n)
+    if not params.get("names") and os.path.exists(_discard_path(vid)):
+        os.remove(_discard_path(vid))
+    return {"restored": back, "skipped": skipped, "discarded": discard_state(vid), "presets": preset_records(vid)}
 
 
 # ---- 유튜브 검색 (영상 분석 화면 왼쪽 — 고르면 그 영상을 분석) ----
@@ -431,8 +536,9 @@ def list_analyses() -> list:
         recs = preset_records(vid)
         out.append({"id": vid, "url": m.get("url"), "title": m.get("title"), "channel": m.get("channel"),
                     "presetCount": sum(1 for v in recs.values() for x in v if x["exists"]),
+                    "discarded": bool(discard_state(vid)),
                     "oneLine": a.get("one_line"), "at": a.get("_analyzedAt") or int(os.path.getmtime(ap) * 1000)})
-    return sorted(out, key=lambda x: -x["at"])
+    return sorted(out, key=lambda x: (x["discarded"], -x["at"]))          # 폐기한 영상은 아래로
 
 
 # ---- 분석 결과 → 백테스트 프리셋 (presets/saved/, 화면에서 바로 불러와 돌릴 수 있게) ----
@@ -449,14 +555,19 @@ def _draft_schema(indicators: list) -> dict:
         "source": {"type": "string", "enum": _SOURCES},
         "indicator": {"type": "string", "enum": indicators},
         "period": {"type": "integer", "description": "지표 기간(필요한 지표만, 없으면 0)"},
-        "params_json": {"type": "string", "description": "지표 params 객체를 JSON 문자열로(없으면 빈 문자열)"}},
+        "params_json": {"type": "string", "description": "지표 params 객체를 JSON 문자열로(없으면 빈 문자열). 상위 TF 는 {\"htf\":1440}"},
+        "symbol": {"type": "string", "description": "다른 코인(예: BTCUSDT)일 때만. 이 코인이면 빈 문자열"}},
         "required": ["kind"]}
     leaf = {"type": "object", "properties": {
         "left": operand,
         "op": {"type": "string", "enum": ["<", "<=", ">", ">=", "crossOver", "crossUnder"]},
         "right": operand,
+        "dist": {"type": "string", "enum": ["none", "atr", "absAtr"],
+                 "description": "거리 비교일 때: (left − right) ÷ ATR(absAtr 는 절댓값) op dist_value. 보통 비교면 none"},
+        "dist_value": {"type": "number", "description": "dist 가 none 이 아닐 때 ATR 배수 k"},
         "note": {"type": "string", "description": "이 조건이 영상의 어떤 규칙인지 짧게"}},
         "required": ["left", "op", "right", "note"]}
+    exit_group = {"type": "object", "properties": {"conds": {"type": "array", "items": leaf}}, "required": ["conds"]}
     target = lambda types: {"type": "object", "properties": {
         "type": {"type": "string", "enum": types}, "value": {"type": "number"}, "lookback": {"type": "integer"},
         "ind": {"type": "string", "enum": ["EMA", "SMA"], "description": "type=indicator 일 때 기준 이평"},
@@ -469,15 +580,23 @@ def _draft_schema(indicators: list) -> dict:
         "groups": {"type": "array", "description": "진입 그룹. 그룹 안 conds 는 AND, 그룹끼리는 OR",
                    "items": {"type": "object", "properties": {
                        "side": {"type": "string", "enum": ["long", "short"]},
-                       "conds": {"type": "array", "items": leaf}}, "required": ["side", "conds"]}},
+                       "conds": {"type": "array", "items": leaf},
+                       "size_scale": {"type": "number", "description": "이 그룹으로 진입할 때 비중 배수(기본 1 — 영상이 신호마다 비중을 다르게 줄 때만)"}},
+                       "required": ["side", "conds"]}},
         "stop": target(["off", "percent", "atrMultiple", "swing", "indicator"]),
-        "take": target(["off", "percent", "atrMultiple", "riskReward", "swing"]),
-        "exit_long": {"type": "array", "items": leaf, "description": "롱 청산 조건(하나라도 맞으면 청산, OR)"},
-        "exit_short": {"type": "array", "items": leaf, "description": "숏 청산 조건(OR)"},
+        "take": target(["off", "percent", "atrMultiple", "riskReward", "swing", "retrace"]),
+        "exit_long": {"type": "array", "items": exit_group,
+                      "description": "롱 청산 — 그룹끼리 OR(하나라도 맞으면 청산), 그룹 안 conds 는 AND(모두 맞아야). 조건 하나면 conds 에 하나"},
+        "exit_short": {"type": "array", "items": exit_group, "description": "숏 청산 — exit_long 과 같은 모양"},
+        "trailing": {"type": "object", "description": "트레일링 손절(영상에 '새 고점마다 손절 올리기' 같은 규칙이 있을 때만). 없으면 생략",
+                     "properties": {"callback_pct": {"type": "number", "description": "최고가(롱)/최저가(숏) 대비 되돌림 %"},
+                                    "activation_pct": {"type": "number", "description": "이 수익 % 에 닿은 뒤부터 작동(0=즉시)"}},
+                     "required": ["callback_pct"]},
         "time_stop_bars": {"type": "integer", "description": "N봉 뒤 청산, 0=없음"},
         "breakeven": {"type": "object", "description": "본전 손절(영상에 있을 때만). 없으면 생략",
-                      "properties": {"type": {"type": "string", "enum": ["riskReward", "percent"]},
-                                     "value": {"type": "number", "description": "riskReward=손절폭 n배 · percent=수익 %"},
+                      "properties": {"type": {"type": "string", "enum": ["riskReward", "percent", "retrace"]},
+                                     "value": {"type": "number", "description": "riskReward=손절폭 n배 · percent=수익 % · retrace=직전 파동 n% 되돌림 가격"},
+                                     "lookback": {"type": "integer", "description": "retrace 일 때 파동 찾을 봉 수(기본 50)"},
                                      "offset_pct": {"type": "number", "description": "진입가 + 여유 %(없으면 0)"}},
                       "required": ["type", "value"]},
         "assumed": {"type": "array", "items": {"type": "string"}, "description": "영상에 없어 기본값으로 정한 것"},
@@ -490,9 +609,10 @@ def _operand_node(o: dict):
     k = o.get("kind")
     if k == "number":
         return float(o.get("value", 0))
+    sym = (o.get("symbol") or "").strip().upper()
     if k == "source":
-        return {"source": o.get("source") or "close"}
-    node = {"indicator": o["indicator"]}
+        return {"source": o.get("source") or "close", **({"symbol": sym} if sym else {})}
+    node = {"indicator": o["indicator"], **({"symbol": sym} if sym else {})}
     if int(o.get("period") or 0) > 0:
         node["period"] = int(o["period"])
     pj = (o.get("params_json") or "").strip()
@@ -503,22 +623,37 @@ def _operand_node(o: dict):
 
 def _leaf_node(c: dict) -> dict:
     L, R = _operand_node(c["left"]), _operand_node(c["right"])
+    if c.get("dist") in ("atr", "absAtr") and not c["op"].startswith("cross"):
+        return {"dist": c["dist"], "left": L, "right": R, "cmp": c["op"], "value": float(c.get("dist_value") or 0)}
     return {"cross": c["op"], "left": L, "right": R} if c["op"].startswith("cross") else {"left": L, "cmp": c["op"], "right": R}
+
+
+def _exit_node(x: dict):
+    """청산 항목 → 조건 노드. 그룹 {conds:[…]} 는 AND 로 묶고, 예전 초안의 맨 조건(leaf)도 그대로 받는다."""
+    if "conds" not in x:
+        return _leaf_node(x)
+    nodes = [_leaf_node(c) for c in x["conds"]]
+    return None if not nodes else nodes[0] if len(nodes) == 1 else {"op": "AND", "children": nodes}
 
 
 def _custom_fields(c: dict) -> dict:
     """초안 조건 → 화면 '직접 조건(고급)' 필드(gui.html COND_TYPES.custom 과 같은 키)."""
     def side(o, pre):
+        sym = {pre[0] + "sym": (o.get("symbol") or "").strip().upper()}
         if o.get("kind") == "source":
-            return {pre: o.get("source") or "close", pre[0] + "p": "", pre[0] + "params": ""}
+            return {pre: o.get("source") or "close", pre[0] + "p": "", pre[0] + "params": "", **sym}
         return {pre: o["indicator"], pre[0] + "p": str(int(o.get("period") or 0) or ""),
-                pre[0] + "params": (o.get("params_json") or "").strip()}
-    f = {"type": "custom", "op": c["op"], **side(c["left"], "left")}          # left · lp · lparams
+                pre[0] + "params": (o.get("params_json") or "").strip(), **sym}
+    if c.get("dist") in ("atr", "absAtr") and not c["op"].startswith("cross"):     # 거리 조건 → '직접 거리 조건(고급)'
+        r = side(c["right"], "right")
+        return {"type": "customDist", "mode": c["dist"], "cmp": c["op"], "k": str(c.get("dist_value") or 0),
+                **side(c["left"], "left"), "right": r["right"], "rp": r["rp"], "rparams": r["rparams"], "rsym": r["rsym"]}
+    f = {"type": "custom", "op": c["op"], **side(c["left"], "left")}          # left · lp · lparams · lsym
     if c["right"].get("kind") == "number":
         f.update({"rk": "num", "rv": str(c["right"].get("value", 0))})
     else:
         r = side(c["right"], "right")
-        f.update({"rk": "ind", "right": r["right"], "rp": r["rp"], "rparams": r["rparams"]})
+        f.update({"rk": "ind", "right": r["right"], "rp": r["rp"], "rparams": r["rparams"], "rsym": r["rsym"]})
     return f
 
 
@@ -530,7 +665,7 @@ _FORM_DEFAULTS = {
     "exitCondEnabled": False, "exitCondInd": "RSI", "exitCondPeriod": "14", "exitCondCmp": ">", "exitCondValue": "55",
     "exitCustom": "", "timeStopBars": "0", "exitStEnabled": False, "exitStPeriod": "14", "exitStMult": "2.5",
     "trailingEnabled": False, "trailingCallback": "0.8", "trailingActivation": "1",
-    "beEnabled": False, "beType": "riskReward", "beValue": "1", "beOffset": "0",
+    "beEnabled": False, "beType": "riskReward", "beValue": "1", "beOffset": "0", "beLookback": "50",
     "leverage": "10", "levTierEnabled": False, "sizeType": "equityPercent", "sizeValue": "10",
     "minLiqBuffer": "0", "cooldownBars": "0", "avoidFundingMin": "2", "entryType": "taker", "makerTimeoutSeconds": "60",
 }
@@ -542,10 +677,10 @@ def _draft_to_form(d: dict) -> tuple[dict, dict]:
     for pre, t in (("sl", d.get("stop") or {}), ("tp", d.get("take") or {})):
         typ = t.get("type", "off")
         form[pre + "Type"] = typ
-        if typ in ("percent", "atrMultiple", "riskReward") and t.get("value"):
+        if typ in ("percent", "atrMultiple", "riskReward", "retrace") and t.get("value"):
             form[pre + "Value"] = str(t["value"])
-        if typ == "swing":
-            form[pre + "Lookback"] = str(int(t.get("lookback") or 20))
+        if typ in ("swing", "retrace"):
+            form[pre + "Lookback"] = str(int(t.get("lookback") or (50 if typ == "retrace" else 20)))
         if typ == "indicator":                                       # 진입 때 EMA·SMA 값 ± 여유폭 — 손절 전용
             form[pre + "Ind"] = t.get("ind") or "EMA"
             form[pre + "IndPeriod"] = str(int(t.get("ind_period") or 50))
@@ -555,19 +690,25 @@ def _draft_to_form(d: dict) -> tuple[dict, dict]:
         form["slType"], form["slLookback"] = "swing", "20"
     xc = {}
     for side in ("long", "short"):
-        nodes = [_leaf_node(c) for c in d.get("exit_" + side) or []]
+        nodes = [n for n in (_exit_node(x) for x in d.get("exit_" + side) or []) if n]
         if nodes:
             xc[side] = nodes[0] if len(nodes) == 1 else {"op": "OR", "children": nodes}
     form["exitCustom"] = json.dumps(xc, ensure_ascii=False) if xc else ""
     form["timeStopBars"] = str(int(d.get("time_stop_bars") or 0))
+    tr = d.get("trailing") or {}
+    if float(tr.get("callback_pct") or 0) > 0:
+        form.update(trailingEnabled=True, trailingCallback=str(tr["callback_pct"]),
+                    trailingActivation=str(float(tr.get("activation_pct") or 0)))
     be = d.get("breakeven") or {}
     if float(be.get("value") or 0) > 0:
         form.update(beEnabled=True, beType=be.get("type") or "riskReward", beValue=str(be["value"]),
-                    beOffset=str(float(be.get("offset_pct") or 0)))
+                    beOffset=str(float(be.get("offset_pct") or 0)), beLookback=str(int(be.get("lookback") or 50)))
     groups = [g for g in d.get("groups") or [] if g.get("conds")]
-    form["entry"] = [{"side": g["side"], "conds": [_custom_fields(c) for c in g["conds"]]} for g in groups]
+    scale = lambda g: {"sizeScale": float(g["size_scale"])} if float(g.get("size_scale") or 1) not in (0.0, 1.0) else {}
+    form["entry"] = [{"side": g["side"], "conds": [_custom_fields(c) for c in g["conds"]], **scale(g)} for g in groups]
     params = {k: v for k, v in form.items() if k != "entry"}
-    params["entryGroups"] = [{"side": g["side"], "conditions": [_leaf_node(c) for c in g["conds"]]} for g in groups]
+    params["entryGroups"] = [{"side": g["side"], "conditions": [_leaf_node(c) for c in g["conds"]], **scale(g)}
+                             for g in groups]
     params["levTiers"] = []
     return form, params
 
@@ -592,8 +733,12 @@ def _indicator_names() -> list:
 _DRAFT_RULES = (
     "- status 가 ready 인 규칙만 쓴다. buildable·impossible 규칙은 넣지 말고 excluded 에 '규칙 — 이유'로 적는다.\n"
     "- 진입: groups(그룹 안 AND). 방향이 both 면 롱 그룹과 숏 그룹을 따로(숏은 롱의 대칭, 해석이면 assumed 에).\n"
-    "- 청산: exit_long / exit_short (지표 조건, OR). 가격 손절·익절은 stop / take (swing=최근 N봉 전저·전고, riskReward=손절폭 n배, "
-    "stop.type=indicator 는 진입 때 이평(ind·ind_period) 값 ± buffer_pct 에 손절 — 'EMA50 바로 아래' 같은 규칙).\n"
+    "- 청산: exit_long / exit_short 는 그룹 목록(그룹끼리 OR, 그룹 안 AND) — '횡보일 때(ADX<20) RSI 가 직전 저점을 깨면 청산'처럼 "
+    "동시에 맞아야 하는 조건은 한 그룹에. 트레일링 손절(고점 대비 % 되돌림)은 trailing, 본전 손절은 breakeven. 가격 손절·익절은 stop / take (swing=최근 N봉 전저·전고, riskReward=손절폭 n배, "
+    "stop.type=indicator 는 진입 때 이평(ind·ind_period) 값 ± buffer_pct 에 손절 — 'EMA50 바로 아래' 같은 규칙, "
+    "take.type=retrace 는 진입 때 직전 파동(lookback 봉)의 value% 되돌림 가격 — '하락폭의 25% 반등에서 익절').\n"
+    "- '크게·훨씬' 같은 거리 규칙은 dist(atr/absAtr) + dist_value(ATR 배수), 다른 코인 조건은 operand.symbol, 상위 TF 는 params_json 의 htf(분). "
+    "신호마다 비중이 다르면 그룹의 size_scale.\n"
     "- 영상에 없는 값(N봉, 손절 방식 등)은 무난한 기본값으로 정하고 assumed 에 적는다. 손절이 영상에 없으면 swing 20봉.\n"
     "- 지표 params 가 필요하면 params_json 에(예: SMA_SLOPE 는 period=이평 기간). 엔진 목록에 없는 지표는 쓰지 마라.\n"
     "- timeframe 은 영상 예시(없으면 15m)."
@@ -688,8 +833,14 @@ def _chat_write(vid: str, st: dict) -> None:
         json.dump(st, f, ensure_ascii=False, indent=1)
 
 
+def _chat_stale(st: dict) -> bool:
+    """대화가 지금 엔진보다 옛날 것인가 — 그 뒤 엔진에 기능이 늘었으면 예전 답의 '엔진에 없음'·초안의 '빠진 규칙'이 틀릴 수 있다.
+    엔진 표시가 없는 예전 대화는 메시지가 있으면 옛날 것으로 본다."""
+    return bool(st.get("messages")) and st.get("engine") != engine_hash()
+
+
 def _chat_view(vid: str, st: dict) -> dict:
-    return dict(st, presets=preset_records(vid))
+    return dict(st, presets=preset_records(vid), engineChanged=_chat_stale(st))
 
 
 def chat_load(params: dict) -> dict:
@@ -713,6 +864,9 @@ def _chat_prompt(meta: dict, ana: dict, st: dict, message: str) -> str:
              else "현재 초안: 아직 없음")
     if st.get("draftError"):
         draft += f"\n(이 초안 다음에 네가 낸 초안은 엔진 검증에 실패해서 반영 안 됐다: {st['draftError']})"
+    if _chat_stale(st):
+        hist += ("\n\n[주의] 위 대화와 현재 초안은 엔진에 기능이 추가되기 전에 만든 것이다. 그때 '엔진에 없음'이라고 한 것과 "
+                 "초안의 excluded 는 위의 지금 엔진 목록·매매법 상태(status) 기준으로 다시 판단하라 — 이제 되는 것이면 그렇다고 말하라.")
     # 앞쪽(영상·분석·엔진·규칙)은 턴마다 같다 → 캐시. 뒤쪽(대화·초안·새 메시지)만 바뀐다.
     return (
         f"영상 제목: {meta.get('title')}\n채널: {meta.get('channel')}\n\n"
@@ -766,6 +920,7 @@ def chat(params: dict) -> dict:
     if draft:
         st["draft"] = draft
     st["draftError"] = err
+    st["engine"] = engine_hash()                     # 이 턴의 답은 지금 엔진 기준 — 오래된 대화 표시를 지운다
     st["costUsd"] = round((st.get("costUsd") or 0) + cost, 4)
     _chat_write(vid, st)
     return _chat_view(vid, st)

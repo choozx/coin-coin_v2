@@ -112,11 +112,12 @@ def test_explain_passes_gate_n(env):
 
 
 def test_time_model_matches_measurements():
-    """실측(8코어): 15m 300일 1회 1.3초 → 8조합 7.5초·32조합 15.4초 / 1m 365일 1회 2.5초 → 11.2초·27.7초(랭킹 재실행 제외)."""
-    for one, days, meas in ((1.31, 300, {8: 7.5, 32: 15.4}), (2.49, 300, {8: 11.2, 32: 27.7})):
-        tm = ai.time_model(one, days, workers=8)
-        for n, sec in meas.items():
-            assert tm["overheadSec"] + n * tm["secPerCombo"] == pytest.approx(sec, rel=0.35)
+    """실측(8코어, BTC 365일, 랭킹 재실행 포함): (백테스트 1회 초, 조합 수, 실제 초) — 영상 프리셋 6개 + 1m 60조합."""
+    runs = [(1.02, 396, 58.2), (1.16, 315, 51.2), (1.32, 455, 78.1), (3.0, 180, 100.4), (2.35, 175, 74.8),
+            (1.04, 468, 70.3), (2.5, 60, 52.7)]
+    for one, n, sec in runs:
+        tm = ai.time_model(one, 365, workers=8)
+        assert tm["overheadSec"] + n * tm["secPerCombo"] == pytest.approx(sec, rel=0.15)
     assert ai.time_model(2.0, 365, 8)["overheadSec"] > ai.time_model(2.0, 300, 8)["overheadSec"]   # 1년 이상은 랭킹 재실행
 
 

@@ -65,6 +65,7 @@ class _Position:
     peak: float            # 트레일링용 최고가(롱)/최저가(숏)
     funding_accum: float = 0.0
     be_moved: bool = False  # 본전 손절로 옮겼나 — 그 손절에 걸리면 사유를 'breakeven' 으로
+    be_trigger: float = float("nan")   # 본전 트리거 가격(breakeven.type=retrace — 진입 때 파동으로 고정)
 
 
 def _size_position(sizing: dict, equity: float, price: float, leverage: int, stop_price: float):
@@ -140,6 +141,10 @@ def _exit_level(cfg: dict, entry: float, side: int, atr_val: float, signal, sb: 
         if use_low:
             return signal.low[s:sb + 1].min() * (1 - buf)     # 전저점 아래
         return signal.high[s:sb + 1].max() * (1 + buf)        # 전고점 위
+    if t == "retrace":
+        # 직전 파동의 value% 되돌림 가격 — 롱 익절(side +1)=하락 뒤 반등 목표, 숏 익절=상승 뒤 눌림 목표. 익절 전용.
+        return ind.retrace_price(signal.high, signal.low, sb, int(cfg.get("lookback", 50)),
+                                 float(cfg["value"]) / 100.0, side > 0)
     if t == "indicator":
         if resolver is None:
             return float("nan")
@@ -233,6 +238,7 @@ class Stepper:
         self.maker_timeout_bars = max(1, round(sec / 60)) if (self.maker_entry and sec) else 0
         self.tf_ms = TIMEFRAME_MINUTES[preset.timeframe] * MINUTE_MS   # 봉수↔시간 환산
         self.pending = None                    # 대기 중인 지정가 진입(전략 전환/재설정 시 취소)
+        self.entry_scale = 1.0                 # 마지막으로 참이 된 진입 규칙의 sizeScale
 
     def _close(self, price, reason, ts, sb_time, is_maker=False):
         trade = self.ex.close(price, reason, ts, is_maker=is_maker)
@@ -322,9 +328,11 @@ class Stepper:
                                      self.preset.filter, self.last_exit_time, self.cfg)
         if reason:
             return None, reason
+        self.entry_scale = 1.0
         if self.entry_rules:
             for rule in self.entry_rules:          # 순서대로 평가, 먼저 참인 규칙의 방향
                 if evaluate(rule["when"], resolver, sb):
+                    self.entry_scale = float(rule.get("sizeScale") or 1.0)    # 이 규칙으로 들어갈 때의 비중 배수
                     return (1 if rule["side"] == "long" else -1), None
         elif evaluate(self.preset.entry, resolver, sb):
             return self.entry_side, None
@@ -370,13 +378,15 @@ class Stepper:
             return
         # passive-then-aggressive: 지정가(신호봉 종가)를 걸어두고 다음 봉들에서 체결/추격.
         if self.maker_timeout_bars > 0:
-            self.pending = {"side": side, "limit": sig_close, "bars_left": self.maker_timeout_bars}
+            self.pending = {"side": side, "limit": sig_close, "bars_left": self.maker_timeout_bars,
+                            "scale": self.entry_scale}
             return
         equity = ex.equity()
         lev = _leverage_for(preset.sizing, equity, cfg.max_leverage)   # 현재 자산 기준 레버리지
         p = _open_position(preset, preset.sizing, ex_block, sig_close, fill_time, sb,
                            side, lev, equity, cfg, atr_series, signal,
-                           entry_maker=self.maker_entry, sb_time=sb_time, resolver=self._resolver)
+                           entry_maker=self.maker_entry, sb_time=sb_time, resolver=self._resolver,
+                           scale=self.entry_scale)
         if p is not None:
             ex.open(p, is_maker=self.maker_entry)
             if self.on_open:
@@ -396,6 +406,7 @@ class Stepper:
 
     def _fill_pending(self, price, ot, sb, side, signal, atr_series, is_maker):
         """대기 지정가 체결 확정 → 실제 포지션 진입(체결가·maker여부는 판정에서 결정됨)."""
+        scale = self.pending.get("scale", 1.0)
         self.pending = None
         ex, cfg, preset = self.ex, self.cfg, self.preset
         if ex.position is not None:
@@ -406,7 +417,7 @@ class Stepper:
         lev = _leverage_for(preset.sizing, equity, cfg.max_leverage)
         p = _open_position(preset, preset.sizing, preset.exit, price, ot, sb,
                            side, lev, equity, cfg, atr_series, signal, entry_maker=is_maker,
-                           sb_time=int(signal.open_time[sb]), resolver=self._resolver)
+                           sb_time=int(signal.open_time[sb]), resolver=self._resolver, scale=scale)
         if p is not None:
             ex.open(p, is_maker=is_maker)
             if self.on_open:
@@ -420,7 +431,7 @@ def run(base: Candles, preset: Preset, cfg: BacktestConfig = None, progress_cb=N
     tf_min = TIMEFRAME_MINUTES[preset.timeframe]
 
     signal = resample(base, tf_min)
-    resolver = SeriesResolver(signal)
+    resolver = SeriesResolver(signal, preset.symbol)
     atr_series = ind.atr(signal.high, signal.low, signal.close, 14)
     bar_of, is_close = signal_close_index(base, tf_min)
 
@@ -472,10 +483,15 @@ def _breakeven_level(pos: _Position, be: dict, close: float):
     이미 옮긴 뒤엔 같은 가격이라 다시 안 옮긴다 — 재시작으로 원래 손절이 돌아와도 최고가로 다시 옮겨진다.
     """
     e, side, stop = pos.entry_price, pos.side, pos.stop_price
-    if be.get("type", "riskReward") == "riskReward":
+    t = be.get("type", "riskReward")
+    if t == "riskReward":
         if np.isnan(stop):
             return None
         trig = e + side * float(be["value"]) * abs(e - stop)
+    elif t == "retrace":
+        trig = pos.be_trigger
+        if np.isnan(trig):
+            return None
     else:
         trig = e * (1 + side * float(be["value"]) / 100.0)
     if (pos.peak - trig) * side < 0:
@@ -569,7 +585,7 @@ def _entry_allowed(sb, ot, filt, last_exit_idx, cfg) -> bool:
 
 
 def _open_position(preset, sizing, ex, price, ot, sb, side, lev, equity, cfg, atr_series, signal,
-                   entry_maker=False, sb_time=None, resolver=None):
+                   entry_maker=False, sb_time=None, resolver=None, scale=1.0):
     atr_val = atr_series[sb]
     # 손절/익절가 먼저 계산 (리스크 사이징이 손절 거리를 필요로 함).
     # 롱 손절은 아래(-side), 익절은 위(+side). swing 타입은 side 무시.
@@ -587,6 +603,8 @@ def _open_position(preset, sizing, ex, price, ot, sb, side, lev, equity, cfg, at
     qty, margin = _size_position(sizing, equity, price, lev, stop_price)
     if qty is None or qty <= 0 or margin is None or margin <= 0:
         return None
+    if scale != 1.0:                         # 진입 규칙별 비중(entryRules[].sizeScale) — 상한 클램프는 아래 그대로
+        qty, margin = qty * scale, margin * scale
     cap = equity * cfg.max_account_fraction  # 사이징 상한: 한 진입 증거금이 잔고의 이 비율 이내
     if margin > cap:                         # 초과분은 상한으로 클램프(수수료·펀딩 여유 확보)
         margin = cap
@@ -600,6 +618,10 @@ def _open_position(preset, sizing, ex, price, ot, sb, side, lev, equity, cfg, at
         if abs(liq - price) / price * 100 < buf:
             return None                     # 청산가가 너무 가까움 → 진입 스킵
 
+    be, be_trig = ex.get("breakeven"), float("nan")
+    if be and be.get("type") == "retrace" and signal is not None:
+        be_trig = _valid_level(ind.retrace_price(signal.high, signal.low, sb, int(be.get("lookback", 50)),
+                                                 float(be["value"]) / 100.0, side > 0), price, side)
     entry_fee = bm.trade_fee(price, qty, taker=not entry_maker,
                              taker_fee=cfg.taker_fee, maker_fee=cfg.maker_fee,
                              maker_fill_ratio=cfg.maker_fill_ratio)
@@ -607,7 +629,7 @@ def _open_position(preset, sizing, ex, price, ot, sb, side, lev, equity, cfg, at
         side=side, entry_time=ot, entry_price=price, qty=qty, leverage=lev,
         margin=margin, liq_price=liq, stop_price=stop_price, tp_price=tp_price,
         # 진입 신호봉 '시각'. 호출부가 안 주면 signal 에서 뽑는다(signal=None 인 단위테스트 대비).
-        entry_fee=entry_fee, peak=price,
+        entry_fee=entry_fee, peak=price, be_trigger=be_trig,
         entry_signal_time=int(sb_time if sb_time is not None
                               else (signal.open_time[sb] if signal is not None else ot)),
     )
