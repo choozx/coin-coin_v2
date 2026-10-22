@@ -578,6 +578,17 @@ def _pivots(x: np.ndarray, k: int, high: bool) -> np.ndarray:
     return np.nonzero((mid == ext) & first)[0] + k
 
 
+def big_candle(open_, high, low, close, period: int = 14, mult: float = 2.0, within: int = 10) -> np.ndarray:
+    """최근 within 봉(현재 포함) 안의 장대봉. +1 장대양봉 · −1 장대음봉 · 0. 장대 = 몸통 ≥ ATR(period) × mult. 더 최근 것이 이긴다.
+
+    '장대양봉 뒤 눌림목' 처럼 큰 봉이 나온 **뒤** 몇 봉 동안의 조건을 걸 때 쓴다(지금 봉이 장대봉일 필요 없음).
+    """
+    o, c = _d(open_), _d(close)
+    with np.errstate(invalid="ignore"):
+        big = np.abs(c - o) >= atr(high, low, close, period) * mult
+    return _hold((big & (c > o)).astype(float) - (big & (c < o)).astype(float), int(within))
+
+
 def _triangle_events(high, low, close, pivot: int = 5, lookback: int = 100, tol: float = 10.0):
     """삼각형 수렴 돌파 이벤트 [(t, side, (i1,h1,i2,h2), (j1,l1,j2,l2), U(t), L(t))]. 인과적.
 
@@ -723,6 +734,124 @@ def pullback_fractal(high, low, close, ma: np.ndarray, n: int = 2, window: int =
             if d_hi is not None and r_hi:
                 out[t] = -1
             d_hi, r_hi = None, False
+    return out
+
+
+# ---- 직전 고·저 · 피벗 가격 · 매물대 · 볼린저 상태 — 영상 분석 '🛠 구현 가능' 규칙들 ----
+def prev_extreme(x, n: int = 20, high: bool = True) -> np.ndarray:
+    """직전 n 봉(현재 봉 제외)의 최고값(high) / 최저값. n=1 이면 x[t-1] 그대로. 앞 n 봉·창에 NaN 이 끼면 NaN.
+
+    '지표의 직전 고점 수평선 돌파'(RSI > 직전 N봉 RSI 최고)와 '고가 > 직전 봉 고가' 를 같은 함수로 쓴다.
+    """
+    x = _d(x)
+    out = np.full(len(x), np.nan)
+    if n < 1 or len(x) <= n:
+        return out
+    w = swv(x[:-1], n)                              # w[j] = x[j : j+n] → 봉 j+n 의 직전 n 봉
+    out[n:] = w.max(axis=1) if high else w.min(axis=1)
+    return out
+
+
+def pivot_level(high, low, n: int = 2, nth: int = 0, top: bool = False) -> np.ndarray:
+    """봉 t 에서 이미 확정된(중심+n ≤ t) 저점(top=False)·고점 프랙탈 중 최근 nth 번째(0=마지막, 1=그 전)의 가격. 없으면 NaN.
+
+    쌍바닥 '두 번째 저점이 전저점을 깼다' = pivot_level(nth=0) < pivot_level(nth=1). 다음 피벗이 확정될 때까지 값이 유지된다.
+    """
+    lows, highs = fractal_points(high, low, n)
+    idx = highs if top else lows
+    src = _d(high) if top else _d(low)
+    out = np.full(len(src), np.nan)
+    k = np.searchsorted(idx + n, np.arange(len(src)), side="right") - 1 - int(nth)
+    ok = k >= 0
+    out[ok] = src[idx[k[ok]]]
+    return out
+
+
+def vp_share(high, low, close, volume, window: int = 200, band: float = 1.0, above: bool = True,
+             chunk: int = 4096) -> np.ndarray:
+    """매물대 두께(VPVR 근사) — 최근 window 봉(현재 포함) 거래량 중 지금 종가 위 band% 구간(above) /
+    아래 band% 구간에 쌓인 비중(%). 봉 거래량은 그 봉의 저가~고가에 고르게 퍼졌다고 본다. 인과적.
+
+    클수록 '두꺼운 매물대'(한 번에 뚫기 어렵다), 작을수록 '얇은 매물대'. 창이 다 차기 전은 NaN.
+    """
+    h, l, c, v = _d(high), _d(low), _d(close), _d(volume)
+    nb = len(c)
+    out = np.full(nb, np.nan)
+    if window < 1 or nb < window:
+        return out
+    wh, wl, wv = swv(h, window), swv(l, window), swv(v, window)    # 행 r = 봉 r+window-1 까지의 창
+    b = band / 100.0
+    for a in range(0, len(wh), chunk):
+        H, L, V = wh[a:a + chunk], wl[a:a + chunk], wv[a:a + chunk]
+        cur = c[a + window - 1:a + window - 1 + len(H)][:, None]
+        lo, hi = (cur, cur * (1 + b)) if above else (cur * (1 - b), cur)
+        width = H - L
+        ov = np.clip(np.minimum(H, hi) - np.maximum(L, lo), 0.0, None)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            frac = np.where(width > 0, ov / width, ((L >= lo) & (L <= hi)).astype(float))
+            tot = V.sum(axis=1)
+            out[a + window - 1:a + window - 1 + len(H)] = np.where(tot > 0, 100.0 * (V * frac).sum(axis=1) / tot, np.nan)
+    return out
+
+
+def bb_touches(high, low, close, period: int = 20, stddev: float = 2.0, window: int = 30, upper: bool = True) -> np.ndarray:
+    """최근 window 봉(현재 포함) 중 고가가 볼린저 상단 이상(upper) / 저가가 하단 이하였던 봉 수. 밴드 워밍업은 NaN."""
+    up, _, lo = bollinger(close, period, stddev)
+    with np.errstate(invalid="ignore"):
+        hit = (_d(high) >= up) if upper else (_d(low) <= lo)
+    cs = np.concatenate([[0], np.cumsum(hit)])
+    idx = np.arange(len(hit))
+    out = (cs[idx + 1] - cs[np.maximum(0, idx + 1 - window)]).astype(float)
+    out[np.isnan(up)] = np.nan
+    return out
+
+
+def bb_pullback(high, low, close, period: int = 20, stddev: float = 2.0, n: int = 2, window: int = 60) -> np.ndarray:
+    """볼린저 눌림 상태. +1 롱 대기 · −1 숏 대기 · 0. 인과적.
+
+    롱: 저가가 하단밴드 터치 → 고가가 중간선 도달(반등) → 그 뒤 고점 프랙탈 확정(다시 하락) 이면 +1 이 켜지고,
+        종가가 그 프랙탈 고점을 넘는 봉까지 유지된다(그 봉도 +1 — 돌파 진입 조건과 AND 로 쓴다).
+        하단을 다시 터치하면 거기서 처음부터, 터치부터 window 봉이 지나면 버린다.
+    숏: 거울(상단 터치 → 중간선까지 하락 → 저점 프랙탈 확정 → 종가가 그 저점 아래로 갈 때까지 −1).
+    """
+    up, mid, lo = bollinger(close, period, stddev)
+    nb = len(close)
+    lows, highs = fractal_points(high, low, n)
+    lo_conf = np.full(nb, -1)
+    hi_conf = np.full(nb, -1)
+    ok = lows + n < nb
+    lo_conf[(lows + n)[ok]] = lows[ok]               # 확정 봉 → 프랙탈 중심 인덱스
+    ok = highs + n < nb
+    hi_conf[(highs + n)[ok]] = highs[ok]
+    hl, ll, cl = _d(high).tolist(), _d(low).tolist(), _d(close).tolist()
+    ul, ml, bl, lc, hc = up.tolist(), mid.tolist(), lo.tolist(), lo_conf.tolist(), hi_conf.tolist()
+    out = np.zeros(nb)
+
+    def side(t, touch, reach, conf, beyond, sign, st):
+        # st = [터치 봉, 중간선 도달 봉, 무장 레벨]
+        if touch:
+            st[:] = [t, None, None]
+            return
+        if st[0] is None:
+            return
+        if t - st[0] > window:
+            st[:] = [None, None, None]
+            return
+        if st[1] is None and reach:
+            st[1] = t
+        if st[1] is not None and st[2] is None and conf >= st[1]:
+            st[2] = (hl if sign > 0 else ll)[conf]
+        if st[2] is not None:
+            out[t] += sign
+            if beyond(st[2]):
+                st[:] = [None, None, None]
+
+    s_long, s_short = [None, None, None], [None, None, None]
+    for t in range(nb):
+        if ml[t] != ml[t]:
+            continue
+        side(t, ll[t] <= bl[t], hl[t] >= ml[t], hc[t], lambda lv: cl[t] > lv, 1, s_long)
+        side(t, hl[t] >= ul[t], ll[t] <= ml[t], lc[t], lambda lv: cl[t] < lv, -1, s_short)
     return out
 
 

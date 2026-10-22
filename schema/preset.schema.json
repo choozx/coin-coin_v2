@@ -86,6 +86,19 @@
             "short": { "$ref": "#/$defs/condition" }
           }
         },
+        "breakeven": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "value"],
+          "description": "본전 손절 — 진입 후 최고가(롱)/최저가(숏)가 트리거에 닿으면 손절을 진입가(± offsetPercent)로 옮긴다. 손절이 더 좁아질 때만 옮긴다.",
+          "properties": {
+            "type": { "type": "string", "enum": ["riskReward", "percent"],
+              "description": "riskReward=처음 손절폭의 value 배 수익에서(손절 필요) · percent=진입가 대비 value% 수익에서" },
+            "value": { "type": "number", "exclusiveMinimum": 0 },
+            "offsetPercent": { "type": "number", "minimum": 0, "maximum": 5, "default": 0,
+              "description": "진입가에서 수익 쪽으로 이만큼 띄운 곳에 손절(수수료 보전용). 0=정확히 진입가" }
+          }
+        },
         "timeStop": {
           "type": "object",
           "additionalProperties": false,
@@ -305,6 +318,8 @@
                        "TAKER_DELTA", "TAKER_DELTA_RATIO", "CVD", "CVD_EMA", "HAWKEYE",
                        "QQE_MOD", "QQE_RSI", "QQE_LINE",
                        "SUPERTREND", "SUPERTREND_DIR", "RSI_DIV", "ATR_RANK", "PIN_BAR", "TRIANGLE_BREAK", "FRACTAL", "PULLBACK_FRACTAL", "BOX_HIGH", "BOX_LOW",
+                       "PREV_HIGH", "PREV_LOW", "RSI_PREV_HIGH", "RSI_PREV_LOW", "PIVOT_LOW", "PIVOT_HIGH",
+                       "VP_ABOVE", "VP_BELOW", "BB_TOUCH_UP", "BB_TOUCH_DN", "BB_PULLBACK", "BIG_CANDLE",
                        "CDL_BULLREV", "CDL_BEARREV", "CDL_ENGULFING", "CDL_HAMMER",
                        "CDL_HANGINGMAN", "CDL_MORNINGSTAR", "CDL_EVENINGSTAR",
                        "CDL_PIERCING", "CDL_DARKCLOUDCOVER"]

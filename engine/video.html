@@ -201,7 +201,7 @@ function render(r) {
   if (a._rejudged) {
     const b = a._rejudged.before, f = a._rejudged.after;
     const d = (k, lab) => b[k] === f[k] ? `${lab} ${f[k]}` : `${lab} ${b[k]} → <b>${f[k]}</b>`;
-    h += `<div class="made" style="margin-bottom:14px">🔄 엔진에 기능이 추가돼서 규칙 상태를 다시 판정했어요 · `
+    h += `<div class="made" style="margin-bottom:14px">🔄 엔진 기능·판정 기준이 바뀌어서 규칙 상태를 다시 판정했어요 · `
       + `${d("ready", "✅")} · ${d("buildable", "🛠")} · ${d("impossible", "⛔")}</div>`;
   }
 
@@ -319,7 +319,8 @@ function draftHtml(d) {
     ? (xl.length ? `<div>롱: ${xl.map(condHtml).join("")}</div>` : "") + (xs.length ? `<div>숏: ${xs.map(condHtml).join("")}</div>` : "")
     : `<span class="note">없음</span>`);
   h += sec("손절 · 익절", `손절 ${esc(targetText(d.stop, true))}<br>익절 ${esc(targetText(d.take, false))}`
-    + (d.time_stop_bars ? `<br>${d.time_stop_bars}봉 뒤 청산` : ""));
+    + (d.time_stop_bars ? `<br>${d.time_stop_bars}봉 뒤 청산` : "")
+    + (d.breakeven && d.breakeven.value ? `<br>본전 손절: ${d.breakeven.type === "percent" ? "+" + d.breakeven.value + "%" : d.breakeven.value + "R"} 수익에서` : ""));
   h += sec(`<span class="mid">기본값·사용자 지정</span>`, list(d.assumed));
   h += sec(`<span class="no">빠진 규칙</span>`, list(d.excluded));
   return h;

@@ -64,6 +64,7 @@ class _Position:
     #   무관해진다(실측: 시간이 흘러도 마지막 sb 가 960 고정). timeStop 이 영영 안 걸렸다.
     peak: float            # 트레일링용 최고가(롱)/최저가(숏)
     funding_accum: float = 0.0
+    be_moved: bool = False  # 본전 손절로 옮겼나 — 그 손절에 걸리면 사유를 'breakeven' 으로
 
 
 def _size_position(sizing: dict, equity: float, price: float, leverage: int, stop_price: float):
@@ -277,7 +278,7 @@ class Stepper:
         if pos.side == 1:
             pos.peak = max(pos.peak, hi)
             if not np.isnan(pos.stop_price) and lo <= pos.stop_price:
-                self._close(pos.stop_price, "stop_loss", ot, sb_time)
+                self._close(pos.stop_price, "breakeven" if pos.be_moved else "stop_loss", ot, sb_time)
             elif trailing and _trailing_hit(pos, trailing, lo, hi):
                 self._close(_trailing_stop(pos, trailing), "trailing", ot, sb_time)
             elif not np.isnan(pos.tp_price) and hi >= pos.tp_price:
@@ -285,11 +286,22 @@ class Stepper:
         else:
             pos.peak = min(pos.peak, lo)
             if not np.isnan(pos.stop_price) and hi >= pos.stop_price:
-                self._close(pos.stop_price, "stop_loss", ot, sb_time)
+                self._close(pos.stop_price, "breakeven" if pos.be_moved else "stop_loss", ot, sb_time)
             elif trailing and _trailing_hit(pos, trailing, lo, hi):
                 self._close(_trailing_stop(pos, trailing), "trailing", ot, sb_time)
             elif not np.isnan(pos.tp_price) and lo <= pos.tp_price:
                 self._close(pos.tp_price, "take_profit", ot, sb_time, is_maker=True)
+
+        # 4) 본전 손절 — 이 봉의 고·저로 트리거를 보고 옮긴다. 옮긴 손절은 **다음 봉부터** 걸린다
+        #    (같은 봉 안에서 고가 뒤에 저가가 왔는지 1분봉으로는 모른다 — 낙관하지 않는다).
+        be = self.preset.exit.get("breakeven")
+        if be and self.ex.position is pos:
+            lvl = _breakeven_level(pos, be, cl)
+            if lvl is not None:
+                pos.stop_price, pos.be_moved = lvl, True
+                save = getattr(self.ex, "_save_position", None)     # 라이브: 재시작해도 옮긴 손절을 살린다
+                if save:
+                    save()
 
     def entry_block(self, signal, resolver, sb, fill_time):
         """(진입 방향 or None, 막힌 사유 or None) — 진입 판정을 한 곳에 모은 것.
@@ -450,6 +462,30 @@ def run(base: Candles, preset: Preset, cfg: BacktestConfig = None, progress_cb=N
                        int(signal.open_time[int(bar_of[-1])]))
 
     return Metrics(cfg.initial_equity, ex.equity(), trades, equity_curve)
+
+
+def _breakeven_level(pos: _Position, be: dict, close: float):
+    """본전 손절로 옮길 가격, 옮길 게 없으면 None.
+
+    트리거: 진입 후 최고가(롱)/최저가(숏)가 riskReward=처음 손절폭×value / percent=진입가×value% 만큼 수익 쪽에 닿음.
+    손절이 더 좁아질 때만, 그리고 그 가격이 지금 종가보다 안전한 쪽일 때만 옮긴다(종가 위 손절 = 즉시 낙관 체결).
+    이미 옮긴 뒤엔 같은 가격이라 다시 안 옮긴다 — 재시작으로 원래 손절이 돌아와도 최고가로 다시 옮겨진다.
+    """
+    e, side, stop = pos.entry_price, pos.side, pos.stop_price
+    if be.get("type", "riskReward") == "riskReward":
+        if np.isnan(stop):
+            return None
+        trig = e + side * float(be["value"]) * abs(e - stop)
+    else:
+        trig = e * (1 + side * float(be["value"]) / 100.0)
+    if (pos.peak - trig) * side < 0:
+        return None
+    lvl = e * (1 + side * float(be.get("offsetPercent", 0.0)) / 100.0)
+    if (close - lvl) * side <= 0:
+        return None
+    if not np.isnan(stop) and (lvl - stop) * side <= 0:
+        return None
+    return lvl
 
 
 def _trailing_stop(pos: _Position, trailing: dict) -> float:

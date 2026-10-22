@@ -88,6 +88,10 @@ def describe(p: dict) -> dict:
         parts.append(f"ST({st.get('period')},×{st.get('multiplier')}) 청산")
     if ex.get("trailing"):
         parts.append(f"트레일링 {ex['trailing'].get('callbackPercent'):g}%")
+    if ex.get("breakeven"):
+        be = ex["breakeven"]
+        trig = f"{be.get('value'):g}R" if be.get("type", "riskReward") == "riskReward" else f"+{be.get('value'):g}%"
+        parts.append(f"{trig} 에 본전 손절")
     if ex.get("condition"):
         parts.append("청산조건 " + _node(ex["condition"]))
     for side, n in (ex.get("conditionBySide") or {}).items():

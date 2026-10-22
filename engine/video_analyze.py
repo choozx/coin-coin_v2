@@ -151,15 +151,24 @@ def _engine_capabilities() -> str:
             "FRACTAL=윌리엄스 프랙탈(확정 봉에 +1 저점/−1 고점, period=좌우 봉), "
             "BOX_HIGH·BOX_LOW=직전 박스 고가·저가(시간 경계로 period 봉씩 끊은 직전 블록 — 1분봉 period 5 = 직전 5분봉; "
             "'N봉 박스 돌파'는 close crossOver BOX_HIGH. 청산 뒤 박스를 새로 시작하는 규칙은 없음 — 박스는 늘 시간 경계), "
+            "PREV_HIGH·PREV_LOW=직전 period 봉(현재 제외) 최고 고가·최저 저가(period 1 = 직전 봉 고가·저가 — 'high > high[1]' 은 high > PREV_HIGH(1)), "
+            "RSI_PREV_HIGH·RSI_PREV_LOW=RSI 의 직전 period 봉(현재 제외) 최고·최저(params rsi_length) — 'RSI 고점 수평선 돌파'는 RSI crossOver RSI_PREV_HIGH, "
+            "PIVOT_LOW·PIVOT_HIGH=확정된 프랙탈 저점·고점 가격(period=좌우 봉, params nth 0=마지막·1=그 전 — 쌍바닥 '두 번째 저점이 전저점 아래'는 PIVOT_LOW{nth:0} < PIVOT_LOW{nth:1}), "
+            "VP_ABOVE·VP_BELOW=매물대 두께(VPVR 근사 — 최근 period 봉 거래량 중 종가 위·아래 params band% 구간의 비중 %, 작을수록 얇은 매물대), "
+            "BB_TOUCH_UP·BB_TOUCH_DN=최근 params window 봉 중 볼린저 상단·하단 터치 봉 수(period=밴드 기간, params stddev), "
+            "BIG_CANDLE=최근 params within 봉 안의 장대봉(+1 양봉·−1 음봉, 몸통 ≥ ATR(period)×params mult — '장대양봉 뒤 눌림'은 BIG_CANDLE > 0 AND RVOL < x), "
+            "BB_PULLBACK=볼린저 눌림 상태(+1 롱 대기: 하단 터치 → 중간선 도달 → 고점 프랙탈 확정 후 종가가 그 고점을 넘을 때까지, −1 숏 거울; params stddev·n·window), "
             "PULLBACK_FRACTAL=눌림→프랙탈→이평 재돌파(롱 +1: 종가<이평 → 저점 프랙탈 확정 → 이평 상향 돌파, 숏 −1 거울; "
             "period=이평 기간, params sma(1=SMA, 0=EMA)·n 프랙탈 봉·window), "
             "HAWKEYE·QQE_MOD=트레이딩뷰 공개 지표 재현, CDL_*=캔들 반전 패턴, PLUS_DI/MINUS_DI/ADX=DMI)\n"
             "- 조건: 비교(<,>,…), 교차(crossOver/crossUnder), AND/OR/NOT, 롱/숏 규칙 따로\n"
             f"- 손절·익절 가격: {', '.join(targets)} (swing=최근 N봉 전저/전고 — N=1 이면 진입 신호봉의 저가/고가, riskReward=손절폭 n배, "
             "indicator=진입 시점 지표 값 ± 여유% 에 손절 고정 — 예: EMA50 바로 아래)\n"
-            "- 청산: 조건 청산(지표 조건), 트레일링, 시간 청산(N봉), SuperTrend 뒤집힘 청산\n"
+            "- 청산: 조건 청산(지표 조건), 트레일링, 시간 청산(N봉), SuperTrend 뒤집힘 청산, "
+            "본전 손절(수익이 손절폭 n배 또는 n% 에 닿으면 손절을 진입가 ± 여유%로 옮김)\n"
             "- 필터: 쿨다운, 펀딩 시각 회피 · 사이징: 자본%·고정금액·리스크% · 타임프레임 1m~1d\n"
-            "- 없는 것: 추세선·수평선 그리기, 지표의 '직전 고점' 같은 피벗 비교, 분할 진입/청산, 물타기")
+            "- 없는 것: 추세선·사선 그리기, 한 조건 안의 산술(예: 고가가 직전 고가보다 'X% 이상' 높음 — 비교는 지표·가격끼리나 상수와만), "
+            "분할 진입/청산, 물타기")
 
 
 def _claude(prompt: str, schema: dict, system: str, timeout: int = 600) -> tuple[dict, dict]:
@@ -185,15 +194,20 @@ def _claude(prompt: str, schema: dict, system: str, timeout: int = 600) -> tuple
 _JUDGE_RULES = (
     "- ready: 위 엔진 목록으로 지금 조립 가능(how 에 엔진 조건을 구체적으로).\n"
     "- buildable: 엔진엔 없지만 계산식·규칙이 명확해 새로 구현하면 됨(how 에 구현 방법 — 예: 'RSI 의 직전 N봉 최고값 대비 돌파 조건 추가').\n"
-    "- impossible: 공식 비공개, 눈대중·재량 판단, 화면에만 나온 정보 등으로 그대로 재현 불가(how 에 이유, 근사 방법이 있으면 함께).\n"
+    "- impossible: 공식 비공개, 백테스트에 없는 데이터(호가잔량·섹터 자금 흐름 등), 엔진 구조상 없는 기능(분할 청산 등), "
+    "눈대중 그림(손으로 그은 추세선, 차트가 닮았는지)처럼 **숫자를 정해 줘도** 재현이 안 되는 것만(how 에 이유, 근사 방법이 있으면 함께).\n"
+    "- 수치(기간·임계값·배수·'강하게' 같은 정도)나 손절·청산 기준이 영상에 없을 **뿐**이면 impossible 이 아니다 — "
+    "엔진으로 표현되면 ready, 계산 기능이 없으면 buildable. how 에 '가정: 무엇=얼마(영상에 수치 없음 — 백테스트 AI 최적화로 범위 탐색)'를 적는다. "
+    "예: '반응 좋은 이평(기간 미공개)' → ready, low <= SMA(n) AND close > SMA(n), 가정 n=20. "
+    "손절·청산이 아예 언급이 없으면 흔한 기본값(손절 swing 20봉, 익절 riskReward 2)을 가정한 ready.\n"
     "verdict 는 전체 결론: 지금 바로 백테스트 가능한지, 무엇을 만들면 되는지."
 )
 
 
 def engine_hash() -> str:
-    """엔진 기능 목록의 지문 — 지표·손절 방식이 늘면 바뀐다. 저장된 분석이 옛 엔진 기준인지 알아보는 데 쓴다."""
+    """엔진 기능 목록 + 판정 기준의 지문 — 지표·손절 방식이 늘거나 판정 기준이 바뀌면 바뀐다. 저장된 분석이 옛 기준인지 알아보는 데 쓴다."""
     import hashlib
-    return hashlib.sha1(_engine_capabilities().encode()).hexdigest()[:12]
+    return hashlib.sha1((_engine_capabilities() + _JUDGE_RULES).encode()).hexdigest()[:12]
 
 
 def _stamp(res: dict, meta_call: dict) -> dict:
@@ -227,7 +241,8 @@ def rejudge(old: dict, timeout: int = 300) -> dict:
         f"{_engine_capabilities()}\n\n"
         "할 일: 같은 지표·같은 규칙(name, settings, part, text 는 글자 그대로 유지, 순서·개수도 유지)에 대해 "
         "status·how·engine 과 verdict 만 위의 '지금' 엔진 기준으로 다시 매겨라. 새 기능으로 가능해진 건 ready 로 올리고 "
-        "how 에 그 기능 이름을 써라(예: PULLBACK_FRACTAL, 손절 indicator 타입).\n" + _JUDGE_RULES
+        "how 에 그 기능 이름을 써라(예: PULLBACK_FRACTAL, 손절 indicator 타입). 판정 기준도 바뀌었을 수 있다 — "
+        "예전에 '수치가 없어서' impossible 로 둔 것은 아래 기준대로 다시 매겨라.\n" + _JUDGE_RULES
     )
     res, mc = _claude(prompt, RESULT_SCHEMA, SYSTEM, timeout)
     return _stamp(res, mc)
@@ -261,7 +276,7 @@ def run(params: dict, emit) -> None:
             emit({"type": "progress", "text": "저장된 분석을 불러오는 중"})
             emit({"type": "done", "result": {"meta": meta, "analysis": old, "cached": True, "presets": preset_records(vid)}})
             return
-        emit({"type": "progress", "text": "엔진에 기능이 추가돼서 규칙 상태를 다시 판정하는 중 — 보통 20~60초"})
+        emit({"type": "progress", "text": "엔진 기능이나 판정 기준이 바뀌어서 규칙 상태를 다시 판정하는 중 — 보통 20~60초"})
         res = rejudge(old)
         res["_rejudged"] = {"before": _status_counts(old), "after": _status_counts(res)}
         with open(os.path.join(CACHE_DIR, vid, "analysis_prev.json"), "w", encoding="utf-8") as f:
@@ -460,6 +475,11 @@ def _draft_schema(indicators: list) -> dict:
         "exit_long": {"type": "array", "items": leaf, "description": "롱 청산 조건(하나라도 맞으면 청산, OR)"},
         "exit_short": {"type": "array", "items": leaf, "description": "숏 청산 조건(OR)"},
         "time_stop_bars": {"type": "integer", "description": "N봉 뒤 청산, 0=없음"},
+        "breakeven": {"type": "object", "description": "본전 손절(영상에 있을 때만). 없으면 생략",
+                      "properties": {"type": {"type": "string", "enum": ["riskReward", "percent"]},
+                                     "value": {"type": "number", "description": "riskReward=손절폭 n배 · percent=수익 %"},
+                                     "offset_pct": {"type": "number", "description": "진입가 + 여유 %(없으면 0)"}},
+                      "required": ["type", "value"]},
         "assumed": {"type": "array", "items": {"type": "string"}, "description": "영상에 없어 기본값으로 정한 것"},
         "excluded": {"type": "array", "items": {"type": "string"}, "description": "구현 가능/불가라 프리셋에서 뺀 규칙"}},
         "required": ["name", "timeframe", "groups", "stop", "take", "exit_long", "exit_short",
@@ -510,6 +530,7 @@ _FORM_DEFAULTS = {
     "exitCondEnabled": False, "exitCondInd": "RSI", "exitCondPeriod": "14", "exitCondCmp": ">", "exitCondValue": "55",
     "exitCustom": "", "timeStopBars": "0", "exitStEnabled": False, "exitStPeriod": "14", "exitStMult": "2.5",
     "trailingEnabled": False, "trailingCallback": "0.8", "trailingActivation": "1",
+    "beEnabled": False, "beType": "riskReward", "beValue": "1", "beOffset": "0",
     "leverage": "10", "levTierEnabled": False, "sizeType": "equityPercent", "sizeValue": "10",
     "minLiqBuffer": "0", "cooldownBars": "0", "avoidFundingMin": "2", "entryType": "taker", "makerTimeoutSeconds": "60",
 }
@@ -539,6 +560,10 @@ def _draft_to_form(d: dict) -> tuple[dict, dict]:
             xc[side] = nodes[0] if len(nodes) == 1 else {"op": "OR", "children": nodes}
     form["exitCustom"] = json.dumps(xc, ensure_ascii=False) if xc else ""
     form["timeStopBars"] = str(int(d.get("time_stop_bars") or 0))
+    be = d.get("breakeven") or {}
+    if float(be.get("value") or 0) > 0:
+        form.update(beEnabled=True, beType=be.get("type") or "riskReward", beValue=str(be["value"]),
+                    beOffset=str(float(be.get("offset_pct") or 0)))
     groups = [g for g in d.get("groups") or [] if g.get("conds")]
     form["entry"] = [{"side": g["side"], "conds": [_custom_fields(c) for c in g["conds"]]} for g in groups]
     params = {k: v for k, v in form.items() if k != "entry"}

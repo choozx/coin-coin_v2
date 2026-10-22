@@ -21,7 +21,7 @@ class Trade:
     pnl: float           # 수수료·펀딩 포함 순손익 (계정 통화)
     fees: float
     funding: float
-    exit_reason: str     # take_profit / stop_loss / trailing / signal / time / liquidation
+    exit_reason: str     # take_profit / stop_loss / breakeven / trailing / signal / time / liquidation
     stop_price: float = float("nan")   # 진입 시점 손절가 (차트용, nan 가능)
     tp_price: float = float("nan")     # 진입 시점 익절가 (차트용, nan 가능)
 

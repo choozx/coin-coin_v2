@@ -270,7 +270,7 @@ def config_confirm_text(edits: dict, has_position: bool) -> str:
     return "\n".join(["**봇 설정 변경 확인**", *rows, apply_note(has_position)])
 
 
-_REASON = {"take_profit": "익절", "stop_loss": "손절", "trailing": "트레일링", "signal": "신호청산",
+_REASON = {"take_profit": "익절", "stop_loss": "손절", "trailing": "트레일링", "breakeven": "본전손절", "signal": "신호청산",
            "time": "시간청산", "supertrend": "ST전환", "liquidation": "강제청산", "external": "외부청산"}
 
 

@@ -142,6 +142,22 @@ class SeriesResolver:
         if name in ("BOX_HIGH", "BOX_LOW"):                 # 직전 박스(시간 경계로 period 봉씩) 고·저 — 1분봉 5 = 직전 5분봉
             bh, bl = ind.box_levels(c.open_time, c.high, c.low, period or 5, int(c.timeframe_min) * 60_000)
             return bh if name == "BOX_HIGH" else bl
+        if name in ("PREV_HIGH", "PREV_LOW"):               # 직전 period 봉(현재 제외) 최고 고가·최저 저가 — period 1 = 직전 봉
+            return ind.prev_extreme(c.high if name == "PREV_HIGH" else c.low, period or 1, name == "PREV_HIGH")
+        if name in ("RSI_PREV_HIGH", "RSI_PREV_LOW"):       # RSI 의 직전 period 봉(현재 제외) 최고·최저 = RSI 수평 기준선
+            r = ind.rsi(c.close, int(params.get("rsi_length", 14)))
+            return ind.prev_extreme(r, period or 20, name == "RSI_PREV_HIGH")
+        if name in ("PIVOT_LOW", "PIVOT_HIGH"):             # 확정된 프랙탈 저점·고점 가격. period=좌우 봉, params nth 0=마지막·1=그 전
+            return ind.pivot_level(c.high, c.low, period or 2, int(params.get("nth", 0)), name == "PIVOT_HIGH")
+        if name in ("VP_ABOVE", "VP_BELOW"):                # 매물대 두께 — 최근 period 봉 거래량 중 종가 위·아래 band% 구간 비중(%)
+            return ind.vp_share(c.high, c.low, c.close, c.volume, period or 200, float(params.get("band", 1.0)),
+                                name == "VP_ABOVE")
+        if name in ("BB_TOUCH_UP", "BB_TOUCH_DN"):          # 최근 window 봉 중 볼린저 상단·하단 터치 봉 수. period=밴드 기간
+            return ind.bb_touches(c.high, c.low, c.close, period or 20, float(params.get("stddev", 2.0)),
+                                  int(params.get("window", 30)), name == "BB_TOUCH_UP")
+        if name == "BB_PULLBACK":                           # 하단 터치 → 중간선 반등 → 고점 프랙탈: +1 롱 대기 · −1 숏 거울
+            return ind.bb_pullback(c.high, c.low, c.close, period or 20, float(params.get("stddev", 2.0)),
+                                   int(params.get("n", 2)), int(params.get("window", 60)))
         if name == "FRACTAL":                               # 프랙탈 확정 봉: +1 저점(빨강) · -1 고점(파랑). period=좌우 봉
             return ind.fractal(c.high, c.low, period or 2)
         if name == "PULLBACK_FRACTAL":                      # 눌림 → 프랙탈 → 이평 재돌파: +1 롱 · -1 숏. period=이평 기간
@@ -152,6 +168,9 @@ class SeriesResolver:
             return ind.pin_bar(c.open, c.high, c.low, c.close, float(params.get("wick", 66)),
                                float(params.get("body", 30)), float(params.get("min_atr", 0)),
                                int(params.get("within", 1)))
+        if name == "BIG_CANDLE":                            # 최근 within 봉 안 장대봉: +1 양봉 · −1 음봉. 몸통 ≥ ATR(period)×mult
+            return ind.big_candle(c.open, c.high, c.low, c.close, period or 14, float(params.get("mult", 2.0)),
+                                  int(params.get("within", 10)))
         if name == "TRIANGLE_BREAK":                        # +1 위 추세선 돌파 · -1 아래 추세선 이탈 (period=피벗 좌우 봉수)
             return ind.triangle_breakout(c.high, c.low, c.close, period or 5, int(params.get("lookback", 100)),
                                          float(params.get("tol", 10)), int(params.get("within", 1)))

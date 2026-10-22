@@ -319,6 +319,13 @@
         <input type="number" id="trailingCallback" value="0.8" step="0.05" min="0"></div>
       <div class="row"><label class="hint">활성화 %</label>
         <input type="number" id="trailingActivation" value="1" step="0.05" min="0"></div>
+      <div class="row" style="margin-top:8px"><label><input type="checkbox" id="beEnabled"> 본전 손절</label>
+        <select id="beType"><option value="riskReward">손절폭 배수(R) 수익에서</option><option value="percent">진입가 대비 % 수익에서</option></select></div>
+      <div class="row"><label class="hint">트리거 (R 또는 %)</label>
+        <input type="number" id="beValue" value="1" step="0.1" min="0"></div>
+      <div class="row"><label class="hint">진입가 + 여유 %</label>
+        <input type="number" id="beOffset" value="0" step="0.01" min="0" max="5"></div>
+      <div class="note">최고가(롱)·최저가(숏)가 트리거에 닿으면 손절을 진입가로 올려요(다음 봉부터). R 방식은 손절이 있어야 해요. 여유 %는 수수료 보전용.</div>
     </div>
 
     <div class="band"><span class="bnum">3</span> 포지션 · 리스크 <span class="bsub">수량 · 레버리지 · 필터</span></div>
@@ -371,8 +378,13 @@
 
     <!-- 버튼은 하나 — "범위"가 켜져 있으면 범위 테스트(최적화), 아니면 백테스트 -->
     <button id="run">▶ 백테스트 실행</button>
-    <button id="aiOpt">🤖 AI 최적화</button>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+      <button id="aiOpt" style="margin:0;flex:1">🤖 AI 최적화</button>
+      <select id="aiBudget" title="AI 가 이 시간 안에 끝날 만큼만 조합을 골라요" style="width:auto">
+        <option value="60">1분 이내</option><option value="180" selected>1~3분</option>
+        <option value="300">5분 이내</option><option value="600">10분 이내</option></select></div>
     <div class="note" style="margin-top:6px">AI 가 이 프리셋에서 결과를 좌우할 값 1~3개와 범위를 골라 범위 테스트를 돌리고, 결과를 설명해요.
+      시간을 고르면 지금 설정으로 백테스트를 한 번 돌려 재고, 그 시간 안에 끝날 만큼만 조합을 잡아요.
       판정 기준은 이 프리셋으로 AI 최적화를 돌린 조합 수가 쌓일수록 올라가요. Claude 호출 2번(이 맥의 Claude 계정).</div>
    </div><!-- /pane-backtest -->
   </div>
@@ -391,7 +403,7 @@ const FIELDS = ["symbol","timeframe","days","equity",
   "tpType","tpValue","tpLookback","tpBuffer","tpStPeriod","tpStMult",
   "exitCondEnabled","exitCondInd","exitCondPeriod","exitCondCmp","exitCondValue","exitCustom","timeStopBars",
   "exitStEnabled","exitStPeriod","exitStMult",
-  "trailingEnabled","trailingCallback","trailingActivation",
+  "trailingEnabled","trailingCallback","trailingActivation","beEnabled","beType","beValue","beOffset",
   "leverage","levTierEnabled","sizeType","sizeValue","minLiqBuffer","cooldownBars","avoidFundingMin",
   "entryType","makerTimeoutSeconds"];
 
@@ -444,7 +456,7 @@ const _MODE_MA = {k:"mode",label:"방식",type:"select",opts:[["price","가격 �
 const _MODE_OSC = {k:"mode",label:"방식",type:"select",opts:[["level","기준값 비교"],["cross","크로스(K·D)"]],v:"level",reflow:true};
 const _MODE_ST = {k:"mode",label:"방식",type:"select",opts:[["trend","추세 필터(가격 대비)"],["flip","전환 신호(플립)"]],v:"trend",reflow:true};
 // '직접 조건(고급)'용 — 엔진 지표 전부(schema/preset.schema.json 의 operand.indicator) + 가격 소스
-const ENGINE_INDICATORS = ["SMA", "EMA", "RSI", "MACD", "MACD_signal", "MACD_hist", "BB_upper", "BB_lower", "BB_mid", "ATR", "ADX", "PLUS_DI", "MINUS_DI", "STOCH_K", "STOCH_D", "STOCHRSI_K", "STOCHRSI_D", "CCI", "MFI", "RVOL", "VWAP", "VWAP_Z", "SMA_SLOPE", "MA_ANGLE", "MA_GAP", "MA_CROSSES", "BODY_ATR", "TAKER_DELTA", "TAKER_DELTA_RATIO", "CVD", "CVD_EMA", "HAWKEYE", "QQE_MOD", "QQE_RSI", "QQE_LINE", "SUPERTREND", "SUPERTREND_DIR", "RSI_DIV", "ATR_RANK", "PIN_BAR", "TRIANGLE_BREAK", "FRACTAL", "PULLBACK_FRACTAL", "BOX_HIGH", "BOX_LOW", "CDL_BULLREV", "CDL_BEARREV", "CDL_ENGULFING", "CDL_HAMMER", "CDL_HANGINGMAN", "CDL_MORNINGSTAR", "CDL_EVENINGSTAR", "CDL_PIERCING", "CDL_DARKCLOUDCOVER"];
+const ENGINE_INDICATORS = ["SMA", "EMA", "RSI", "MACD", "MACD_signal", "MACD_hist", "BB_upper", "BB_lower", "BB_mid", "ATR", "ADX", "PLUS_DI", "MINUS_DI", "STOCH_K", "STOCH_D", "STOCHRSI_K", "STOCHRSI_D", "CCI", "MFI", "RVOL", "VWAP", "VWAP_Z", "SMA_SLOPE", "MA_ANGLE", "MA_GAP", "MA_CROSSES", "BODY_ATR", "TAKER_DELTA", "TAKER_DELTA_RATIO", "CVD", "CVD_EMA", "HAWKEYE", "QQE_MOD", "QQE_RSI", "QQE_LINE", "SUPERTREND", "SUPERTREND_DIR", "RSI_DIV", "ATR_RANK", "PIN_BAR", "TRIANGLE_BREAK", "FRACTAL", "PULLBACK_FRACTAL", "BOX_HIGH", "BOX_LOW", "PREV_HIGH", "PREV_LOW", "RSI_PREV_HIGH", "RSI_PREV_LOW", "PIVOT_LOW", "PIVOT_HIGH", "VP_ABOVE", "VP_BELOW", "BB_TOUCH_UP", "BB_TOUCH_DN", "BB_PULLBACK", "BIG_CANDLE", "CDL_BULLREV", "CDL_BEARREV", "CDL_ENGULFING", "CDL_HAMMER", "CDL_HANGINGMAN", "CDL_MORNINGSTAR", "CDL_EVENINGSTAR", "CDL_PIERCING", "CDL_DARKCLOUDCOVER"];
 const PRICE_SOURCES = [["close","종가"],["open","시가"],["high","고가"],["low","저가"],["volume","거래량"]];
 const OPERAND_OPTS = [...PRICE_SOURCES, ...ENGINE_INDICATORS.map(x => [x, x])];
 function customOperand(name, per, params) {
@@ -626,6 +638,59 @@ const COND_TYPES = {
     build:f=>({cross:f.dir==="up"?"crossOver":"crossUnder",left:{source:"close"},
                right:{indicator:f.dir==="up"?"BOX_HIGH":"BOX_LOW",period:+f.n}}),
     desc:n=>`종가가 직전 ${n.right.period}봉 박스 ${n.cross==="crossOver"?"고가 ▲상향":"저가 ▼하향"} 돌파 (박스는 시간 경계로 ${n.right.period}봉씩)` },
+  prevBreak: { label:"직전 N봉 고가·저가 돌파",
+    // 직전 N봉(현재 제외) 최고 고가 / 최저 저가 — N=1 이면 '고가 > 직전 봉 고가' 같은 직전 봉 비교
+    fields:[{k:"src",label:"이 봉의",type:"select",opts:[["close","종가"],["high","고가"],["low","저가"]],v:"close"},
+            {k:"dir",label:"방향",type:"select",opts:[["up","> 직전 N봉 최고 고가"],["down","< 직전 N봉 최저 저가"]],v:"up"},
+            {k:"n",label:"N(봉)",v:20,sweep:{path:"right.period",def:[10,40,10]}}],
+    build:f=>({left:{source:f.src},cmp:f.dir==="up"?">":"<",right:{indicator:f.dir==="up"?"PREV_HIGH":"PREV_LOW",period:+f.n}}),
+    desc:n=>`${operandText(n.left)} ${n.cmp} 직전 ${n.right.period}봉 ${n.cmp===">"?"최고 고가":"최저 저가"}` },
+  rsiLevel: { label:"RSI 직전 고점·저점 수평선 돌파",
+    // RSI 가 직전 N봉(현재 제외) RSI 최고값을 상향 교차 = RSI 고점에 그은 수평선 돌파. 숏은 최저값 하향 교차
+    fields:[{k:"dir",label:"방향",type:"select",opts:[["up","▲ 직전 RSI 고점 상향 돌파"],["down","▼ 직전 RSI 저점 하향 이탈"]],v:"up"},
+            {k:"period",label:"RSI 기간",v:14},
+            {k:"n",label:"수평선 기준(직전 N봉)",v:20,sweep:{path:"right.period",def:[10,40,10]}}],
+    build:f=>({cross:f.dir==="up"?"crossOver":"crossUnder",left:{indicator:"RSI",period:+f.period},
+               right:{indicator:f.dir==="up"?"RSI_PREV_HIGH":"RSI_PREV_LOW",period:+f.n,params:{rsi_length:+f.period}}}),
+    desc:n=>`RSI(${n.left.period}) ${n.cross==="crossOver"?"▲ 직전 "+n.right.period+"봉 RSI 고점 돌파":"▼ 직전 "+n.right.period+"봉 RSI 저점 이탈"}` },
+  doubleBottom: { label:"쌍바닥·쌍봉(두 번째가 전저점·전고점을 깸)",
+    // 확정된 프랙탈 저점 두 개: 마지막 < 그 전 (두 번째 바닥이 전저점 아래). 다음 저점이 확정될 때까지 참이 유지된다
+    fields:[{k:"dir",label:"종류",type:"select",opts:[["bottom","쌍바닥 — 두 번째 저점 < 전저점"],["top","쌍봉 — 두 번째 고점 > 전고점"]],v:"bottom"},
+            {k:"n",label:"저점·고점 확인(좌우 봉)",v:5,sweep:{path:"left.period",def:[3,9,2]}}],
+    build:f=>{ const ind = f.dir==="bottom" ? "PIVOT_LOW" : "PIVOT_HIGH";
+      return {left:{indicator:ind,period:+f.n,params:{nth:0}},cmp:f.dir==="bottom"?"<":">",right:{indicator:ind,period:+f.n,params:{nth:1}}}; },
+    desc:n=>`${n.left.indicator==="PIVOT_LOW"?"쌍바닥 — 마지막 저점 < 전저점":"쌍봉 — 마지막 고점 > 전고점"} (좌우 ${n.left.period}봉)` },
+  vpThin: { label:"매물대 두께(VPVR 근사)",
+    // 최근 N봉 거래량 중 지금 종가 위(또는 아래) band% 구간에 쌓인 비중(%). 작으면 얇은 매물대 → 뚫기 쉽다
+    fields:[{k:"side",label:"구간",type:"select",opts:[["above","종가 위(롱 저항)"],["below","종가 아래(숏 지지)"]],v:"above"},
+            {k:"band",label:"구간 폭 %",v:1,sweep:{path:"left.params.band",def:[0.5,2,0.5]}},
+            {k:"window",label:"최근 봉 수",v:200},
+            {k:"cmp",label:"조건",type:"cmp",v:"<"},
+            {k:"value",label:"거래량 비중 %",v:10,sweep:{path:"right",def:[5,20,5]}}],
+    build:f=>({left:{indicator:f.side==="above"?"VP_ABOVE":"VP_BELOW",period:+f.window,params:{band:+f.band}},cmp:f.cmp,right:+f.value}),
+    desc:n=>`최근 ${n.left.period}봉 매물 중 종가 ${n.left.indicator==="VP_ABOVE"?"위":"아래"} ${n.left.params.band}% 비중 ${n.cmp} ${n.right}%` },
+  bbTouch: { label:"볼린저 터치 횟수(최근 N봉)",
+    fields:[{k:"band",label:"밴드",type:"select",opts:[["up","상단 터치(고가 ≥ 상단)"],["dn","하단 터치(저가 ≤ 하단)"]],v:"up"},
+            {k:"period",label:"BB 기간",v:20},{k:"stddev",label:"표준편차",v:2},
+            {k:"window",label:"최근 봉 수",v:30,sweep:{path:"left.params.window",def:[20,60,20]}},
+            {k:"count",label:"터치 ≥ 회",v:3,sweep:{path:"right",def:[2,5,1]}}],
+    build:f=>({left:{indicator:f.band==="up"?"BB_TOUCH_UP":"BB_TOUCH_DN",period:+f.period,params:{stddev:+f.stddev,window:+f.window}},cmp:">=",right:+f.count}),
+    desc:n=>`최근 ${n.left.params.window}봉 BB(${n.left.period}) ${n.left.indicator==="BB_TOUCH_UP"?"상단":"하단"} 터치 ≥ ${n.right}회` },
+  bbPullback: { label:"볼린저 눌림(하단 터치→중간선 반등→고점)",
+    // 롱: 하단 터치 → 중간선 도달 → 고점 프랙탈 확정 후 종가가 그 고점을 넘을 때까지 켜짐. 숏은 거울. 돌파 조건과 함께 쓴다
+    fields:[{k:"dir",label:"방향",type:"select",opts:[["long","롱 대기(하단→중간선→고점)"],["short","숏 대기(상단→중간선→저점)"]],v:"long"},
+            {k:"period",label:"BB 기간",v:20},{k:"stddev",label:"표준편차",v:2},
+            {k:"n",label:"프랙탈 좌우 봉",v:2,sweep:{path:"left.params.n",def:[2,5,1]}},
+            {k:"window",label:"터치 후 최대 봉",v:60,sweep:{path:"left.params.window",def:[30,90,30]}}],
+    build:f=>({left:{indicator:"BB_PULLBACK",period:+f.period,params:{stddev:+f.stddev,n:+f.n,window:+f.window}},cmp:f.dir==="long"?">":"<",right:0}),
+    desc:n=>`BB(${n.left.period}) ${n.cmp===">"?"하단 터치→중간선→고점 확정(롱 대기)":"상단 터치→중간선→저점 확정(숏 대기)"} · ${n.left.params.window}봉 안` },
+  bigCandle: { label:"최근 장대봉(장대양봉 뒤 눌림 등)",
+    // 최근 N봉 안에 몸통 ≥ ATR×배수 인 장대양봉(음봉)이 있었나 — 지금 봉이 장대봉일 필요 없음. RVOL 감소와 같이 쓰면 '장대양봉 뒤 거래량 줄어든 눌림'
+    fields:[{k:"dir",label:"종류",type:"select",opts:[["bull","장대양봉"],["bear","장대음봉"]],v:"bull"},
+            {k:"mult",label:"몸통 ≥ ATR×",v:2,sweep:{path:"left.params.mult",def:[1.5,3,0.5]}},
+            {k:"within",label:"최근 N봉 안",v:10,sweep:{path:"left.params.within",def:[5,20,5]}}],
+    build:f=>({left:{indicator:"BIG_CANDLE",period:14,params:{mult:+f.mult,within:+f.within}},cmp:f.dir==="bull"?">":"<",right:0}),
+    desc:n=>`최근 ${n.left.params.within}봉 안 ${n.cmp===">"?"장대양봉":"장대음봉"}(몸통 ≥ ATR×${n.left.params.mult})` },
   fractal: { label:"윌리엄스 프랙탈",
     fields:[{k:"dir",label:"종류",type:"select",opts:[["low","저점 프랙탈(빨강) 확정"],["high","고점 프랙탈(파랑) 확정"]],v:"low"},
             {k:"n",label:"좌우 봉",v:2,sweep:{path:"left.period",def:[2,7,5]}}],
@@ -913,6 +978,7 @@ function applyPreset(p) {
   if (!p) return;
   if (aiPlan) { aiPlan = null; if ($("aiPlanBox")) $("out").innerHTML = ""; }   // 다른 프리셋의 AI 범위 확인은 버린다
   if (!("exitCustom" in p)) $("exitCustom").value = "";   // 이 칸이 없던 옛 프리셋이 직전 프리셋의 직접 청산을 물려받지 않게
+  if (!("beEnabled" in p)) $("beEnabled").checked = false;   // 본전 손절도 같은 이유
   for (const [k,v0] of Object.entries(p)) {
     if (k === "entry") continue;
     const el = $(k); if (!el) continue;
@@ -1193,7 +1259,7 @@ function render(d) {
   html += `<div class="chartbox"><h3>자산 곡선 · ${d.preset.market.symbol} ${fmtDate(d.dataRange[0])} ~ ${fmtDate(d.dataRange[1])} UTC · 1분봉 ${d.candles.toLocaleString()}개 · 펀딩 ${(d.fundingRate*100).toFixed(4)}%/8h${feeInfo}</h3><canvas id="chart"></canvas></div>`;
 
   const total = Object.values(d.exitReasons).reduce((a,b)=>a+b,0) || 1;
-  const RN = {take_profit:"익절", stop_loss:"손절", trailing:"트레일링", signal:"신호청산", time:"시간청산", liquidation:"청산 ⚠️"};
+  const RN = {take_profit:"익절", stop_loss:"손절", trailing:"트레일링", breakeven:"본전손절", signal:"신호청산", time:"시간청산", liquidation:"청산 ⚠️"};
   if (Object.keys(d.exitReasons).length) {
     html += '<div class="chartbox"><h3>청산 사유 분포</h3><div class="bars">';
     for (const [k,v] of Object.entries(d.exitReasons).sort((a,b)=>b[1]-a[1]))
@@ -1233,7 +1299,7 @@ function drawChart(curve, base) {
 // ---- 거래 내역 + 거래별 차트 ----
 // 전체 기간 캔들을 한 차트에 넣지 않는다(2000일 5m = 60만 봉 → 압축되면 RSI 저점이 묶음 안에 숨는다).
 // 거래 한 줄을 누르면 서버가 그 진입~청산 구간만 신호 타임프레임 그대로(압축 없이) 지표와 함께 보낸다.
-const TRADE_RN = {take_profit:"익절", stop_loss:"손절", trailing:"트레일링", signal:"신호청산", time:"시간청산", liquidation:"강제청산 ⚠️"};
+const TRADE_RN = {take_profit:"익절", stop_loss:"손절", trailing:"트레일링", breakeven:"본전손절", signal:"신호청산", time:"시간청산", liquidation:"강제청산 ⚠️"};
 let tradeChartObj = null;   // 펼친 거래 차트(한 번에 하나)
 
 function fmtPx(v, prec) { return v == null ? "–" : Number(v).toFixed(prec); }
@@ -1429,9 +1495,9 @@ const EXIT_INDS = {
 const EXIT_IND_LABEL = Object.fromEntries(Object.entries(EXIT_INDS).map(([k,v]) => [k, v.label]));
 // 진입이 아닌 고정 폼 필드의 기본 스윕 범위 (exitCondValue는 지표별 vrange 사용 → 주입 시 결정)
 const FIXED_SWEEP = { slValue:[0.5,2.5,0.5], tpValue:[0.5,3,0.5],
-  exitCondPeriod:[7,21,7], timeStopBars:[6,24,6], leverage:[2,10,1], sizeValue:[10,40,10] };
+  exitCondPeriod:[7,21,7], timeStopBars:[6,24,6], beValue:[0.5,2,0.5], leverage:[2,10,1], sizeValue:[10,40,10] };
 const FIXED_LABEL = { slValue:"손절 값", tpValue:"익절 값", exitCondValue:"청산 기준값",
-  exitCondPeriod:"청산 기간", timeStopBars:"시간청산", leverage:"레버리지", sizeValue:"사이징 값" };
+  exitCondPeriod:"청산 기간", timeStopBars:"시간청산", beValue:"본전 트리거", leverage:"레버리지", sizeValue:"사이징 값" };
 let sweepState = {};   // key → {min,max,step} : 체크된(범위 탐색) 파라미터만 담김
 let aiPlan = null;     // AI 최적화가 고른 범위의 확인 대기 상태 {reason, testedBefore, costUsd} — 실행·취소·프리셋 변경 시 비움
 
@@ -1505,6 +1571,7 @@ function sweepApplicable(key) {
   if (key === "slValue") return ["percent","atrMultiple"].includes($("slType").value);
   if (key === "tpValue") return ["percent","atrMultiple","riskReward"].includes($("tpType").value);
   if (key === "exitCondValue" || key === "exitCondPeriod") return $("exitCondEnabled").checked;
+  if (key === "beValue") return $("beEnabled").checked;
   return true;   // timeStopBars · leverage · sizeValue
 }
 function collectSweep() {
@@ -1715,12 +1782,15 @@ async function aiOptimize() {
   const started = performance.now();
   $("out").innerHTML = `<div class="aibox"><b class="h">🤖 AI 최적화</b><span id="aiProg">프리셋을 읽고 탐색할 값과 범위를 고르는 중</span></div>`;
   const tick = setInterval(() => { const el = $("aiProg");
-    if (el) el.textContent = `프리셋을 읽고 탐색할 값과 범위를 고르는 중 · ${((performance.now() - started) / 1000).toFixed(0)}초`; }, 500);
+    if (el) el.textContent = `백테스트 1회로 시간을 재고, 탐색할 값과 범위를 고르는 중 · ${((performance.now() - started) / 1000).toFixed(0)}초`; }, 500);
   try {
-    const prop = await postJson("/api/ai_propose", { presetName: currentPresetName, candidates: sweepCandidates(), params: collect() });
+    const prop = await postJson("/api/ai_propose", { presetName: currentPresetName, candidates: sweepCandidates(), params: collect(),
+                                                     budgetSec: +$("aiBudget").value });
     sweepState = {};
     for (const [k, sp] of Object.entries(prop.sweep)) sweepState[k] = { min: sp.min, max: sp.max, step: sp.step };
-    aiPlan = { reason: prop.reply, testedBefore: prop.testedBefore || 0, costUsd: prop.costUsd };
+    aiPlan = { reason: prop.reply, testedBefore: prop.testedBefore || 0, costUsd: prop.costUsd, budgetSec: prop.budgetSec,
+               maxCombos: prop.maxCombos, secPerCombo: prop.secPerCombo, overheadSec: prop.overheadSec,
+               budgetLabel: $("aiBudget").selectedOptions[0].textContent };
     $("out").innerHTML = `<div class="aibox" id="aiPlanBox"></div>`;
     restoreSweepUI(); updateComboCount();               // → updateAiPlan 이 상자를 채운다
   } catch (e) {
@@ -1735,12 +1805,18 @@ function updateAiPlan() {
   const box = $("aiPlanBox"); if (!box || !aiPlan) return;
   const sweep = collectSweep(), keys = Object.keys(sweep);
   const n = keys.length ? comboCountOf(sweep) : 0, gate = aiPlan.testedBefore + n;
-  const est = Math.max(1, Math.ceil(n * 0.4));
+  // 예상 시간 = 고정(프로세스 기동·OOS·귀무 판정·랭킹 재실행) + 조합 × 조합당 — 서버가 백테스트 1회를 재서 준 값
+  const est = aiPlan.secPerCombo != null ? Math.ceil(aiPlan.overheadSec + n * aiPlan.secPerCombo) : Math.max(1, Math.ceil(n * 0.4));
+  const fmtSec = s => s >= 90 ? `${(s / 60).toFixed(1)}분` : `${s}초`;
+  const over = aiPlan.budgetSec && est > aiPlan.budgetSec;
   box.innerHTML = `<b class="h">🤖 AI 가 고른 범위 — 아직 안 돌렸어요</b>`
     + (keys.length ? keys.map(k => `· ${escapeHtml(labelFor(k))}: ${sweep[k].min} ~ ${sweep[k].max} (단위 ${sweep[k].step})`).join("\n")
                    : "· 범위가 다 꺼졌어요 — 왼쪽에서 '범위'를 켜 주세요")
     + `\n${escapeHtml(aiPlan.reason)}\n\n`
-    + `<b>예상 조합 ${n.toLocaleString()}개</b> · 예상 ~${est}초 · 판정 기준: 이 프리셋 누적 ${aiPlan.testedBefore.toLocaleString()}개 + 이번 ${n.toLocaleString()}개 `
+    + `<b>예상 조합 ${n.toLocaleString()}개</b> · 예상 ~${fmtSec(est)}`
+    + (aiPlan.budgetSec ? ` (고른 시간 ${escapeHtml(aiPlan.budgetLabel)} · 상한 ${aiPlan.maxCombos.toLocaleString()}조합)` : "")
+    + (over ? ` <b style="color:var(--bad,#e5534b)">⚠️ 고른 시간을 넘어요</b>` : "")
+    + ` · 판정 기준: 이 프리셋 누적 ${aiPlan.testedBefore.toLocaleString()}개 + 이번 ${n.toLocaleString()}개 `
     + `= <b>${gate.toLocaleString()}개 중 최고</b>보다 나아야 통과\n`
     + `<span style="color:var(--mut)">범위는 왼쪽 '범위' 칸에 들어가 있어요. 고치면 이 숫자도 바뀌어요.`
     + `${aiPlan.costUsd != null ? ` · 범위 고르기 비용 약 $${Number(aiPlan.costUsd).toFixed(2)}` : ""}</span>`
@@ -1946,7 +2022,10 @@ function updateHints() {
   if ($("exitStEnabled").checked) parts.push(`ST전환(${v("exitStPeriod")},×${v("exitStMult")})`);
   if (+v("timeStopBars") > 0) parts.push(`${v("timeStopBars")}봉`);
   setH("cond", parts.join(" · ") || "없음");
-  setH("trail", $("trailingEnabled").checked ? `${v("trailingCallback")}%` : "없음");
+  const trail = [];
+  if ($("trailingEnabled").checked) trail.push(`${v("trailingCallback")}%`);
+  if ($("beEnabled").checked) trail.push(`본전 ${v("beType")==="percent" ? "+"+v("beValue")+"%" : v("beValue")+"R"}`);
+  setH("trail", trail.join(" · ") || "없음");
   setH("sizing", `${v("leverage")}x · ${v("sizeType")==="riskPercent"?"리스크":"증거금"} ${v("sizeValue")}%`);
   setH("filter", `쿨다운 ${v("cooldownBars")} · 펀딩 ${v("avoidFundingMin")}분`);
 }

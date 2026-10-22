@@ -109,3 +109,29 @@ def test_explain_passes_gate_n(env):
                                         "null": {"beatsBestOfN": False, "negative": True}}]}})
     assert r["reply"] == "통과 없음"
     assert "N(누적 시험 조합) 25개" in env["calls"][0] and "익절 값" in env["calls"][0]
+
+
+def test_time_model_matches_measurements():
+    """실측(8코어): 15m 300일 1회 1.3초 → 8조합 7.5초·32조합 15.4초 / 1m 365일 1회 2.5초 → 11.2초·27.7초(랭킹 재실행 제외)."""
+    for one, days, meas in ((1.31, 300, {8: 7.5, 32: 15.4}), (2.49, 300, {8: 11.2, 32: 27.7})):
+        tm = ai.time_model(one, days, workers=8)
+        for n, sec in meas.items():
+            assert tm["overheadSec"] + n * tm["secPerCombo"] == pytest.approx(sec, rel=0.35)
+    assert ai.time_model(2.0, 365, 8)["overheadSec"] > ai.time_model(2.0, 300, 8)["overheadSec"]   # 1년 이상은 랭킹 재실행
+
+
+def test_propose_budget_sets_combo_cap(env, monkeypatch):
+    monkeypatch.setattr(ai, "_time_backtest", lambda form: (1.0, 300.0))
+    from engine import optimize as opt
+    monkeypatch.setattr(opt, "resolve_workers", lambda n, w=None: 8)          # CI 코어 수와 무관하게
+    tm = ai.time_model(1.0, 300, 8)
+    cap = ai.max_combos_for(60, tm)
+    assert cap == int((60 - tm["overheadSec"]) / tm["secPerCombo"]) and ai.max_combos_for(600, tm) > 5 * cap
+    big = {"key": "@entry:0:0:left.period", "min": 2, "max": 200, "step": 1}                       # 199조합
+    env["fake"]([{"reply": "x", "sweep": [big, {"key": "tpValue", "min": 0.5, "max": 3, "step": 0.5}]},     # 1194 → 1분엔 초과
+                 {"reply": "y", "sweep": [big]}])
+    r = ai.propose({"presetName": "P", "candidates": CANDS, "params": FORM, "budgetSec": 60})
+    assert r["combos"] == 199 and r["maxCombos"] == cap and r["budgetSec"] == 60 and r["secPerCombo"] > 0
+    assert f"{cap}개 이하" in env["calls"][0] and "1분 이내" in env["calls"][0]
+    with pytest.raises(ValueError):
+        ai.propose({"presetName": "P", "candidates": CANDS, "params": FORM, "budgetSec": 77})

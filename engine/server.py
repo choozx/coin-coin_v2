@@ -145,6 +145,12 @@ def _build_preset(p: dict) -> dict:
             "callbackPercent": float(p["trailingCallback"]),
             "activationPercent": float(p.get("trailingActivation", 0)),
         }
+    if p.get("beEnabled") and float(p.get("beValue", 0) or 0) > 0:
+        exit_block["breakeven"] = {
+            "type": p.get("beType") or "riskReward",
+            "value": float(p["beValue"]),
+            "offsetPercent": float(p.get("beOffset", 0) or 0),
+        }
     # 지표 조건 청산 (지표 평균 복귀) — 역추세 매매의 핵심 청산. 지표는 선택 가능(RSI/Stoch 등)
     if p.get("exitCondEnabled"):
         exit_block["condition"] = {
@@ -266,7 +272,8 @@ def _ohlc_for_chart(base, tf_min: int, max_bars: int = 200000):
 
 
 # ---- 전략에 쓰인 지표 추출·계산 (차트 표시용) ----
-_OVERLAY_INDS = {"SMA", "EMA", "VWAP", "SUPERTREND", "BB_upper", "BB_mid", "BB_lower", "BOX_HIGH", "BOX_LOW"}
+_OVERLAY_INDS = {"SMA", "EMA", "VWAP", "SUPERTREND", "BB_upper", "BB_mid", "BB_lower", "BOX_HIGH", "BOX_LOW",
+                 "PREV_HIGH", "PREV_LOW", "PIVOT_LOW", "PIVOT_HIGH"}
 # 오실레이터 → 패널 그룹키 (같은 그룹은 한 패널에 겹쳐 그림)
 _IND_PANE = {
     "RSI": "rsi", "MACD": "macd", "MACD_signal": "macd", "MACD_hist": "macd",
