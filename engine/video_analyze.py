@@ -406,7 +406,8 @@ def _video_names(vid: str) -> list:
 
 def discard(params: dict) -> dict:
     """{id, names?, reason?, video?} → 프리셋을 보관함으로 옮긴다. names 없으면 이 영상으로 만든 프리셋 전부.
-    video=True 면 영상 자체도 '폐기'로 표시(목록 아래로·흐리게). 라이브 봇이 쓰는 프리셋이 끼어 있으면 아무것도 안 옮긴다."""
+    video=True 면 영상 자체도 '폐기'로 표시(목록 아래로·흐리게). 프리셋을 골라 폐기했어도 남은 게 없으면 영상도 폐기된다.
+    라이브 봇이 쓰는 프리셋이 끼어 있으면 아무것도 안 옮긴다."""
     from .server import _SAVED_DIR, _safe_name
     vid = params["id"]
     reason = (params.get("reason") or "").strip()[:300]
@@ -428,7 +429,11 @@ def discard(params: dict) -> dict:
         with open(os.path.join(DISCARD_DIR, _safe_name(n) + ".json"), "w", encoding="utf-8") as f:
             json.dump(rec, f, ensure_ascii=False, indent=2)
         os.remove(src)                                         # 보관함에 다 쓴 뒤에 원본을 지운다
-    if params.get("video"):
+    recs = [x for v in preset_records(vid).values() for x in v]
+    all_gone = bool(moving) and any(x["discarded"] for x in recs) and not any(x["exists"] for x in recs)
+    if params.get("video") or all_gone:                      # 영상 폐기 — 직접 눌렀거나, 남은 프리셋이 다 폐기됐을 때
+        if all_gone and not params.get("video") and not reason:
+            reason = "프리셋 전부 폐기"
         prev = discard_state(vid) or {}
         with open(_discard_path(vid), "w", encoding="utf-8") as f:
             json.dump({"at": now, "reason": reason or prev.get("reason", ""),
@@ -438,6 +443,7 @@ def discard(params: dict) -> dict:
 
 def restore(params: dict) -> dict:
     """{id, names?} → 보관함에서 presets/saved 로 되돌린다. names 없으면 이 영상 것 전부 + 영상 폐기 표시도 지운다.
+    하나라도 되살리면 영상 폐기 표시도 지운다(쓰는 프리셋이 생겼으니).
     같은 이름이 이미 presets/saved 에 있으면(그 사이 새로 만듦) 덮어쓰지 않고 건너뛴다."""
     from .server import _SAVED_DIR, _safe_name
     vid = params["id"]
@@ -459,8 +465,8 @@ def restore(params: dict) -> dict:
             json.dump(rec, f, ensure_ascii=False, indent=2)
         os.remove(src)
         back.append(n)
-    if not params.get("names") and os.path.exists(_discard_path(vid)):
-        os.remove(_discard_path(vid))
+    if (not params.get("names") or back) and os.path.exists(_discard_path(vid)):
+        os.remove(_discard_path(vid))                        # 프리셋을 하나라도 되살리면 영상도 다시 사용 중
     return {"restored": back, "skipped": skipped, "discarded": discard_state(vid), "presets": preset_records(vid)}
 
 
@@ -584,7 +590,7 @@ def manage_list(params: dict = None) -> dict:
             ana = {}
         strats = [s.get("name") for s in ana.get("strategies") or []]
         presets, seen = [], set()
-        for idx, recs in sorted(preset_records(vid).items(), key=lambda kv: (kv[0] == "chat", str(kv[0]))):
+        for idx, recs in sorted(preset_records(vid).items(), key=lambda kv: (kv[0] == "chat", kv[0] if kv[0] != "chat" else 0)):
             for x in recs:
                 if x["name"] in seen:
                     continue
@@ -599,14 +605,19 @@ def manage_list(params: dict = None) -> dict:
                         pass
                 ev = ev or preset_evidence(x["name"], by_preset)      # 폐기 때 박아 둔 근거가 우선(그 뒤 랭킹을 지워도 남게)
                 best = ev["runs"][0] if ev["runs"] else None
-                presets.append({**x, "from": "대화" if idx == "chat" else (strats[idx] if isinstance(idx, int) and idx < len(strats) else f"매매법 {idx}"),
+                presets.append({**x, "group": idx, "from": "대화" if idx == "chat" else (strats[idx] if isinstance(idx, int) and idx < len(strats) else f"매매법 {idx}"),
                                 "discardReason": reason, "discardedAt": at, "evidence": ev,
                                 "tested": ev["tested"], "runs": ev["runCount"],
                                 "bestReturnPct": best.get("returnPct") if best else None,
                                 "bestTimeframe": best.get("timeframe") if best else None,
                                 "beatsRandom": any(r.get("beatsRandom") for r in ev["runs"])})
+        # 영상 → 전략 → 프리셋. 프리셋이 없는 전략도 싣는다(아직 시험 안 한 전략이 보이게). 대화로 섞어 만든 건 group "chat"
+        strategies = [{"index": i, "name": st.get("name"), "direction": st.get("direction"), "timeframe": st.get("timeframe"),
+                       "counts": {k: sum(1 for r in st.get("rules") or [] if r.get("status") == k)
+                                  for k in ("ready", "buildable", "impossible")}}
+                      for i, st in enumerate(ana.get("strategies") or [])]
         rows.append({**v, "verdict": (ana.get("verdict") or {}).get("status"), "discardInfo": discard_state(vid),
-                     "presets": presets})
+                     "presets": presets, "strategies": strategies})
     return {"videos": rows}
 
 

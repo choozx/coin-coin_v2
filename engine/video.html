@@ -165,7 +165,6 @@
       <button id="qgo">검색</button>
     </div>
     <div id="sres"></div>
-    <div class="note" style="margin-top:6px"><a id="exlink" style="color:var(--mut);cursor:pointer;text-decoration:underline">🚫 제외한 채널</a> — 채널 관리 탭에서 풀 수 있어요</div>
     <div class="or">또는 링크로</div>
     <input type="text" id="url" placeholder="유튜브 링크 (youtu.be/… 또는 youtube.com/watch?v=…)">
     <label class="chk"><input type="checkbox" id="force"> 저장된 분석이 있어도 다시 분석</label>
@@ -251,7 +250,7 @@ async function discardAct(act, name) {
     if (r.skipped && r.skipped.length) alert(`같은 이름이 이미 있어서 건너뛰었어요: ${r.skipped.join(", ")}`);
     presetRecs = r.presets || {}; discardSt = r.discarded || null;
     const hit = sItems.find(x => x.id === curVid);                  // 검색 결과의 폐기 표시도 맞춘다
-    if (hit && act.endsWith("All")) { hit.discarded = discardSt; renderSearch(); }
+    if (hit && !!hit.discarded !== !!discardSt) { hit.discarded = discardSt; renderSearch(); }
     refreshDiscardUI();
     loadHist();
     if (mgr.rows.length) loadMgr();                                  // 영상 관리 탭도 맞춘다
@@ -640,14 +639,12 @@ function video_id_of(url) {
   if (!m) throw new Error("not youtube");
   return m[1];
 }
-// 제외한 채널 — 목록·풀기는 영상 관리 탭에서(검색 결과의 🚫 로 추가). 왼쪽엔 개수만
+// 제외한 채널 — 목록·풀기는 채널 관리 탭에서(검색 결과의 🚫 로 추가)
 let exList = [];
 function renderExcluded(list) {
   exList = list || [];
-  $("exlink").textContent = `🚫 제외한 채널 ${exList.length}개`;
   if (mgr.rows.length) { renderMgr(); renderChannels(); }
 }
-$("exlink").onclick = () => setTab("ch");
 const isExcluded = v => exList.some(x => (v.channelId && x.channelId === v.channelId) || (!v.channelId && x.channel === v.channel));
 // ---- 📺 채널 관리 탭 — 채널별 성적표(분석한 영상·폐기·AI 판정) + 제외/풀기 ----
 // 영상 관리 데이터(mgr.rows)를 채널로 묶는다. 같은 채널에서 기각이 쌓이면 제외, 통과가 나오면 다음 영상을 먼저 — 그 판단용.
@@ -734,7 +731,7 @@ $("url").addEventListener("keydown", e => { if (e.key === "Enter") analyze(); })
 
 // ---- 🗂 영상 관리 탭 — 분석한 영상·프리셋·시험 결과를 한 표에서, 폐기/되살리기 ----
 // 폐기 = 프리셋 파일을 presets/discarded 보관함으로(지우지 않음). 엔진 지표·기능 · AI 최적화 누적 기록 · 랭킹은 그대로.
-let mgr = { rows: [], filter: "all", q: "", open: new Set(), closed: new Set(), sel: new Set(), busy: false };
+let mgr = { rows: [], filter: "all", q: "", open: new Set(), closed: new Set(), sel: new Set(), busy: false, dopen: new Map() };
 const RND_TIP = "랭킹에 등록된 백테스트 중 하나라도 '랜덤 진입 2,000번'을 이겼나 — 한 번 돌린 결과 기준이라 느슨해요. "
   + "조합을 여러 번 시험했으면 우연히 좋은 게 나오기 쉬워서, AI 최적화의 OOS·best-of-N 판정이 진짜 기준이에요.";
 function setTab(t) {
@@ -793,6 +790,34 @@ function mgrVisible() {
   return mgr.rows.filter(v => (mgr.filter === "all" || (mgr.filter === "dis") === !!v.discardInfo)
     && (!q || `${v.title} ${v.channel}`.toLowerCase().includes(q)));
 }
+// 접기 상태 — 다시 그려도 사용자가 펼치고 접은 그대로(기본: 프리셋 있는 전략은 펼침, 폐기 프리셋의 근거는 펼침)
+const dOpen = (k, def) => mgr.dopen.has(k) ? mgr.dopen.get(k) : def;
+function presetHtml(v, p) {
+  const head = `${p.exists ? `<a href="/backtest?preset=${encodeURIComponent(p.name)}" target="_blank" rel="noopener"><b>${esc(p.name)}</b></a>` : `<b>${esc(p.name)}</b>`}`
+    + ` · ${aiSummary([p])} · <span class="sm">백테스트 ${p.runs}건${p.bestReturnPct != null ? ` · 최고 ${pct(p.bestReturnPct)}` : ""}</span> · `
+    + (p.exists ? `<span class="ok">있음</span>` : p.discarded ? `<span class="no">폐기 ${day(p.discardedAt)}</span>${p.discardReason ? ` <span class="sm">— ${esc(p.discardReason)}</span>` : ""}` : `<span class="sm">삭제됨</span>`)
+    + ` ${p.exists ? `<button class="btn-red" data-ma="discard" data-id="${v.id}" data-name="${esc(p.name)}">🗑 폐기</button>`
+        : p.discarded ? `<button class="btn-plain" data-ma="restore" data-id="${v.id}" data-name="${esc(p.name)}">↩ 되살리기</button>` : ""}`;
+  const k = `p:${v.id}:${p.name}`;
+  return `<details data-dk="${esc(k)}"${dOpen(k, !!p.discarded) ? " open" : ""} style="border-top:1px solid var(--line);padding:5px 0 5px 18px">`
+    + `<summary>${head}</summary>${evidenceHtml(p)}</details>`;
+}
+function stratHtml(v, g) {
+  const st = g.st, live = g.ps.filter(p => p.exists);
+  const c = st ? st.counts || {} : {};
+  const title = st ? `전략 ${st.index + 1}. ${esc(st.name)}` : "💬 대화로 만든 프리셋";
+  const meta = (st ? [DIR[st.direction] || esc(st.direction || ""), esc(st.timeframe || ""),
+                      `✅ ${c.ready || 0}${c.buildable ? ` · 🛠 ${c.buildable}` : ""}${c.impossible ? ` · ⛔ ${c.impossible}` : ""}`] : [])
+    .filter(Boolean).join(" · ");
+  const pcount = g.ps.length ? `프리셋 ${live.length}${g.ps.length > live.length ? ` <span class="sm">(폐기·삭제 ${g.ps.length - live.length})</span>` : ""}` : `<span class="sm">프리셋 없음</span>`;
+  const act = live.length ? `<button class="btn-red" data-ma="discardStrat" data-id="${v.id}" data-names="${esc(JSON.stringify(live.map(p => p.name)))}" title="이 묶음의 프리셋 ${live.length}개를 한 번에">🗑 ${st ? "전략" : "모두"} 폐기</button>`
+    : (st && !g.ps.length ? `<button class="btn-plain" data-mk="${esc(v.url)}" data-si="${st.index}" title="분석 탭에서 이 전략 카드로">⚙️ 분석 탭에서 만들기</button>` : "");
+  const k = `s:${v.id}:${g.key}`;
+  return `<details data-dk="${esc(k)}"${dOpen(k, g.ps.length > 0) ? " open" : ""} style="border-bottom:1px solid var(--line);padding:7px 0">`
+    + `<summary><b>${title}</b> <span class="sm">${meta}</span> · ${pcount}${g.ps.length ? ` · ${aiSummary(g.ps)}` : ""} ${act}</summary>`
+    + (g.ps.length ? g.ps.map(p => presetHtml(v, p)).join("") : `<div class="note" style="padding:4px 0 2px 18px">아직 이 전략으로 만든 프리셋이 없어요</div>`)
+    + `</details>`;
+}
 function renderMgr() {
   const rows = mgrVisible();
   const nDis = mgr.rows.filter(v => v.discardInfo).length;
@@ -830,15 +855,15 @@ function renderMgr() {
           + `${v.discardInfo.reason ? `<br>${esc(v.discardInfo.reason)}` : ""}` : `<span class="ok">사용 중</span>`}</td>`
       + `<td>${v.discardInfo ? `<button class="btn-plain" data-ma="restoreAll" data-id="${v.id}">↩ 되살리기</button>`
           : `<button class="btn-red" data-ma="discardAll" data-id="${v.id}">🗑 폐기</button>`}</td></tr>`;
-    if (open) h += `<tr class="sub"><td></td><td></td><td colspan="7">` + (ps.length ? ps.map(p => {
-        const head = `${p.exists ? `<a href="/backtest?preset=${encodeURIComponent(p.name)}" target="_blank" rel="noopener"><b>${esc(p.name)}</b></a>` : `<b>${esc(p.name)}</b>`}`
-          + ` <span class="sm">· ${esc(p.from)}</span> · ${aiSummary([p])} · <span class="sm">백테스트 ${p.runs}건${p.bestReturnPct != null ? ` · 최고 ${pct(p.bestReturnPct)}` : ""}</span> · `
-          + (p.exists ? `<span class="ok">있음</span>` : p.discarded ? `<span class="no">폐기 ${day(p.discardedAt)}</span>${p.discardReason ? ` <span class="sm">— ${esc(p.discardReason)}</span>` : ""}` : `<span class="sm">삭제됨</span>`)
-          + ` ${p.exists ? `<button class="btn-red" data-ma="discard" data-id="${v.id}" data-name="${esc(p.name)}">🗑 폐기</button>`
-              : p.discarded ? `<button class="btn-plain" data-ma="restore" data-id="${v.id}" data-name="${esc(p.name)}">↩ 되살리기</button>` : ""}`;
-        // 폐기한 프리셋은 근거를 펼쳐 두고, 아직 쓰는 프리셋은 접어 둔다
-        return `<details${p.discarded ? " open" : ""} style="border-bottom:1px solid var(--line);padding:6px 0"><summary>${head}</summary>${evidenceHtml(p)}</details>`;
-      }).join("") : `<span class="note">만든 프리셋이 없어요</span>`) + `</td></tr>`;
+    if (open) {
+      // 영상 → 전략 → 프리셋. 분석의 전략마다 한 묶음(프리셋 없는 전략도), 대화로 섞어 만든 건 '💬 대화' 묶음
+      const sts = v.strategies || [];
+      const groups = sts.map(st => ({ key: st.index, st, ps: ps.filter(p => p.group === st.index) }));
+      const rest = ps.filter(p => !sts.some(st => st.index === p.group));
+      if (rest.length) groups.push({ key: "chat", ps: rest });
+      h += `<tr class="sub"><td></td><td></td><td colspan="7">`
+        + (groups.length ? groups.map(g => stratHtml(v, g)).join("") : `<span class="note">분석에 전략이 없고 만든 프리셋도 없어요</span>`) + `</td></tr>`;
+    }
   }
   $("mgr").innerHTML = h + `</tbody></table>`;
   bindMgr();
@@ -856,34 +881,47 @@ function bindMgr() {
   box.querySelectorAll(".tt").forEach(t => t.onclick = () => { $("url").value = t.dataset.url; $("force").checked = false; analyze(); });
   box.querySelectorAll(".msel").forEach(c => c.onchange = () => { c.checked ? mgr.sel.add(c.dataset.id) : mgr.sel.delete(c.dataset.id); renderMgr(); });
   if ($("mall")) $("mall").onchange = e => { mgrVisible().forEach(v => e.target.checked ? mgr.sel.add(v.id) : mgr.sel.delete(v.id)); renderMgr(); };
-  box.querySelectorAll("[data-ma]").forEach(b => b.onclick = () => mgrAct(b.dataset.ma, [b.dataset.id], b.dataset.name));
+  box.querySelectorAll("[data-ma]").forEach(b => b.onclick = e => {
+    e.preventDefault();                                            // summary 안 버튼 — 접기/펴기로 번지지 않게
+    if (b.dataset.ma === "discardStrat") mgrAct("discard", [b.dataset.id], null, JSON.parse(b.dataset.names));
+    else mgrAct(b.dataset.ma, [b.dataset.id], b.dataset.name, b.dataset.name ? [b.dataset.name] : null);
+  });
+  box.querySelectorAll("details[data-dk]").forEach(d => d.addEventListener("toggle", () => mgr.dopen.set(d.dataset.dk, d.open)));
+  box.querySelectorAll("[data-mk]").forEach(b => b.onclick = async e => {
+    e.preventDefault();
+    $("url").value = b.dataset.mk; $("force").checked = false;
+    await analyze();
+    const el = $("mk_" + b.dataset.si);
+    if (el) el.closest(".card").scrollIntoView({ behavior: "smooth", block: "start" });
+  });
   box.querySelectorAll("[data-exc]").forEach(b => b.onclick = () => {
     if (confirm(`'${b.dataset.ch}' 채널을 앞으로 유튜브 검색에서 뺄까요? (이미 분석한 영상은 그대로)`)) setExcluded(b.dataset.exc, b.dataset.ch, true);
   });
   if ($("mbd")) $("mbd").onclick = () => mgrAct("discardAll", mgrVisible().filter(v => mgr.sel.has(v.id) && !v.discardInfo).map(v => v.id));
   if ($("mbr")) $("mbr").onclick = () => mgrAct("restoreAll", mgrVisible().filter(v => mgr.sel.has(v.id) && v.discardInfo).map(v => v.id));
 }
-async function mgrAct(act, ids, name) {
+async function mgrAct(act, ids, name, names) {
   if (mgr.busy || !ids.length) return;
   let reason = "";
   if (act.startsWith("discard")) {
-    const what = name ? `'${name}'` : ids.length > 1 ? `영상 ${ids.length}개` : "이 영상";
-    const n = name ? 1 : ids.reduce((a, id) => a + (mgr.rows.find(v => v.id === id).presets || []).filter(p => p.exists).length, 0);
-    reason = prompt(`${what}을(를) 폐기할까요? 프리셋 ${n}개를 보관함으로 옮겨요.\n\n${DISCARD_NOTE}\n\n이유(선택):`, "AI 최적화 판정 기각");
+    const what = name ? `'${name}'` : names ? `이 전략의 프리셋` : ids.length > 1 ? `영상 ${ids.length}개` : "이 영상";
+    const n = names ? names.length : ids.reduce((a, id) => a + (mgr.rows.find(v => v.id === id).presets || []).filter(p => p.exists).length, 0);
+    reason = prompt(`${what}을(를) 폐기할까요? 프리셋 ${n}개를 보관함으로 옮겨요. 영상에 남은 프리셋이 없으면 영상도 폐기돼요.`
+      + `\n\n${DISCARD_NOTE}\n\n이유(선택):`, "AI 최적화 판정 기각");
     if (reason === null) return;
   } else if (!name && !confirm(`${ids.length > 1 ? `영상 ${ids.length}개` : "이 영상"}을(를) 되살릴까요? 보관함의 프리셋을 presets/saved 로 되돌려요.`)) return;
   mgr.busy = true;
   const errs = [], skipped = [];
   for (const id of ids) {
     try {
-      const r = act === "discard" ? await post("/api/video_discard", { id, names: [name], reason })
+      const r = act === "discard" ? await post("/api/video_discard", { id, names, reason })
         : act === "discardAll" ? await post("/api/video_discard", { id, reason, video: true })
-        : act === "restore" ? await post("/api/video_restore", { id, names: [name] })
+        : act === "restore" ? await post("/api/video_restore", { id, names })
         : await post("/api/video_restore", { id });
       skipped.push(...(r.skipped || []));
       if (id === curVid) { presetRecs = r.presets || {}; discardSt = r.discarded || null; refreshDiscardUI(); }   // 분석 탭에 열린 영상도 맞춘다
-      const hit = sItems.find(x => x.id === id);
-      if (hit && act.endsWith("All")) { hit.discarded = r.discarded || null; renderSearch(); }
+      const hit = sItems.find(x => x.id === id);                  // 프리셋 폐기로 영상이 같이 폐기·복구될 수도 있다
+      if (hit && !!hit.discarded !== !!r.discarded) { hit.discarded = r.discarded || null; renderSearch(); }
     } catch (e) { errs.push(`${(mgr.rows.find(v => v.id === id) || {}).title || id}: ${e.message}`); }
   }
   mgr.busy = false;

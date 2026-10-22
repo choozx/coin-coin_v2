@@ -131,3 +131,28 @@ def test_verdict_pass_rule(tmp_path, monkeypatch):
     assert not ai_optimize.record_verdict("p", {"top": [mk(-1, True), mk(5, False)]}, f)["pass"]   # 음수 OOS 는 랜덤을 넘어도 기각
     assert ai_optimize.record_verdict("p", {"top": [mk(-1, False), mk(15, True)]}, f)["pass"]
     assert [r["pass"] for r in ai_optimize.verdicts("p")] == [False, True] and ai_optimize.verdicts("q") == []
+
+
+def test_last_preset_discard_discards_video_and_restore_revives(env):
+    root, saved, disc = env
+    va.discard({"id": VID, "names": ["🎬 A"], "reason": "기각"})
+    assert va.discard_state(VID) is None                            # B 가 남아 있다
+    r = va.discard({"id": VID, "names": ["🎬 B"]})
+    assert r["discarded"] and r["discarded"]["reason"] == "프리셋 전부 폐기"   # 마지막 프리셋까지 폐기 → 영상도
+    assert sorted(r["discarded"]["presets"]) == ["🎬 B"]
+    back = va.restore({"id": VID, "names": ["🎬 A"]})
+    assert back["restored"] == ["🎬 A"] and back["discarded"] is None       # 하나 되살리면 영상도 사용 중
+
+
+def test_manage_list_groups_by_strategy(env):
+    root, saved, disc = env
+    d = root / "data" / "video" / VID
+    (d / "meta.json").write_text(json.dumps({"title": "영상", "url": "u", "channel": "c"}), encoding="utf-8")
+    (d / "analysis.json").write_text(json.dumps({"strategies": [
+        {"name": "전략1", "direction": "long", "timeframe": "15m",
+         "rules": [{"status": "ready"}, {"status": "ready"}, {"status": "impossible"}]},
+        {"name": "전략2", "direction": "both", "rules": [{"status": "buildable"}]}]}), encoding="utf-8")
+    v = va.manage_list()["videos"][0]
+    assert [s["name"] for s in v["strategies"]] == ["전략1", "전략2"]          # 프리셋 없는 전략도 나온다
+    assert v["strategies"][0]["counts"] == {"ready": 2, "buildable": 0, "impossible": 1}
+    assert {p["name"]: p["group"] for p in v["presets"]} == {"🎬 A": 0, "🎬 B": "chat"}
