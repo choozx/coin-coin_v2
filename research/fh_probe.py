@@ -37,7 +37,8 @@ from datetime import datetime, timezone
 
 MAINNET = "--mainnet" in sys.argv
 REST = "https://fapi.binance.com" if MAINNET else "https://testnet.binancefuture.com"
-WS = "wss://fstream.binance.com/ws/" if MAINNET else "wss://stream.binancefuture.com/ws/"
+# 2026-03 웹소켓 주소 분리 이후 계정 이벤트는 /private 경로로만 온다(/ws/ 는 접속만 되고 이벤트 0개)
+WS = "wss://fstream.binance.com/private/ws/" if MAINNET else "wss://stream.binancefuture.com/ws/"
 NET = "mainnet" if MAINNET else "testnet"
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, "data", "fh_probe")
@@ -177,7 +178,13 @@ def _order(api, dual, symbol, side, qty, close=False, pos_side=None):
         params["positionSide"] = pos_side
     elif close:
         params["reduceOnly"] = "true"
-    return api.call("POST", "/fapi/v1/order", params, signed=True)
+    r = api.call("POST", "/fapi/v1/order", params, signed=True)
+    # 응답에 avgPrice·updateTime 이 빠져 오는 경우가 있다 → 주문 조회로 채운다(전송 시각 측정엔 영향 없음)
+    if r.get("orderId") and (not float(r.get("avgPrice") or 0) or not r.get("updateTime")):
+        q = api.call("GET", "/fapi/v1/order", dict(symbol=symbol, orderId=r["orderId"]), signed=True)
+        r = {**q, **{k: v for k, v in r.items() if v not in (None, "", "0", "0.0", "0.00", 0)}}
+        r["avgPrice"], r["updateTime"] = q.get("avgPrice"), q.get("updateTime")
+    return r
 
 
 def _listen(api, lk, until, events, errs):
