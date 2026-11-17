@@ -48,6 +48,7 @@ for _a in sys.argv:                                     # --delays=100,500,1000 
     if _a.startswith("--delays="):
         DELAYS = tuple(int(x) for x in _a.split("=", 1)[1].split(","))
 ENTRY_LEAD = 30_000
+LEVERAGE = 5                                            # 진입 전 심볼별로 min(이 값, 심볼 최대) 로 맞춘다
 MAX_NOTIONAL = 20.0 if MAINNET else 100.0               # 실서버는 포지션당 20 USDT 상한
 MIN_RATE = 0.0001 if MAINNET else 0.00001                # |펀딩| 큰 순으로 고르되, 심볼 수(지연 7종)를 채우려 0.01% 까지 허용
 MIN_QVOL = 10_000_000 if MAINNET else 0
@@ -273,6 +274,22 @@ def main():
     busy = [p["symbol"] for p in picks if abs(float(pos.get(p["symbol"], {}).get("positionAmt", 0))) > 0]
     if busy:
         sys.exit(f"이미 포지션이 있는 심볼이 있어요: {busy} — 중단")
+    # 심볼별 레버리지가 계정에 높게 남아 있으면(예: 50배인데 심볼 최대 10배) 최대 포지션이 0 → -2027 로 거절된다.
+    # 진입 전에 min(LEVERAGE, 심볼 최대) 로 맞추고, 안 되는 심볼은 뺀다.
+    ok = []
+    for p in picks:
+        try:
+            br = api.call("GET", "/fapi/v1/leverageBracket", dict(symbol=p["symbol"]), signed=True)[0]["brackets"]
+            lev = min(LEVERAGE, max(int(b["initialLeverage"]) for b in br))
+            api.call("POST", "/fapi/v1/leverage", dict(symbol=p["symbol"], leverage=lev), signed=True)
+            p["leverage"] = lev
+            ok.append(p)
+        except Exception as e:      # noqa: BLE001
+            print(f"   ⚠ {p['symbol']} 레버리지 설정 실패 — 제외: {repr(e)[:120]}")
+    picks = ok
+    if not picks:
+        sys.exit("레버리지를 맞출 수 있는 심볼이 없어요 — 중단")
+    print("레버리지 " + ", ".join(f"{p['symbol']} {p['leverage']}x" for p in picks))
     wait = T - ENTRY_LEAD - api.now()
     print(f"T−30초까지 {wait/1000:.0f}초 대기… (헤지 모드={dual})", flush=True)
 
@@ -283,10 +300,39 @@ def main():
     th.start()
     time.sleep(max(0, (T - ENTRY_LEAD - api.now()) / 1000))
     api.sync(5)
+    try:
+        _run(api, dual, T, picks, events, ws_err)
+    except BaseException:
+        # 어떤 이유로든(예외·Ctrl+C) 중간에 멈추면 연 포지션을 남기지 않는다
+        print("⚠ 중단 — 이번 심볼의 남은 포지션을 정리합니다", flush=True)
+        _flatten(api, dual, [p["symbol"] for p in picks])
+        raise
+
+
+def _flatten(api, dual, symbols):
+    pos = _positions(api)
+    left = []
+    for s in symbols:
+        x = pos.get(s, {})
+        amt = float(x.get("positionAmt", 0))
+        if abs(amt) > 0:
+            left.append(s)
+            _order(api, dual, s, "SELL" if amt > 0 else "BUY", abs(amt), close=True,
+                   pos_side=x.get("positionSide", "BOTH"))
+    return left
+
+
+def _run(api, dual, T, picks, events, ws_err):
     for p in picks:
-        r = _order(api, dual, p["symbol"], p["side"], p["qty"], pos_side="SHORT" if p["side"] == "SELL" else "LONG")
-        p["entry"] = dict(updateTime=(r.get("updateTime") or 0) - T, avgPrice=r.get("avgPrice"), status=r.get("status"))
-    print(f"진입 완료 {len(picks)}개 · 정산까지 {(T - api.now())/1000:.1f}초", flush=True)
+        try:
+            r = _order(api, dual, p["symbol"], p["side"], p["qty"], pos_side="SHORT" if p["side"] == "SELL" else "LONG")
+            p["entry"] = dict(updateTime=(r.get("updateTime") or 0) - T, avgPrice=r.get("avgPrice"),
+                              status=r.get("status"))
+        except Exception as e:      # noqa: BLE001  — 한 심볼이 거절돼도 나머지는 계속(청산 대상에서만 뺀다)
+            p["entry"] = dict(error=repr(e))
+            print(f"   ⚠ {p['symbol']} 진입 실패: {repr(e)[:120]}", flush=True)
+    live = [p for p in picks if "error" not in p["entry"]]
+    print(f"진입 완료 {len(live)}/{len(picks)}개 · 정산까지 {(T - api.now())/1000:.1f}초", flush=True)
     api.sync(5)
 
     def close(p):
@@ -303,7 +349,7 @@ def main():
                              status=r.get("status"), recv=api.now() - T)
         except Exception as e:      # noqa: BLE001
             p["exit"] = dict(sent=sent - T, error=repr(e))
-    ths = [threading.Thread(target=close, args=(p,)) for p in picks]
+    ths = [threading.Thread(target=close, args=(p,)) for p in live]
     for t in ths:
         t.start()
     for t in ths:
@@ -312,15 +358,7 @@ def main():
     time.sleep(90)
     inc = api.call("GET", "/fapi/v1/income", dict(incomeType="FUNDING_FEE", startTime=T - 300_000,
                                                   endTime=T + 300_000, limit=1000), signed=True)
-    pos = _positions(api)
-    left = []
-    for p in picks:                                     # 남은 포지션 정리(안전)
-        x = pos.get(p["symbol"], {})
-        amt = float(x.get("positionAmt", 0))
-        if abs(amt) > 0:
-            left.append(p["symbol"])
-            _order(api, dual, p["symbol"], "SELL" if amt > 0 else "BUY", abs(amt), close=True,
-                   pos_side=x.get("positionSide", "BOTH"))
+    left = _flatten(api, dual, [p["symbol"] for p in picks])      # 남은 포지션 정리(안전)
 
     fee_ev = []
     for rcv, e in events:
@@ -343,7 +381,8 @@ def main():
         g = got.get(p["symbol"])
         print(f"   {p['symbol']:13} {p['interval']:>2}h {p['delay']:+7d} {ex.get('sent', float('nan')):+7.0f} "
               f"{ex.get('updateTime', float('nan')):+7.0f} {(g[0]['income'] if g else '없음'):>14} "
-              f"{(str(g[0]['time']) + 'ms') if g else '':>9}" + (f"  ⚠ {ex['error'][:60]}" if ex.get("error") else ""))
+              f"{(str(g[0]['time']) + 'ms') if g else '':>9}" + (f"  ⚠ {(ex.get('error') or p['entry'].get('error'))[:60]}"
+                 if ex.get("error") or p["entry"].get("error") else ""))
     print(f"   FUNDING_FEE 이벤트 {len(fee_ev)}개: " +
           ", ".join(f"{x['symbol']} 처리 T{x['T']:+.0f}ms·도착 T{x['recv']:+.0f}ms" for x in fee_ev[:10]))
     if ws_err:
