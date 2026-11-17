@@ -234,7 +234,15 @@ def main():
     print(f"[{NET}] 서버 시계 오프셋 {off:+.1f}ms · 왕복 {rtt:.1f}ms")
     dual = None
     if key:
-        dual = api.call("GET", "/fapi/v1/positionSide/dual", signed=True).get("dualSidePosition", False)
+        try:
+            dual = api.call("GET", "/fapi/v1/positionSide/dual", signed=True).get("dualSidePosition", False)
+            bal = [b for b in api.call("GET", "/fapi/v2/balance", signed=True) if float(b.get("balance", 0)) > 0]
+            print(f"키: ✅ 확인됨 · 헤지 모드={dual} · 선물 잔고 "
+                  + (", ".join(f"{b['asset']} {float(b['balance']):.2f}" for b in bal) or "없음(입금 전)"))
+        except RuntimeError as e:
+            sys.exit(f"키: ❌ {e}\n   -2015 = 키·IP 제한·선물 권한 확인 · -1021 = 컴퓨터 시계 동기화")
+    else:
+        print("키: 없음 — 공개 API 로 계획만 봐요(.env 의 키가 안 읽혔어요)")
     if "--smoke" in sys.argv:
         return smoke(api, dual)
 
