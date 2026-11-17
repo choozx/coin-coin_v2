@@ -240,7 +240,10 @@ def main():
             print(f"키: ✅ 확인됨 · 헤지 모드={dual} · 선물 잔고 "
                   + (", ".join(f"{b['asset']} {float(b['balance']):.2f}" for b in bal) or "없음(입금 전)"))
         except RuntimeError as e:
-            sys.exit(f"키: ❌ {e}\n   -2015 = 키·IP 제한·선물 권한 확인 · -1021 = 컴퓨터 시계 동기화")
+            msg = f"키: ❌ {e}\n   -2015 = 키·IP 제한·선물 권한 확인 · -1021 = 컴퓨터 시계 동기화"
+            if "--plan" not in sys.argv:
+                sys.exit(msg)
+            print(msg + "\n   (--plan 은 공개 API 만 쓰므로 계속 — 주문은 키가 허용된 서버에서)")
     else:
         print("키: 없음 — 공개 API 로 계획만 봐요(.env 의 키가 안 읽혔어요)")
     if "--smoke" in sys.argv:
