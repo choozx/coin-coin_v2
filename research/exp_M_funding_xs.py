@@ -97,10 +97,11 @@ def universe_mask(V, top_n):
     return rank < top_n
 
 
-def simulate(P, F, lb, hold, k, taker=TAKER, U=None):
+def simulate(P, F, lb, hold, k, taker=TAKER, U=None, log=None):
     """전략: 최근 lb 주기 평균 펀딩 하위 k 롱 / 상위 k 숏, hold 주기 보유.
 
     수익 = 가격손익(롱-숏) + 펀딩수취(숏의 펀딩 - 롱의 펀딩, 보유기간 합) - 거래비용.
+    log 에 리스트를 주면 리밸런스마다 (t, 자본, 가격, 펀딩, 회전, 롱 인덱스, 숏 인덱스) 를 붙인다(결과 불변).
     """
     S, N = P.shape
     eq, turns, fsum, psum = 1.0, [], 0.0, 0.0
@@ -110,6 +111,13 @@ def simulate(P, F, lb, hold, k, taker=TAKER, U=None):
         if U is not None:                                    # 유니버스 밖은 순위에서 뺀다
             sig = np.where(U[:, t], sig, np.nan)
             cand = int(U[:, t].sum())
+            if cand < 2 * k:                                 # 후보가 모자라면(필터가 거의 다 뺌) 그 기간은 쉰다
+                if prevL is not None:
+                    eq = max(eq * (1.0 - 2.0 * taker), 1e-9)  # 전부 청산
+                prevL = prevS = None
+                if log is not None:
+                    log.append((t, eq, 0.0, 0.0, 0.0, np.array([], int), np.array([], int)))
+                continue
             order = np.argsort(sig)[:cand]                   # NaN 은 argsort 끝으로 간다
         else:
             order = np.argsort(sig)
@@ -125,6 +133,8 @@ def simulate(P, F, lb, hold, k, taker=TAKER, U=None):
             len(np.intersect1d(long_i, prevL)) + len(np.intersect1d(short_i, prevS))) / (2 * k)
         turns.append(turn); fsum += fund; psum += price
         eq = max(eq * (1.0 + price + fund - 4.0 * turn * taker), 1e-9)
+        if log is not None:
+            log.append((t, eq, price, fund, turn, long_i, short_i))
         prevL, prevS = long_i, short_i
     return ((eq - 1.0) * 100.0, float(np.mean(turns)) if turns else 0.0,
             fsum * 100.0, psum * 100.0)
@@ -142,6 +152,11 @@ def null_dist(P, F, lb, hold, k, taker=TAKER, samples=SAMPLES, seed=0, U=None):
     rows = np.arange(samples)[:, None]
     prevL = prevS = None
     for t in range(lb, N - hold - 1, hold):
+        if U is not None and int(U[:, t].sum()) < 2 * k:     # 전략과 같은 규칙 — 후보 부족이면 쉰다
+            if prevL is not None:
+                eq = np.maximum(eq * (1.0 - 2.0 * taker), 1e-9)
+            prevL = prevS = None
+            continue
         r = rng.random((samples, S))
         if U is not None:                                    # 같은 유니버스 안에서 무작위
             r = np.where(U[:, t][None, :], r, 2.0)
