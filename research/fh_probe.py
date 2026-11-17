@@ -368,8 +368,15 @@ def _run(api, dual, T, picks, events, ws_err):
     got = {}
     for x in inc:
         got.setdefault(x["symbol"], []).append(dict(income=x["income"], time=int(x["time"]) - T))
-    os.makedirs(OUT, exist_ok=True)
-    path = os.path.join(OUT, f"{NET}_{datetime.fromtimestamp(T/1000, timezone.utc):%Y%m%d_%H%M}.json")
+    out = OUT
+    try:
+        os.makedirs(out, exist_ok=True)
+        if not os.access(out, os.W_OK):
+            raise PermissionError(out)
+    except OSError:     # 서버의 data/ 는 도커 볼륨(root 소유)이라 ec2-user 가 못 쓴다 → 홈으로
+        out = os.path.join(os.path.expanduser("~"), "fh_probe")
+        os.makedirs(out, exist_ok=True)
+    path = os.path.join(out, f"{NET}_{datetime.fromtimestamp(T/1000, timezone.utc):%Y%m%d_%H%M}.json")
     json.dump(dict(net=NET, T=T, offset=api.offset, rtt=api.rtt, dual=dual, picks=picks, income=got,
                    funding_events=fee_ev, all_events=[(r - T, e) for r, e in events], ws_error=ws_err,
                    leftover_closed=left), open(path, "w"), ensure_ascii=False, indent=1)
