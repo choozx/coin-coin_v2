@@ -182,9 +182,16 @@ def _order(api, dual, symbol, side, qty, close=False, pos_side=None):
     r = api.call("POST", "/fapi/v1/order", params, signed=True)
     # 응답에 avgPrice·updateTime 이 빠져 오는 경우가 있다 → 주문 조회로 채운다(전송 시각 측정엔 영향 없음)
     if r.get("orderId") and (not float(r.get("avgPrice") or 0) or not r.get("updateTime")):
-        q = api.call("GET", "/fapi/v1/order", dict(symbol=symbol, orderId=r["orderId"]), signed=True)
-        r = {**q, **{k: v for k, v in r.items() if v not in (None, "", "0", "0.0", "0.00", 0)}}
-        r["avgPrice"], r["updateTime"] = q.get("avgPrice"), q.get("updateTime")
+        # 정산 직후엔 방금 낸 주문이 조회에 안 잡히기도 한다(-2013) → 몇 번 기다려 보고, 끝내 없으면 응답 그대로
+        for i in range(5):
+            try:
+                q = api.call("GET", "/fapi/v1/order", dict(symbol=symbol, orderId=r["orderId"]), signed=True)
+            except Exception:       # noqa: BLE001
+                time.sleep(0.3 * (i + 1))
+                continue
+            r = {**q, **{k: v for k, v in r.items() if v not in (None, "", "0", "0.0", "0.00", 0)}}
+            r["avgPrice"], r["updateTime"] = q.get("avgPrice"), q.get("updateTime")
+            break
     return r
 
 
@@ -326,7 +333,7 @@ def _run(api, dual, T, picks, events, ws_err):
     for p in picks:
         try:
             r = _order(api, dual, p["symbol"], p["side"], p["qty"], pos_side="SHORT" if p["side"] == "SELL" else "LONG")
-            p["entry"] = dict(updateTime=(r.get("updateTime") or 0) - T, avgPrice=r.get("avgPrice"),
+            p["entry"] = dict(updateTime=(r["updateTime"] - T if r.get("updateTime") else None), avgPrice=r.get("avgPrice"),
                               status=r.get("status"))
         except Exception as e:      # noqa: BLE001  — 한 심볼이 거절돼도 나머지는 계속(청산 대상에서만 뺀다)
             p["entry"] = dict(error=repr(e))
@@ -342,13 +349,20 @@ def _run(api, dual, T, picks, events, ws_err):
         while api.now() < target:
             pass
         sent = api.now()
-        try:
-            r = _order(api, dual, p["symbol"], "BUY" if p["side"] == "SELL" else "SELL", p["qty"], close=True,
-                       pos_side="SHORT" if p["side"] == "SELL" else "LONG")
-            p["exit"] = dict(sent=sent - T, updateTime=(r.get("updateTime") or 0) - T, avgPrice=r.get("avgPrice"),
-                             status=r.get("status"), recv=api.now() - T)
-        except Exception as e:      # noqa: BLE001
-            p["exit"] = dict(sent=sent - T, error=repr(e))
+        errs = []
+        for _ in range(6):          # 정산 직후 거래소 지연으로 -1021(recvWindow 초과) 등이 난다 → 바로 다시 보낸다
+            try:
+                r = _order(api, dual, p["symbol"], "BUY" if p["side"] == "SELL" else "SELL", p["qty"], close=True,
+                           pos_side="SHORT" if p["side"] == "SELL" else "LONG")
+                p["exit"] = dict(sent=sent - T, updateTime=(r["updateTime"] - T if r.get("updateTime") else None), avgPrice=r.get("avgPrice"),
+                                 status=r.get("status"), recv=api.now() - T, retries=errs)
+                return
+            except Exception as e:  # noqa: BLE001
+                errs.append((round(api.now() - T), repr(e)[:160]))
+                if "-2022" in repr(e) or "ReduceOnly" in repr(e):     # 이미 청산됨(reduceOnly 거절) → 그만
+                    break
+                time.sleep(0.1)
+        p["exit"] = dict(sent=sent - T, error=errs[-1][1], retries=errs)
     ths = [threading.Thread(target=close, args=(p,)) for p in live]
     for t in ths:
         t.start()
@@ -387,7 +401,7 @@ def _run(api, dual, T, picks, events, ws_err):
         ex = p.get("exit", {})
         g = got.get(p["symbol"])
         print(f"   {p['symbol']:13} {p['interval']:>2}h {p['delay']:+7d} {ex.get('sent', float('nan')):+7.0f} "
-              f"{ex.get('updateTime', float('nan')):+7.0f} {(g[0]['income'] if g else '없음'):>14} "
+              f"{(ex.get('updateTime') if ex.get('updateTime') is not None else float('nan')):+7.0f} {(g[0]['income'] if g else '없음'):>14} "
               f"{(str(g[0]['time']) + 'ms') if g else '':>9}" + (f"  ⚠ {(ex.get('error') or p['entry'].get('error'))[:60]}"
                  if ex.get("error") or p["entry"].get("error") else ""))
     print(f"   FUNDING_FEE 이벤트 {len(fee_ev)}개: " +
