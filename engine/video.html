@@ -583,7 +583,7 @@ async function analyze() {
   }
 }
 // ---- 유튜브 검색: 결과에서 고르면 그 영상을 분석. 제외한 채널(채널 ID 기준)은 서버가 거른다 ----
-let sItems = [], sHidden = 0;
+let sItems = [], sHidden = 0, sSeen = 0;
 const fmtLen = s => { if (!s) return ""; s = Math.round(s); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = String(s % 60).padStart(2, "0");
                       return h ? `${h}:${String(m).padStart(2, "0")}:${x}` : `${m}:${x}`; };
 const fmtViews = v => v == null ? "" : v >= 1e8 ? `${(v / 1e8).toFixed(1)}억회` : v >= 1e4 ? `${(v / 1e4).toFixed(v >= 1e5 ? 0 : 1)}만회` : `${v}회`;
@@ -603,7 +603,7 @@ async function ytSearch() {
     const r = await postJ("/api/video_search", { q, sort: sort === "date" ? "date" : "relevance" });
     sItems = r.items;
     if (sort === "views") sItems.sort((a, b) => (b.views || 0) - (a.views || 0));    // 관련도 상위 50개 안에서
-    sHidden = r.hidden;
+    sHidden = r.hidden; sSeen = r.seen || 0;
     renderSearch();
   } catch (e) { $("sres").innerHTML = `<div class="err">${esc(e.message)}</div>`; }
   finally { btn.disabled = false; }
@@ -620,6 +620,7 @@ function renderSearch() {
     + `<a href="${esc(it.url)}" target="_blank" rel="noopener" class="note" style="align-self:center">유튜브</a>`
     + `${it.channelId ? `<button class="sx" data-i="${i}" title="이 채널을 앞으로 검색에서 빼요">🚫 채널 제외</button>` : ""}</div></div>`).join("")
     : `<div class="note">결과가 없어요</div>`)
+    + (sSeen ? `<div class="note">이미 분석했거나 폐기한 영상 ${sSeen}개를 뺐어요(왼쪽 목록에 있어요)</div>` : "")
     + (sHidden ? `<div class="note">제외한 채널이라 ${sHidden}개를 뺐어요</div>` : "");
   document.querySelectorAll("#sres .sa").forEach(b => b.onclick = () => {
     const it = sItems[+b.dataset.i];

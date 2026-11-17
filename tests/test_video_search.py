@@ -1,4 +1,4 @@
-"""영상 분석 화면의 유튜브 검색 — 제외 채널(채널 ID 기준) 거르기, 분석함 표시, 채널·재생목록 결과 건너뛰기. yt-dlp 는 가짜."""
+"""영상 분석 화면의 유튜브 검색 — 제외 채널(채널 ID 기준) 거르기, 분석·폐기한 영상 빼기, 채널·재생목록 결과 건너뛰기. yt-dlp 는 가짜."""
 from __future__ import annotations
 
 import json
@@ -34,15 +34,17 @@ def env(tmp_path, monkeypatch):
     return {"calls": calls, "dir": tmp_path}
 
 
-def test_search_filters_and_marks(env):
+def test_search_filters_and_hides_seen(env):
+    r = va.search({"q": "비트코인"})
+    assert [x["id"] for x in r["items"]] == ["AAAAAAAAAAA", "BBBBBBBBBBB"] and r["seen"] == 0   # 채널 결과는 빠짐
     (env["dir"] / "AAAAAAAAAAA").mkdir()
     (env["dir"] / "AAAAAAAAAAA" / "analysis.json").write_text("{}")
     r = va.search({"q": "비트코인"})
-    assert [x["id"] for x in r["items"]] == ["AAAAAAAAAAA", "BBBBBBBBBBB"]      # 채널 결과는 빠짐
-    assert r["items"][0]["analyzed"] and not r["items"][1]["analyzed"]
-    assert r["items"][0]["discarded"] is None
-    (env["dir"] / "AAAAAAAAAAA" / "discarded.json").write_text('{"at": 1, "reason": "기각", "presets": []}')
-    assert va.search({"q": "비트코인"})["items"][0]["discarded"]["reason"] == "기각"     # 폐기한 영상은 검색에서도 표시
+    assert [x["id"] for x in r["items"]] == ["BBBBBBBBBBB"] and r["seen"] == 1               # 이미 분석한 영상은 뺌
+    (env["dir"] / "BBBBBBBBBBB").mkdir()
+    (env["dir"] / "BBBBBBBBBBB" / "discarded.json").write_text('{"at": 1, "reason": "기각", "presets": []}')
+    r = va.search({"q": "비트코인"})
+    assert r["items"] == [] and r["seen"] == 2                                                # 폐기한 영상도 뺌
     assert env["calls"][0][-1] == f"ytsearch{va.SEARCH_N}:비트코인"
     va.search({"q": "x", "sort": "date"})
     assert env["calls"][-1][-1].startswith("ytsearchdate")

@@ -142,20 +142,10 @@ def _build_preset(p: dict) -> dict:
     tp = _price_target(p, "tp")
     if tp:
         exit_block["takeProfit"] = tp
-    # SuperTrend 전환 청산 — 익절/손절 슬롯 또는 지표청산 체크박스 (같은 트리거, 사유 라벨만 다름)
-    if p.get("tpType") == "supertrend":
-        exit_block["supertrendExit"] = {
-            "period": int(p.get("tpStPeriod", 10) or 10),
-            "multiplier": float(p.get("tpStMult", 3.0) or 3.0),
-            "as": "takeProfit",
-        }
-    elif p.get("slType") == "supertrend":
-        exit_block["supertrendExit"] = {
-            "period": int(p.get("slStPeriod", 10) or 10),
-            "multiplier": float(p.get("slStMult", 3.0) or 3.0),
-            "as": "stopLoss",
-        }
-    elif p.get("exitStEnabled"):
+    # SuperTrend 전환 청산 — '지표/시간 청산'의 체크박스 하나. 예전 손절·익절 칸의 'supertrend' 는 화면이 불러올 때 이걸로 바꾼다
+    if "supertrend" in (p.get("tpType"), p.get("slType")):
+        raise ValueError("손절·익절 칸의 SuperTrend 전환은 없어졌어요 — '지표/시간 청산'의 SuperTrend 체크박스를 써 주세요")
+    if p.get("exitStEnabled"):
         exit_block["supertrendExit"] = {
             "period": int(p.get("exitStPeriod", 10) or 10),
             "multiplier": float(p.get("exitStMult", 3.0) or 3.0),
@@ -214,6 +204,10 @@ def _build_preset(p: dict) -> dict:
     }
     if float(p.get("minLiqBuffer", 0)) > 0:
         sizing["minLiquidationBuffer"] = float(p["minLiqBuffer"])
+    if p.get("siEnabled") and int(p.get("siCount", 0) or 0) > 0 and float(p.get("siValue", 0) or 0) > 0:   # 분할 매수
+        sizing["scaleIn"] = {"count": int(p["siCount"]),
+                             "spacing": {"type": p.get("siType") or "percent", "value": float(p["siValue"])},
+                             "multiplier": float(p.get("siMult", 1) or 1)}
     if p.get("levTierEnabled") and p.get("levTiers"):       # 잔고별 레버리지 티어
         tiers = []
         for t in p["levTiers"]:
@@ -325,7 +319,7 @@ _IND_NAME = {
     "TAKER_DELTA_RATIO": "테이커델타비율", "TAKER_DELTA": "테이커델타", "CVD_EMA": "CVD EMA",
     "QQE_MOD": "QQE MOD", "QQE_RSI": "QQE RSI", "QQE_LINE": "QQE 라인", "HAWKEYE": "HawkEye",
     "RSI_DIV": "RSI 다이버전스", "ATR_RANK": "변동성 순위", "MA_ANGLE": "이평 각도", "MA_CROSSES": "이평 교차 횟수",
-    "MA_DIST": "이평 괴리(ATR)", "RETRACE_UP": "반등 되돌림%", "RETRACE_DN": "눌림 되돌림%",
+    "RETRACE_UP": "반등 되돌림%", "RETRACE_DN": "눌림 되돌림%",
     "TRENDLINE_HIGH": "고점 추세선", "TRENDLINE_LOW": "저점 추세선",
 }
 

@@ -241,7 +241,6 @@
           <option value="atrMultiple">ATR 배수</option>
           <option value="swing">스윙 고저점 (롱=전저점 / 숏=전고점)</option>
           <option value="indicator">지표 값 (진입 때 EMA·SMA 값 아래/위)</option>
-          <option value="supertrend">SuperTrend 전환 (추세이탈 손절)</option>
         </select></div>
       <div class="row" data-when="sl-ind"><label>지표</label>
         <select id="slInd"><option value="EMA" selected>EMA</option><option value="SMA">SMA</option></select></div>
@@ -253,10 +252,6 @@
         <input type="number" id="slLookback" value="20" min="1"></div>
       <div class="row" data-when="sl-buf"><label>버퍼 %</label>
         <input type="number" id="slBuffer" value="0.05" step="0.05" min="0"></div>
-      <div class="row" data-when="sl-st"><label>SuperTrend ATR기간</label>
-        <input type="number" id="slStPeriod" value="10" min="1"></div>
-      <div class="row" data-when="sl-st"><label>SuperTrend 배수</label>
-        <input type="number" id="slStMult" value="3" step="0.5" min="0.1"></div>
       <div class="note" id="slNote" style="color:var(--mut)"></div>
     </div>
 
@@ -270,7 +265,6 @@
           <option value="riskReward">손익비 (손절 거리×n)</option>
           <option value="swing">스윙 고저점 (롱=전고점 / 숏=전저점)</option>
           <option value="retrace">직전 파동 되돌림 % (롱=하락폭의 n% 반등)</option>
-          <option value="supertrend">SuperTrend 전환 (추세이탈 익절)</option>
         </select></div>
       <div class="row" data-when="tp-value"><label id="tpValueLabel">익절 % (가격)</label>
         <input type="number" id="tpValue" value="3" step="0.1" min="0"></div>
@@ -279,10 +273,6 @@
         <input type="number" id="tpLookback" value="20" min="1"></div>
       <div class="row" data-when="tp-swing"><label>버퍼 %</label>
         <input type="number" id="tpBuffer" value="0.05" step="0.05" min="0"></div>
-      <div class="row" data-when="tp-st"><label>SuperTrend ATR기간</label>
-        <input type="number" id="tpStPeriod" value="10" min="1"></div>
-      <div class="row" data-when="tp-st"><label>SuperTrend 배수</label>
-        <input type="number" id="tpStMult" value="3" step="0.5" min="0.1"></div>
     </div>
 
     <div class="group">
@@ -350,6 +340,17 @@
         <input type="number" id="sizeValue" value="10" min="0.1" step="0.5"></div>
       <div class="note" id="sizeNote"></div>
       <div class="row"><label>청산 안전버퍼 %</label><input type="number" id="minLiqBuffer" value="5" step="1" min="0"></div>
+      <div class="row"><label><input type="checkbox" id="siEnabled"> 분할 매수 (가격 간격)</label></div>
+      <div class="row" data-when="si"><label class="hint">추가 회차 (첫 진입 제외)</label>
+        <input type="number" id="siCount" value="2" min="1" max="10"></div>
+      <div class="row" data-when="si"><label class="hint">간격</label>
+        <select id="siType"><option value="percent" selected>첫 진입가의 %</option><option value="atrMultiple">ATR(14) 배수</option></select></div>
+      <div class="row" data-when="si"><label class="hint">간격 값</label>
+        <input type="number" id="siValue" value="1" step="0.1" min="0"></div>
+      <div class="row" data-when="si"><label class="hint">비중 배수 (1=균등, 2=회차마다 2배)</label>
+        <input type="number" id="siMult" value="1" step="0.5" min="0.1"></div>
+      <div class="note" data-when="si">위 사이징이 '다 샀을 때' 전체 크기 — 1+N 회차로 나눠 첫 회차는 신호 때, 나머지는 첫 진입가에서 불리한 쪽으로 간격만큼 갈 때마다 지정가로 산다.
+        손절은 첫 진입 때 값 그대로(그 너머 회차는 못 산다), 익절(%·ATR·손익비)은 평균단가에서 다시 잡는다. <b>실거래 봇은 아직 지원 안 함</b>(이 프리셋은 거부).</div>
     </div>
 
     <div class="group">
@@ -402,12 +403,12 @@
 <script>
 const $ = id => document.getElementById(id);
 const FIELDS = ["symbol","timeframe","days","equity",
-  "slType","slValue","slLookback","slBuffer","slInd","slIndPeriod","slStPeriod","slStMult",
-  "tpType","tpValue","tpLookback","tpBuffer","tpStPeriod","tpStMult",
+  "slType","slValue","slLookback","slBuffer","slInd","slIndPeriod",
+  "tpType","tpValue","tpLookback","tpBuffer",
   "exitCondEnabled","exitCondInd","exitCondPeriod","exitCondCmp","exitCondValue","exitCustom","timeStopBars",
   "exitStEnabled","exitStPeriod","exitStMult",
   "trailingEnabled","trailingCallback","trailingActivation","beEnabled","beType","beValue","beOffset","beLookback",
-  "leverage","levTierEnabled","sizeType","sizeValue","minLiqBuffer","cooldownBars","avoidFundingMin",
+  "leverage","levTierEnabled","sizeType","sizeValue","minLiqBuffer","siEnabled","siCount","siType","siValue","siMult","cooldownBars","avoidFundingMin",
   "entryType","makerTimeoutSeconds"];
 
 // ---- 잔고별 레버리지 티어 (글로벌 — 대시보드 봇 설정과 공유, /api/settings) ----
@@ -460,7 +461,7 @@ const _MODE_MA = {k:"mode",label:"방식",type:"select",opts:[["price","가격 �
 const _MODE_OSC = {k:"mode",label:"방식",type:"select",opts:[["level","기준값 비교"],["cross","크로스(K·D)"]],v:"level",reflow:true};
 const _MODE_ST = {k:"mode",label:"방식",type:"select",opts:[["trend","추세 필터(가격 대비)"],["flip","전환 신호(플립)"]],v:"trend",reflow:true};
 // '직접 조건(고급)'용 — 엔진 지표 전부(schema/preset.schema.json 의 operand.indicator) + 가격 소스
-const ENGINE_INDICATORS = ["SMA", "EMA", "RSI", "MACD", "MACD_signal", "MACD_hist", "BB_upper", "BB_lower", "BB_mid", "ATR", "ADX", "PLUS_DI", "MINUS_DI", "STOCH_K", "STOCH_D", "STOCHRSI_K", "STOCHRSI_D", "CCI", "MFI", "RVOL", "VWAP", "VWAP_Z", "SMA_SLOPE", "MA_ANGLE", "MA_GAP", "MA_CROSSES", "BODY_ATR", "TAKER_DELTA", "TAKER_DELTA_RATIO", "CVD", "CVD_EMA", "HAWKEYE", "QQE_MOD", "QQE_RSI", "QQE_LINE", "SUPERTREND", "SUPERTREND_DIR", "RSI_DIV", "ATR_RANK", "PIN_BAR", "TRIANGLE_BREAK", "FRACTAL", "PULLBACK_FRACTAL", "BOX_HIGH", "BOX_LOW", "PREV_HIGH", "PREV_LOW", "RSI_PREV_HIGH", "RSI_PREV_LOW", "PIVOT_LOW", "PIVOT_HIGH", "VP_ABOVE", "VP_BELOW", "BB_TOUCH_UP", "BB_TOUCH_DN", "BB_PULLBACK", "BIG_CANDLE", "MA_DIST", "RETRACE_UP", "RETRACE_DN", "TRENDLINE_HIGH", "TRENDLINE_LOW", "CDL_BULLREV", "CDL_BEARREV", "CDL_ENGULFING", "CDL_HAMMER", "CDL_HANGINGMAN", "CDL_MORNINGSTAR", "CDL_EVENINGSTAR", "CDL_PIERCING", "CDL_DARKCLOUDCOVER"];
+const ENGINE_INDICATORS = ["SMA", "EMA", "RSI", "MACD", "MACD_signal", "MACD_hist", "BB_upper", "BB_lower", "BB_mid", "ATR", "ADX", "PLUS_DI", "MINUS_DI", "STOCH_K", "STOCH_D", "STOCHRSI_K", "STOCHRSI_D", "CCI", "MFI", "RVOL", "VWAP", "VWAP_Z", "SMA_SLOPE", "MA_ANGLE", "MA_GAP", "MA_CROSSES", "TAKER_DELTA", "TAKER_DELTA_RATIO", "CVD", "CVD_EMA", "HAWKEYE", "QQE_MOD", "QQE_RSI", "QQE_LINE", "SUPERTREND", "SUPERTREND_DIR", "RSI_DIV", "ATR_RANK", "PIN_BAR", "TRIANGLE_BREAK", "FRACTAL", "PULLBACK_FRACTAL", "BOX_HIGH", "BOX_LOW", "PREV_HIGH", "PREV_LOW", "RSI_PREV_HIGH", "RSI_PREV_LOW", "PIVOT_LOW", "PIVOT_HIGH", "VP_ABOVE", "VP_BELOW", "BB_TOUCH_UP", "BB_TOUCH_DN", "BB_PULLBACK", "BIG_CANDLE", "RETRACE_UP", "RETRACE_DN", "TRENDLINE_HIGH", "TRENDLINE_LOW", "CDL_BULLREV", "CDL_BEARREV", "CDL_ENGULFING", "CDL_HAMMER", "CDL_HANGINGMAN", "CDL_MORNINGSTAR", "CDL_EVENINGSTAR", "CDL_PIERCING", "CDL_DARKCLOUDCOVER", "HA_OPEN", "HA_HIGH", "HA_LOW", "HA_CLOSE", "HA_COLOR", "HA_BODY", "HA_UWICK", "HA_LWICK", "HA_STREAK", "HA_DOJI", "HA_STRONG", "HA_PREDOJI_TOP", "HA_PREDOJI_BOT"];
 const PRICE_SOURCES = [["close","종가"],["open","시가"],["high","고가"],["low","저가"],["volume","거래량"]];
 const OPERAND_OPTS = [...PRICE_SOURCES, ...ENGINE_INDICATORS.map(x => [x, x])];
 function customOperand(name, per, params, sym) {
@@ -476,9 +477,13 @@ function operandText(o) {
   if (typeof o === "number") return String(o);
   const sym = o.symbol ? o.symbol + "·" : "";
   if (o.source) return sym + (PRICE_SOURCES.find(([k]) => k === o.source) || [0, o.source])[1];
-  const pr = { ...(o.params || {}) }; const htf = pr.htf; delete pr.htf;
-  return `${sym}${o.indicator}${o.period ? `(${o.period})` : ""}${Object.keys(pr).length ? " " + JSON.stringify(pr) : ""}${htf ? " @" + tfText(htf) : ""}`;
+  const pr = { ...(o.params || {}) }; const htf = pr.htf, shift = pr.shift; delete pr.htf; delete pr.shift;
+  return `${sym}${o.indicator}${o.period ? `(${o.period})` : ""}${Object.keys(pr).length ? " " + JSON.stringify(pr) : ""}${htf ? " @" + tfText(htf) : ""}${shift ? `[${shift}봉 전]` : ""}`;
 }
+// 잎 조건의 within(최근 N봉 중 한 번이라도) — 직접 조건 두 종류가 같이 쓴다
+const WITHIN_FIELD = {k:"within",label:"최근 N봉 안(1=지금 봉만)",v:"1"};
+const withWithin = (node, w) => (+w > 1 ? { ...node, within: +w } : node);
+const withinText = n => (n.within > 1 ? `최근 ${n.within}봉 안 ` : "");
 function tfText(m) { return m == 1440 ? "일봉" : m % 1440 === 0 ? `${m/1440}일봉` : m % 60 === 0 ? `${m/60}시간봉` : `${m}분봉`; }
 const HTF_OPTS = [["60","1시간봉"],["240","4시간봉"],["1440","일봉"]];
 const COND_TYPES = {
@@ -703,14 +708,6 @@ const COND_TYPES = {
             {k:"within",label:"최근 N봉 안",v:10,sweep:{path:"left.params.within",def:[5,20,5]}}],
     build:f=>({left:{indicator:"BIG_CANDLE",period:14,params:{mult:+f.mult,within:+f.within}},cmp:f.dir==="bull"?">":"<",right:0}),
     desc:n=>`최근 ${n.left.params.within}봉 안 ${n.cmp===">"?"장대양봉":"장대음봉"}(몸통 ≥ ATR×${n.left.params.mult})` },
-  maDist: { label:"이평 괴리(ATR 배수)",
-    // (종가 − 이평) ÷ ATR(14). −2 = 이평보다 ATR 2배 아래로 벌어짐(과매도 괴리). 코인·봉 크기와 무관
-    fields:[{k:"ma",label:"이평",type:"select",opts:[["sma","SMA"],["ema","EMA"]],v:"sma"},
-            {k:"period",label:"기간",v:22,sweep:{path:"left.period",def:[10,40,10]}},
-            {k:"cmp",label:"조건",type:"cmp",v:"<"},
-            {k:"value",label:"괴리(ATR 배수, 아래는 음수)",v:-2,sweep:{path:"right",def:[-3,-1,0.5]}}],
-    build:f=>({left:{indicator:"MA_DIST",period:+f.period,params:{sma:f.ma==="sma"?1:0}},cmp:f.cmp,right:+f.value}),
-    desc:n=>`(종가 − ${n.left.params.sma?"SMA":"EMA"}(${n.left.period})) ÷ ATR ${n.cmp} ${n.right}` },
   retrace: { label:"직전 파동 되돌림 %",
     // 반등: 최근 N봉 최고가 → 그 뒤 최저가 사이에서 지금 종가가 몇 % 되돌렸나. 눌림: 상승폭의 몇 % 내려왔나
     fields:[{k:"dir",label:"파동",type:"select",opts:[["up","하락 뒤 반등(하락폭의 %)"],["dn","상승 뒤 눌림(상승폭의 %)"]],v:"up"},
@@ -743,12 +740,13 @@ const COND_TYPES = {
             {k:"k",label:"거리 < ATR×",v:0.5,sweep:{path:"value",def:[0.25,1,0.25]}}],
     build:f=>({dist:"absAtr",left:{indicator:f.ma,period:+f.period},right:{indicator:f.ma,period:+f.period,params:{htf:+f.tf}},cmp:"<",value:+f.k}),
     desc:n=>`|${n.left.indicator}(${n.left.period}) − ${tfText(n.right.params.htf)} ${n.right.indicator}(${n.right.period})| < ATR×${n.value}` },
-  barDiff: { label:"가격 차이 ≥ ATR 배수(크게 넘음)",
-    // (이 봉 값 − 기준) ÷ ATR ≥ k. 예: 고가 − 직전 봉 고가 ≥ ATR×0.3 = '양봉 고점이 음봉 고점보다 훨씬 높다'
+  barDiff: { label:"가격 차이 ÷ ATR (이평 괴리 · 크게 넘음)",
+    // (이 봉 값 − 기준) ÷ ATR(14) 비교. 고가 − 직전 봉 고가 ≥ ATR×0.3 = '양봉 고점이 음봉 고점보다 훨씬 높다',
+    // 종가 − SMA(22) < ATR×(−2) = '22이평 아래로 크게 벌어짐'(이평 괴리)
     fields:[{k:"src",label:"이 봉의",type:"select",opts:[["high","고가"],["close","종가"],["low","저가"]],v:"high"},
             {k:"ref",label:"기준",type:"select",opts:[["PREV_HIGH","직전 N봉 최고 고가"],["PREV_LOW","직전 N봉 최저 저가"],["EMA","EMA(N)"],["SMA","SMA(N)"]],v:"PREV_HIGH"},
             {k:"n",label:"N",v:1},
-            {k:"cmp",label:"조건",type:"select",opts:[[">=","≥ 위로"],["<=","≤ 아래로(음수)"]],v:">="},
+            {k:"cmp",label:"조건",type:"select",opts:[[">=","≥ 위로"],[">","> 위로"],["<=","≤ 아래로(음수)"],["<","< 아래로(음수)"]],v:">="},
             {k:"k",label:"ATR 배수",v:0.3,sweep:{path:"value",def:[0.1,0.6,0.1]}}],
     build:f=>({dist:"atr",left:{source:f.src},right:{indicator:f.ref,period:+f.n},cmp:f.cmp,value:+f.k}),
     desc:n=>`(${operandText(n.left)} − ${n.right.indicator}(${n.right.period})) ÷ ATR ${n.cmp} ${n.value}` },
@@ -785,6 +783,34 @@ const COND_TYPES = {
     build:f=>({left:{indicator:"TRIANGLE_BREAK",period:+f.pivot,params:{lookback:+f.lookback,tol:+f.tol,within:+f.within}},
                cmp:f.dir==="up"?">":"<",right:0}),
     desc:n=>`삼각형 수렴 ${n.cmp===">"?"▲위 돌파":"▼아래 이탈"}(피벗 ${n.left.period}·${n.left.params.lookback}봉)${n.left.params.within>1?` · 최근 ${n.left.params.within}봉`:""}` },
+  heikinAshi: { label:"하이킨아시",
+    // HA 봉 = 평균 낸 캔들. 울트라(근사)는 HA 에 HA 공식을 한 번 더 — 원본 '울트라 하이킨아시'는 공식 비공개
+    fields:f=>[
+      {k:"mode",label:"방식",type:"select",opts:[["color","색(양봉·음봉)"],["turn","색 전환 후 N번째 봉"],["doji","최근 N봉 안 도지"],
+                                                ["strong","꼬리 없는 강한 봉"],["predoji","도지 직전 몸통 돌파"]],v:"color",reflow:true},
+      ...(f.mode==="doji"
+        ? [{k:"window",label:"최근 봉 수",v:3,sweep:{path:"left.params.within",def:[2,6,1]}},
+           {k:"count",label:"도지 ≥ 개",v:1,sweep:{path:"right",def:[1,3,1]}},
+           {k:"body",label:"도지 몸통 ≤ 봉 길이 %",v:30,sweep:{path:"left.params.body",def:[20,40,10]}}]
+        : [{k:"dir",label:"방향",type:"select",opts:[["bull","양봉(롱)"],["bear","음봉(숏)"]],v:"bull"},
+           ...(f.mode==="turn" ? [{k:"nth",label:"N번째",v:2,sweep:{path:"right",def:[1,3,1]}}] : []),
+           ...(f.mode==="predoji" ? [{k:"window",label:"도지 뒤 최대 봉",v:5,sweep:{path:"right.params.window",def:[3,9,2]}},
+                                     {k:"body",label:"도지 몸통 ≤ 봉 길이 %",v:30}] : [])]),
+      {k:"passes",label:"봉",type:"select",opts:[["1","하이킨아시"],["2","울트라(근사)"]],v:"1"}],
+    build:f=>{ const bull = f.dir!=="bear", ps = +f.passes>1 ? {passes:+f.passes} : {},
+        P = x => (Object.keys(x).length ? {params:x} : {});     // 일반 HA 는 params 없이(영상 초안과 같은 키)
+      if (f.mode==="doji") return {left:{indicator:"HA_DOJI",params:{...ps,within:+f.window,body:+f.body}},cmp:">=",right:+f.count};
+      if (f.mode==="turn") return {cross:bull?"crossOver":"crossUnder",left:{indicator:"HA_STREAK",...P(ps)},right:bull?(+f.nth-0.5):-(+f.nth-0.5)};
+      if (f.mode==="strong") return {left:{indicator:"HA_STRONG",...P(ps)},cmp:bull?">":"<",right:0};
+      if (f.mode==="predoji") return {left:{indicator:"HA_CLOSE",...P(ps)},cmp:bull?">":"<",
+                                      right:{indicator:bull?"HA_PREDOJI_TOP":"HA_PREDOJI_BOT",params:{...ps,window:+f.window,body:+f.body}}};
+      return {left:{indicator:"HA_COLOR",...P(ps)},cmp:bull?">":"<",right:0}; },
+    desc:n=>{ const L = n.left.indicator, u = n.left.params && n.left.params.passes>1 ? "울트라 HA" : "HA";
+      if (L==="HA_DOJI") return `최근 ${n.left.params.within}봉 안 ${u} 도지 ≥ ${n.right}개`;
+      if (L==="HA_STREAK") return `${u} ${n.cross==="crossOver"?"양봉":"음봉"} 전환 ${Math.abs(n.right)+0.5}번째 봉`;
+      if (L==="HA_STRONG") return `${u} ${n.cmp===">"?"아래꼬리 없는 양봉":"위꼬리 없는 음봉"}`;
+      if (L==="HA_CLOSE") return `${u} 종가가 도지 직전 ${n.cmp===">"?"음봉 몸통 위로 ▲돌파":"양봉 몸통 아래로 ▼이탈"}`;
+      return `${u} ${n.cmp===">"?"양봉":"음봉"}`; } },
   custom: { label:"직접 조건(고급)",
     // 엔진 지표 아무거나 — 비교(<,>…) 또는 교차. 영상 분석 프리셋이 이 종류로 만들어진다.
     fields:f=>[
@@ -799,14 +825,15 @@ const COND_TYPES = {
            {k:"rp",label:"기간",v:"100",sweep:{path:"right.period",def:[50,200,50]}},
            {k:"rparams",label:"파라미터(JSON)",v:""},
            {k:"rsym",label:"심볼(비우면 이 코인)",v:""}]
-        : [{k:"rv",label:"값",v:"50",sweep:{path:"right",def:[30,70,10]}}])],
+        : [{k:"rv",label:"값",v:"50",sweep:{path:"right",def:[30,70,10]}}]),
+      WITHIN_FIELD],
     build:f=>{
       const L = customOperand(f.left, f.lp, f.lparams, f.lsym);
       const R = f.rk==="ind" ? customOperand(f.right, f.rp, f.rparams, f.rsym) : +f.rv;
-      return String(f.op).startsWith("cross") ? {cross:f.op,left:L,right:R} : {left:L,cmp:f.op,right:R}; },
-    desc:n=> n.cross!==undefined
+      return withWithin(String(f.op).startsWith("cross") ? {cross:f.op,left:L,right:R} : {left:L,cmp:f.op,right:R}, f.within); },
+    desc:n=> withinText(n) + (n.cross!==undefined
       ? `${operandText(n.left)} ${n.cross==="crossOver"?"▲상향 교차":"▼하향 교차"} ${operandText(n.right)}`
-      : `${operandText(n.left)} ${n.cmp} ${operandText(n.right)}` },
+      : `${operandText(n.left)} ${n.cmp} ${operandText(n.right)}`) },
   customDist: { label:"직접 거리 조건(고급 · ATR 배수)",
     // (왼쪽 − 오른쪽) ÷ ATR(14) 비교. 절댓값이면 '두 값이 붙었나'. 영상 분석의 '크게·훨씬' 규칙이 이 종류로 만들어진다
     fields:[
@@ -820,10 +847,11 @@ const COND_TYPES = {
       {k:"rsym",label:"심볼(비우면 이 코인)",v:""},
       {k:"mode",label:"거리",type:"select",opts:[["atr","(왼 − 오) ÷ ATR"],["absAtr","|왼 − 오| ÷ ATR"]],v:"atr"},
       {k:"cmp",label:"조건",type:"select",opts:[[">=","≥"],[">",">"],["<=","≤"],["<","<"]],v:">="},
-      {k:"k",label:"ATR 배수",v:"0.3",sweep:{path:"value",def:[0.1,1,0.1]}}],
-    build:f=>({dist:f.mode,left:customOperand(f.left, f.lp, f.lparams, f.lsym),right:customOperand(f.right, f.rp, f.rparams, f.rsym),
-               cmp:f.cmp,value:+f.k}),
-    desc:n=>`${n.dist==="absAtr"?"|":"("}${operandText(n.left)} − ${operandText(n.right)}${n.dist==="absAtr"?"|":")"} ÷ ATR ${n.cmp} ${n.value}` },
+      {k:"k",label:"ATR 배수",v:"0.3",sweep:{path:"value",def:[0.1,1,0.1]}},
+      WITHIN_FIELD],
+    build:f=>withWithin({dist:f.mode,left:customOperand(f.left, f.lp, f.lparams, f.lsym),right:customOperand(f.right, f.rp, f.rparams, f.rsym),
+               cmp:f.cmp,value:+f.k}, f.within),
+    desc:n=>`${withinText(n)}${n.dist==="absAtr"?"|":"("}${operandText(n.left)} − ${operandText(n.right)}${n.dist==="absAtr"?"|":")"} ÷ ATR ${n.cmp} ${n.value}` },
 };
 let entryGroups = [];   // [{side, conds:[{type,node}...AND]}, ...(OR)]  →  ((A&B)→롱) or ((C&D)→숏)
 
@@ -969,19 +997,18 @@ function sync() {
   const slT = $("slType").value, tpT = $("tpType").value;
   const show = (sel, on) => document.querySelectorAll(`[data-when="${sel}"]`)
                                     .forEach(e => e.style.display = on ? "" : "none");
-  // 가격 레벨 손절이 있는가 (손익비·리스크사이징은 이게 필요). supertrend/off는 없음.
+  // 가격 레벨 손절이 있는가 (손익비·리스크사이징은 이게 필요). off는 없음.
   const slPrice = slT === "percent" || slT === "atrMultiple" || slT === "swing" || slT === "indicator";
   show("sl-value", slT === "percent" || slT === "atrMultiple");
   show("sl-swing", slT === "swing");
   show("sl-ind", slT === "indicator");
   show("sl-buf", slT === "swing" || slT === "indicator");
-  show("sl-st", slT === "supertrend");
   show("tp-value", tpT === "percent" || tpT === "atrMultiple" || tpT === "riskReward" || tpT === "retrace");
   show("tp-swing", tpT === "swing");
   show("tp-lb", tpT === "swing" || tpT === "retrace");
   show("be-lb", $("beType").value === "retrace");
-  show("tp-st", tpT === "supertrend");
   show("exit-st", $("exitStEnabled").checked);
+  show("si", $("siEnabled").checked);
   const maker = $("entryType").value === "makerLimit";
   show("entry-timeout", maker);
   const to = ($("makerTimeoutSeconds").value || "").trim();
@@ -999,16 +1026,12 @@ function sync() {
     ? "룩백 구간(현재 봉 포함)의 최저/최고가 ± 버퍼%. 방향은 자동 — 롱은 전저점 아래, 숏은 전고점 위."
     : slT === "indicator"
     ? "진입 신호봉의 지표 값(예: EMA50) ± 버퍼%에 손절을 고정. 롱은 아래, 숏은 위. 지표가 진입가 반대편이면 그 거래는 손절 없음."
-    : slT === "supertrend"
-    ? "포지션 반대로 SuperTrend 전환 시 손절(신호봉 종가). 롱=하락전환, 숏=상승전환. 가격 레벨이 없어 손익비·리스크% 사이징과는 함께 못 씀."
     : "";
   $("tpValueLabel").textContent = tpT === "atrMultiple" ? "익절 ATR 배수"
     : tpT === "riskReward" ? "손익비 (손절 거리 × 배수)" : tpT === "retrace" ? "되돌림 % (직전 파동)" : "익절 % (가격)";
   $("tpNote").textContent = tpT === "riskReward"
-    ? (!slPrice ? "⚠️ 손익비는 가격 손절이 필요해 — 손절을 %·ATR·스윙으로 켜줘 (SuperTrend/없음은 불가)"
+    ? (!slPrice ? "⚠️ 손익비는 가격 손절이 필요해 — 손절을 %·ATR·스윙으로 켜줘 (없음은 불가)"
                      : "익절 거리 = 손절 거리 × 배수 (예: 2 → 손절 1% 시 익절 2%)")
-    : tpT === "supertrend"
-    ? "포지션 방향과 반대로 SuperTrend가 전환하면 청산(신호봉 종가). 롱=하락전환, 숏=상승전환. 추세를 끝까지 타고 이탈 시 익절."
     : tpT === "retrace"
     ? "진입 때 룩백 안의 직전 파동으로 익절가를 고정. 롱: 최고가 → 그 뒤 최저가 사이에서 n% 반등한 가격(25 = 하락폭의 25%). 숏은 상승폭의 n% 눌림. 진입가보다 불리하면 그 거래는 익절 없음."
     : "";
@@ -1016,11 +1039,11 @@ function sync() {
   const risk = $("sizeType").value === "riskPercent";
   $("sizeValueLabel").textContent = risk ? "트레이드당 리스크 %" : "증거금 비중 %";
   $("sizeNote").textContent = risk
-    ? (!slPrice ? "⚠️ 리스크%는 가격 손절이 필요해 — 손절을 %·ATR·스윙으로 켜줘 (SuperTrend/없음은 불가)" : "손절 거리로 수량 역산 → 매 트레이드 리스크 일정")
+    ? (!slPrice ? "⚠️ 리스크%는 가격 손절이 필요해 — 손절을 %·ATR·스윙으로 켜줘 (없음은 불가)" : "손절 거리로 수량 역산 → 매 트레이드 리스크 일정")
     : "";
   if (typeof updateHints === "function") updateHints();
 }
-["slType","tpType","sizeType","exitStEnabled","entryType","levTierEnabled","makerTimeoutSeconds","beType"].forEach(id => $(id).addEventListener("change", sync));
+["slType","tpType","sizeType","exitStEnabled","siEnabled","entryType","levTierEnabled","makerTimeoutSeconds","beType"].forEach(id => $(id).addEventListener("change", sync));
 $("levTierAdd").onclick = () => { levTiers.push({maxBalance:null, leverage:5}); renderLevTiers(); saveTiers(); };
 renderLevTiers();
 loadTiers();                                        // 글로벌 티어 로드(대시보드 봇 설정과 공유)
@@ -1073,12 +1096,22 @@ const LEGACY_SWING = { swingLow:"swing", swingHigh:"swing" };
 function migrate(k, v) {
   return (k === "slType" || k === "tpType") && LEGACY_SWING[v] ? LEGACY_SWING[v] : v;
 }
+// 레거시: 손절·익절 칸의 'SuperTrend 전환' 은 '지표/시간 청산'의 SuperTrend 체크박스와 같은 청산(사유 이름만 달랐다) → 체크박스로.
+// 예전 서버의 우선순위(익절 칸 > 손절 칸 > 체크박스) 그대로 — 둘 이상 켜져 있었으면 그때 실제로 쓰인 설정을 남긴다.
+function migrateSt(p) {
+  const pre = ["tp", "sl"].find(x => p[x + "Type"] === "supertrend");
+  if (!pre) return p;
+  return { ...p, tpType: p.tpType === "supertrend" ? "off" : p.tpType, slType: p.slType === "supertrend" ? "off" : p.slType,
+           exitStEnabled: true, exitStPeriod: p[pre + "StPeriod"] ?? 10, exitStMult: p[pre + "StMult"] ?? 3 };
+}
 
 function applyPreset(p) {
   if (!p) return;
+  p = migrateSt(p);
   if (aiPlan) { aiPlan = null; if ($("aiPlanBox")) $("out").innerHTML = ""; }   // 다른 프리셋의 AI 범위 확인은 버린다
   if (!("exitCustom" in p)) $("exitCustom").value = "";   // 이 칸이 없던 옛 프리셋이 직전 프리셋의 직접 청산을 물려받지 않게
   if (!("beEnabled" in p)) $("beEnabled").checked = false;   // 본전 손절도 같은 이유
+  if (!("siEnabled" in p)) $("siEnabled").checked = false;   // 분할 매수도 같은 이유
   for (const [k,v0] of Object.entries(p)) {
     if (k === "entry") continue;
     const el = $(k); if (!el) continue;
@@ -1596,9 +1629,11 @@ const EXIT_INDS = {
 const EXIT_IND_LABEL = Object.fromEntries(Object.entries(EXIT_INDS).map(([k,v]) => [k, v.label]));
 // 진입이 아닌 고정 폼 필드의 기본 스윕 범위 (exitCondValue는 지표별 vrange 사용 → 주입 시 결정)
 const FIXED_SWEEP = { slValue:[0.5,2.5,0.5], tpValue:[0.5,3,0.5],
-  exitCondPeriod:[7,21,7], timeStopBars:[6,24,6], beValue:[0.5,2,0.5], leverage:[2,10,1], sizeValue:[10,40,10] };
+  exitCondPeriod:[7,21,7], timeStopBars:[6,24,6], beValue:[0.5,2,0.5], leverage:[2,10,1], sizeValue:[10,40,10],
+  siCount:[1,4,1], siValue:[0.5,2,0.5], siMult:[1,2,0.5] };
 const FIXED_LABEL = { slValue:"손절 값", tpValue:"익절 값", exitCondValue:"청산 기준값",
-  exitCondPeriod:"청산 기간", timeStopBars:"시간청산", beValue:"본전 트리거", leverage:"레버리지", sizeValue:"사이징 값" };
+  exitCondPeriod:"청산 기간", timeStopBars:"시간청산", beValue:"본전 트리거", leverage:"레버리지", sizeValue:"사이징 값",
+  siCount:"분할 회차", siValue:"분할 간격", siMult:"분할 비중 배수" };
 let sweepState = {};   // key → {min,max,step} : 체크된(범위 탐색) 파라미터만 담김
 let aiPlan = null;     // AI 최적화가 고른 범위의 확인 대기 상태 {reason, testedBefore, costUsd} — 실행·취소·프리셋 변경 시 비움
 
@@ -1673,6 +1708,7 @@ function sweepApplicable(key) {
   if (key === "tpValue") return ["percent","atrMultiple","riskReward","retrace"].includes($("tpType").value);
   if (key === "exitCondValue" || key === "exitCondPeriod") return $("exitCondEnabled").checked;
   if (key === "beValue") return $("beEnabled").checked;
+  if (key.startsWith("si")) return $("siEnabled").checked;
   return true;   // timeStopBars · leverage · sizeValue
 }
 function collectSweep() {
@@ -2112,13 +2148,13 @@ function updateHints() {
   const slT = v("slType");
   setH("sl", slT==="off" ? "없음" : slT==="percent" ? `${v("slValue")}%`
         : slT==="atrMultiple" ? `ATR×${v("slValue")}`
-        : slT==="supertrend" ? `ST전환(${v("slStPeriod")},×${v("slStMult")})` : `스윙${v("slLookback")}봉`);
+        : `스윙${v("slLookback")}봉`);
   const tpT = v("tpType");
   setH("tp", tpT==="off" ? "없음" : tpT==="percent" ? `${v("tpValue")}%`
         : tpT==="atrMultiple" ? `ATR×${v("tpValue")}`
         : tpT==="riskReward" ? `R:R ${v("tpValue")}`
         : tpT==="retrace" ? `파동 ${v("tpValue")}% 되돌림(${v("tpLookback")}봉)`
-        : tpT==="supertrend" ? `ST전환(${v("tpStPeriod")},×${v("tpStMult")})` : `스윙${v("tpLookback")}봉`);
+        : `스윙${v("tpLookback")}봉`);
   const parts = [];
   if ($("exitCondEnabled").checked) parts.push(`${EXIT_IND_LABEL[v("exitCondInd")]||v("exitCondInd")}${v("exitCondCmp")}${v("exitCondValue")}`);
   if ($("exitStEnabled").checked) parts.push(`ST전환(${v("exitStPeriod")},×${v("exitStMult")})`);
@@ -2128,7 +2164,8 @@ function updateHints() {
   if ($("trailingEnabled").checked) trail.push(`${v("trailingCallback")}%`);
   if ($("beEnabled").checked) trail.push(`본전 ${v("beType")==="percent" ? "+"+v("beValue")+"%" : v("beType")==="retrace" ? "파동 "+v("beValue")+"%" : v("beValue")+"R"}`);
   setH("trail", trail.join(" · ") || "없음");
-  setH("sizing", `${v("leverage")}x · ${v("sizeType")==="riskPercent"?"리스크":"증거금"} ${v("sizeValue")}%`);
+  setH("sizing", `${v("leverage")}x · ${v("sizeType")==="riskPercent"?"리스크":"증거금"} ${v("sizeValue")}%`
+       + ($("siEnabled").checked ? ` · 분할 1+${v("siCount")}회(${v("siValue")}${v("siType")==="percent"?"%":"ATR"})` : ""));
   setH("filter", `쿨다운 ${v("cooldownBars")} · 펀딩 ${v("avoidFundingMin")}분`);
 }
 $("pane-backtest").addEventListener("input", updateHints);

@@ -23,6 +23,71 @@ def _load_schema():
         return json.load(f)
 
 
+# ── 엔진에서 뺀 지표 이름 → 값이 같은 거리 조건 ──────────────────────────────────
+# MA_DIST(이평 괴리)·BODY_ATR(몸통÷ATR) 은 거리 조건 (A − B) ÷ ATR(14) 과 값이 같아 엔진에서 뺐다(2026-10-23).
+# 저장된 프리셋 — 여기서 못 보는 서버 data/strategies 포함 — 이 깨지지 않게 읽을 때 바꾼다.
+# 값이 같다고 보장되는 모양(ATR 14 · 숫자와 비교 · 이 코인·이 TF)만 바꾸고, 아니면 분명히 실패한다:
+# 비슷한 다른 조건으로 조용히 돌리면 그게 더 나쁘다.
+_LEGACY_INDS = ("MA_DIST", "BODY_ATR")
+_FLIP = {"<": ">", "<=": ">=", ">": "<", ">=": "<="}
+
+
+def _legacy_pair(op: dict):
+    """옛 operand → 거리 조건의 (dist, left, right). 값이 같게 못 바꾸면 None."""
+    pr = dict(op.get("params") or {})
+    if op.get("symbol"):
+        return None
+    if op["indicator"] == "MA_DIST":
+        sma = pr.pop("sma", 1)
+        if pr.pop("atr", 14) != 14 or pr:
+            return None
+        return "atr", {"source": "close"}, {"indicator": "SMA" if sma else "EMA", "period": int(op.get("period") or 22)}
+    if (op.get("period") or 14) != 14 or pr:
+        return None
+    return "absAtr", {"source": "close"}, {"source": "open"}
+
+
+def _is_legacy(x) -> bool:
+    return isinstance(x, dict) and x.get("indicator") in _LEGACY_INDS
+
+
+def _migrate_node(x):
+    if isinstance(x, list):
+        return [_migrate_node(v) for v in x]
+    if not isinstance(x, dict):
+        return x
+    if _is_legacy(x.get("left")) or _is_legacy(x.get("right")):
+        flip = _is_legacy(x.get("right"))
+        op, num = (x["right"], x.get("left")) if flip else (x["left"], x.get("right"))
+        pair = _legacy_pair(op)
+        cmp = x.get("cmp")
+        if pair is None or "cross" in x or "dist" in x or not isinstance(num, (int, float)) or cmp not in _FLIP:
+            raise ValueError(f"{op['indicator']} 는 엔진에서 빠졌어요(거리 조건과 같은 값) — 이 조건은 자동으로 못 바꿔요: "
+                             f"{json.dumps(x, ensure_ascii=False)}. 거리 조건 (A − B) ÷ ATR 로 다시 만들어 주세요")
+        dist, left, right = pair
+        out = {"dist": dist, "left": left, "right": right, "cmp": _FLIP[cmp] if flip else cmp, "value": float(num)}
+        if x.get("within"):
+            out["within"] = x["within"]
+        return out
+    return {k: _migrate_node(v) for k, v in x.items()}
+
+
+def _has_legacy(x) -> bool:
+    if isinstance(x, list):
+        return any(_has_legacy(v) for v in x)
+    return isinstance(x, dict) and (_is_legacy(x) or any(_has_legacy(v) for v in x.values()))
+
+
+def migrate_legacy(data: dict) -> dict:
+    """엔진에서 뺀 지표가 있으면 바꾼 사본, 없으면 그대로(복사 없음)."""
+    if not _has_legacy(data):
+        return data
+    out = _migrate_node(data)
+    if _has_legacy(out):                             # 조건 말고 다른 자리(손절 기준 지표 등)에 남았다
+        raise ValueError(f"{'·'.join(_LEGACY_INDS)} 는 엔진에서 빠졌어요 — 이 프리셋은 자동으로 못 바꿔요")
+    return out
+
+
 @dataclass
 class Preset:
     data: dict
@@ -35,6 +100,7 @@ class Preset:
 
     @classmethod
     def from_dict(cls, data: dict, validate: bool = True) -> "Preset":
+        data = migrate_legacy(data)
         if validate:
             if jsonschema is None:
                 raise RuntimeError("jsonschema 미설치 — pip install jsonschema 또는 validate=False")

@@ -1,6 +1,6 @@
 """영상 분석 '🛠 구현 가능' 2차 — 엔진 확장. 네트워크 없음.
 
-MA_DIST(이평 괴리 ATR) · RETRACE_UP/DN(직전 파동 되돌림 %) · TRENDLINE_HIGH/LOW(두 피벗을 이은 선)
+RETRACE_UP/DN(직전 파동 되돌림 %) · TRENDLINE_HIGH/LOW(두 피벗을 이은 선)
 · params.htf(상위 TF 의 닫힌 봉 값) · operand.symbol(다른 코인) · distNode((A − B) ÷ ATR 비교)
 · takeProfit/breakeven retrace(파동 n% 되돌림 가격) · entryRules[].sizeScale(규칙별 비중).
 """
@@ -50,8 +50,6 @@ def _loader_from(c: Candles, mult=2.0):
 
 
 OPERANDS = [
-    {"indicator": "MA_DIST", "period": 22, "params": {"sma": 1}},
-    {"indicator": "MA_DIST", "period": 20, "params": {"sma": 0, "atr": 10}},
     {"indicator": "RETRACE_UP", "period": 40}, {"indicator": "RETRACE_DN", "period": 40},
     {"indicator": "TRENDLINE_HIGH", "period": 3}, {"indicator": "TRENDLINE_LOW", "period": 2},
     {"indicator": "EMA", "period": 5, "params": {"htf": 60}},
@@ -76,13 +74,6 @@ def test_causal_dist_node():
     full = [evaluate(node, SeriesResolver(c), i) for i in range(len(c))]
     part = [evaluate(node, SeriesResolver(_cut(c, 900)), i) for i in range(900)]
     assert full[:900] == part and any(full) and not all(full[100:])
-
-
-def test_ma_dist_matches_formula():
-    c = _candles()
-    v = ind.ma_dist(c.high, c.low, c.close, 22, True, 14)
-    want = (c.close - ind.sma(c.close, 22)) / ind.atr(c.high, c.low, c.close, 14)
-    np.testing.assert_allclose(v, want, equal_nan=True)
 
 
 def test_retrace_brute():
@@ -267,7 +258,7 @@ def test_sweep_path_into_list():
 
 # 화면 COND_TYPES 가 만드는 노드 모양 그대로
 GUI_NODES = [
-    {"left": {"indicator": "MA_DIST", "period": 22, "params": {"sma": 1}}, "cmp": "<", "right": -2},
+    {"dist": "atr", "left": {"source": "close"}, "right": {"indicator": "SMA", "period": 22}, "cmp": "<", "value": -2},
     {"left": {"indicator": "RETRACE_UP", "period": 50}, "cmp": ">", "right": 75},
     {"cross": "crossOver", "left": {"source": "close"}, "right": {"indicator": "TRENDLINE_HIGH", "period": 3}},
     {"left": {"source": "close"}, "cmp": ">", "right": {"indicator": "EMA", "period": 21, "params": {"htf": 60}}},

@@ -179,6 +179,24 @@
           "type": "number", "minimum": 0, "maximum": 100,
           "description": "진입가~청산가 사이 최소 여유 %. 이보다 좁으면 진입 스킵 (안전장치)"
         },
+        "scaleIn": {
+          "type": "object",
+          "required": ["count", "spacing"],
+          "additionalProperties": false,
+          "description": "분할 매수(가격 간격). size 로 정한 전체 수량을 1 + count 회차로 나눠, 첫 회차는 신호 때 · 나머지는 첫 진입가에서 불리한 쪽으로 spacing 만큼씩 갈 때마다 산다. 손절은 첫 진입 때 값 그대로, 익절(percent·atrMultiple·riskReward)은 평균단가 기준으로 다시 잡는다. 아직 실거래 주문기는 지원하지 않는다(실거래 봇은 이 프리셋을 거부).",
+          "properties": {
+            "count": { "type": "integer", "minimum": 1, "maximum": 10, "description": "추가 회차 수(첫 진입 제외)" },
+            "spacing": {
+              "type": "object", "required": ["type", "value"], "additionalProperties": false,
+              "properties": {
+                "type": { "type": "string", "enum": ["percent", "atrMultiple"], "description": "percent=첫 진입가의 n% · atrMultiple=진입 때 ATR(14)×n" },
+                "value": { "type": "number", "exclusiveMinimum": 0 }
+              }
+            },
+            "multiplier": { "type": "number", "exclusiveMinimum": 0, "default": 1,
+              "description": "회차 비중 배수 — k 회차 비중 = multiplier^k (1=균등, 2=회차마다 두 배)" }
+          }
+        },
         "maxConcurrentPositions": {
           "type": "integer", "minimum": 1, "default": 1,
           "description": "이 프리셋이 동시에 유지할 수 있는 포지션 수"
@@ -284,7 +302,8 @@
         "left":  { "$ref": "#/$defs/operand" },
         "right": { "$ref": "#/$defs/operand" },
         "cmp":   { "type": "string", "enum": ["<", "<=", ">", ">="] },
-        "value": { "type": "number" }
+        "value": { "type": "number" },
+        "within": { "type": "integer", "minimum": 1, "description": "최근 N봉(현재 포함) 중 한 번이라도 참이면 참. 없거나 1이면 지금 봉만" }
       }
     },
 
@@ -296,7 +315,8 @@
       "properties": {
         "left":  { "$ref": "#/$defs/operand" },
         "cmp":   { "type": "string", "enum": ["<", "<=", ">", ">=", "==", "!="] },
-        "right": { "$ref": "#/$defs/operand" }
+        "right": { "$ref": "#/$defs/operand" },
+        "within": { "type": "integer", "minimum": 1, "description": "최근 N봉(현재 포함) 중 한 번이라도 참이면 참. 없거나 1이면 지금 봉만" }
       }
     },
 
@@ -308,7 +328,8 @@
       "properties": {
         "cross": { "type": "string", "enum": ["crossOver", "crossUnder"] },
         "left":  { "$ref": "#/$defs/operand" },
-        "right": { "$ref": "#/$defs/operand" }
+        "right": { "$ref": "#/$defs/operand" },
+        "within": { "type": "integer", "minimum": 1, "description": "최근 N봉(현재 포함) 중 한 번이라도 참이면 참. 없거나 1이면 지금 봉만" }
       }
     },
 
@@ -335,21 +356,23 @@
               "type": "string",
               "enum": ["SMA", "EMA", "RSI", "MACD", "MACD_signal", "MACD_hist",
                        "BB_upper", "BB_lower", "BB_mid", "ATR", "ADX", "PLUS_DI", "MINUS_DI", "STOCH_K", "STOCH_D",
-                       "STOCHRSI_K", "STOCHRSI_D", "CCI", "MFI", "RVOL", "VWAP", "VWAP_Z", "SMA_SLOPE", "MA_ANGLE", "MA_GAP", "MA_CROSSES", "BODY_ATR",
+                       "STOCHRSI_K", "STOCHRSI_D", "CCI", "MFI", "RVOL", "VWAP", "VWAP_Z", "SMA_SLOPE", "MA_ANGLE", "MA_GAP", "MA_CROSSES",
                        "TAKER_DELTA", "TAKER_DELTA_RATIO", "CVD", "CVD_EMA", "HAWKEYE",
                        "QQE_MOD", "QQE_RSI", "QQE_LINE",
                        "SUPERTREND", "SUPERTREND_DIR", "RSI_DIV", "ATR_RANK", "PIN_BAR", "TRIANGLE_BREAK", "FRACTAL", "PULLBACK_FRACTAL", "BOX_HIGH", "BOX_LOW",
                        "PREV_HIGH", "PREV_LOW", "RSI_PREV_HIGH", "RSI_PREV_LOW", "PIVOT_LOW", "PIVOT_HIGH",
                        "VP_ABOVE", "VP_BELOW", "BB_TOUCH_UP", "BB_TOUCH_DN", "BB_PULLBACK", "BIG_CANDLE",
-                       "MA_DIST", "RETRACE_UP", "RETRACE_DN", "TRENDLINE_HIGH", "TRENDLINE_LOW",
+                       "RETRACE_UP", "RETRACE_DN", "TRENDLINE_HIGH", "TRENDLINE_LOW",
                        "CDL_BULLREV", "CDL_BEARREV", "CDL_ENGULFING", "CDL_HAMMER",
                        "CDL_HANGINGMAN", "CDL_MORNINGSTAR", "CDL_EVENINGSTAR",
-                       "CDL_PIERCING", "CDL_DARKCLOUDCOVER"]
+                       "CDL_PIERCING", "CDL_DARKCLOUDCOVER",
+                       "HA_OPEN", "HA_HIGH", "HA_LOW", "HA_CLOSE", "HA_COLOR", "HA_BODY", "HA_UWICK", "HA_LWICK",
+                       "HA_STREAK", "HA_DOJI", "HA_STRONG", "HA_PREDOJI_TOP", "HA_PREDOJI_BOT"]
             },
             "period": { "type": "integer", "minimum": 1 },
             "params": {
               "type": "object",
-              "description": "지표별 추가 파라미터 (예: MACD의 fast/slow/signal, BB의 stddev). htf=상위 TF(분, 예: 1440=일봉) — 그 TF 의 다 닫힌 봉 값",
+              "description": "지표별 추가 파라미터 (예: MACD의 fast/slow/signal, BB의 stddev). htf=상위 TF(분, 예: 1440=일봉) — 그 TF 의 다 닫힌 봉 값 · shift=k 봉 전 값(신호봉 기준, 파인의 x[k])",
               "additionalProperties": { "type": "number" }
             },
             "symbol": { "type": "string", "pattern": "^[A-Z0-9]{2,20}$",

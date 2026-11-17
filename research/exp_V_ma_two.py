@@ -50,7 +50,6 @@ SMA200 = {"indicator": "SMA", "period": 200}
 def build(tf, lb, w, g) -> dict:
     slope = {"indicator": "SMA_SLOPE", "period": 200, "params": {"lookback": lb}}
     chop = {"indicator": "MA_CROSSES", "period": 200, "params": {"fast": 22, "slow": 200, "window": w}}
-    body = {"indicator": "BODY_ATR", "period": 14}
 
     def side_rule(long: bool):
         gt, lt = (">", "<") if long else ("<", ">")
@@ -62,7 +61,7 @@ def build(tf, lb, w, g) -> dict:
             {"left": CLOSE, "cmp": gt, "right": OPEN},                       # 방향 맞는 캔들
             {"op": "OR", "children": [                                       # 돌파 확정 두 기준
                 {"left": LOW if long else HIGH, "cmp": gt, "right": SMA22},  #  ② 선에 안 닿음
-                {"left": body, "cmp": ">", "right": 1.5}]},                  #  ① 몸통이 긴 캔들
+                {"dist": "absAtr", "left": {"source": "close"}, "right": {"source": "open"}, "cmp": ">", "value": 1.5}]},                  #  ① 몸통이 긴 캔들
         ]
         if g:
             kids.append({"left": {"indicator": "MA_GAP", "period": 200,

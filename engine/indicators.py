@@ -254,12 +254,6 @@ def ma_crosses(close, fast: int, slow: int, window: int, ma_only: bool = False) 
     return out
 
 
-def body_atr(open_, high, low, close, period: int = 14) -> np.ndarray:
-    """캔들 몸통 |종가−시가| 를 ATR 배수로. '몸통이 엄청 긴 캔들' 돌파 판정용."""
-    with np.errstate(invalid="ignore", divide="ignore"):
-        return np.abs(_d(close) - _d(open_)) / atr(high, low, close, period)
-
-
 # ---- 오더플로우: 테이커 매수/매도 델타 & CVD ----
 # klines의 taker_buy(테이커가 공격적으로 산 체결량)로 봉당 매수/매도 압력을 계산.
 # taker_sell = volume - taker_buy → delta = taker_buy - taker_sell = 2*taker_buy - volume.
@@ -855,15 +849,6 @@ def bb_pullback(high, low, close, period: int = 20, stddev: float = 2.0, n: int 
     return out
 
 
-def ma_dist(high, low, close, period: int = 22, sma_type: bool = True, atr_period: int = 14) -> np.ndarray:
-    """이평 괴리 — (종가 − 이평) ÷ ATR. 부호 있음: −2 = 이평보다 ATR 2배 아래로 벌어짐. 코인·봉 크기와 무관하게 비교된다."""
-    c = _d(close)
-    m = sma(c, period) if sma_type else ema(c, period)
-    a = talib.ATR(_d(high), _d(low), c, timeperiod=atr_period)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        return np.where(a > 0, (c - m) / a, np.nan)
-
-
 def retrace(high, low, close, n: int = 50, up: bool = True, chunk: int = 4096) -> np.ndarray:
     """직전 파동 대비 되돌림 비율(%) — 최근 n 봉(현재 포함) 안에서.
 
@@ -931,6 +916,100 @@ def pivot_line(high, low, n: int = 2, top: bool = True) -> np.ndarray:
     i1, i0 = idx[k[ok]], idx[k[ok] - 1]
     p1, p0 = src[i1], src[i0]
     out[ok] = p1 + (p1 - p0) / (i1 - i0) * (t - i1)
+    return out
+
+
+# ---- 하이킨아시 (영상 '하이킨아시 필승 단타') ----
+def heikin_ashi(open_, high, low, close, passes: int = 1):
+    """하이킨아시 (시가, 고가, 저가, 종가). 인과적.
+
+    HA종가 = (O+H+L+C)/4 · HA시가 = (전봉 HA시가 + 전봉 HA종가)/2 (첫 봉은 (O+C)/2)
+    HA고가 = max(H, HA시가, HA종가) · HA저가 = min(L, HA시가, HA종가).
+    HA시가는 재귀라 데이터 시작점에 따라 첫 몇십 봉이 조금 다르다(EMA 와 같은 성질, 매 봉 절반씩 잊는다).
+    passes=2 는 HA 봉에 HA 공식을 한 번 더 — 영상의 '울트라 하이킨아시'(공식 비공개, '한 번 더 평균'이라고만 설명)의 근사.
+    """
+    o, h, l, c = _d(open_), _d(high), _d(low), _d(close)
+    for _ in range(max(1, int(passes))):
+        hc = (o + h + l + c) / 4.0
+        ho = np.empty(len(c))
+        if len(c):
+            prev = (o[0] + c[0]) / 2.0
+            hcl = hc.tolist()
+            for i in range(len(c)):
+                ho[i] = prev
+                prev = (prev + hcl[i]) / 2.0
+        o, h, l, c = ho, np.maximum(h, np.maximum(ho, hc)), np.minimum(l, np.minimum(ho, hc)), hc
+    return o, h, l, c
+
+
+def ha_streak(ho, hc) -> np.ndarray:
+    """같은 색 HA 봉이 몇 개째 이어지나 — 양봉 +n · 음봉 −n · 시가=종가 봉은 0(연속을 끊는다).
+    '음봉으로 바뀐 두 번째 봉' = −2 가 되는 봉(crossUnder −1.5)."""
+    col = np.sign(_d(hc) - _d(ho)).tolist()
+    out = np.zeros(len(col))
+    run = 0.0
+    for i, s in enumerate(col):
+        run = (run + s if run * s > 0 else s) if s == s else 0.0
+        out[i] = run
+    return out
+
+
+def _ha_doji_mask(ho, hh, hl, hc, body: float) -> np.ndarray:
+    """HA 도지 — 몸통이 봉 길이의 body% 이하이고 위·아래 꼬리가 둘 다 있다."""
+    top, bot = np.maximum(ho, hc), np.minimum(ho, hc)
+    rng = hh - hl
+    with np.errstate(invalid="ignore"):
+        return (rng > 0) & (top - bot <= body / 100.0 * rng) & (hh > top) & (bot > hl)
+
+
+def ha_doji(ho, hh, hl, hc, body: float = 30.0, within: int = 1) -> np.ndarray:
+    """최근 within 봉(현재 포함) 중 HA 도지 봉 수. within=1 이면 지금 봉이 도지면 1.
+    '바닥에서 도지가 나왔다' = ≥ 1, '도지가 연달아' = ≥ 2."""
+    m = _ha_doji_mask(ho, hh, hl, hc, body).astype(float)
+    w = max(1, int(within))
+    cs = np.concatenate([[0.0], np.cumsum(m)])
+    idx = np.arange(len(m))
+    return cs[idx + 1] - cs[np.maximum(0, idx + 1 - w)]
+
+
+def ha_strong(ho, hh, hl, hc, tol: float = 0.0) -> np.ndarray:
+    """꼬리 없는 강한 HA 봉 — +1 아래꼬리 없는 양봉 · −1 위꼬리 없는 음봉 · 0.
+    '없음' = 그 꼬리가 봉 길이의 tol% 이하(기본 0 = 정확히 없음 — HA저가가 min(HA시가, HA종가) 와 같은 값)."""
+    top, bot = np.maximum(ho, hc), np.minimum(ho, hc)
+    lim = tol / 100.0 * (hh - hl)
+    with np.errstate(invalid="ignore"):
+        bull = (hc > ho) & (bot - hl <= lim)
+        bear = (hc < ho) & (hh - top <= lim)
+    return bull.astype(float) - bear.astype(float)
+
+
+def ha_predoji(ho, hh, hl, hc, body: float = 30.0, window: int = 5, top: bool = True) -> np.ndarray:
+    """도지 직전 봉의 몸통 끝 — 영상 '도지 이전 음봉의 몸통을 돌파하면 매수'.
+
+    봉 t 에서 최근 window 봉(t 제외) 안의 가장 최근 도지 → 그 도지 묶음(연속 도지) 바로 앞 봉을 본다.
+    top=True : 그 봉이 HA 음봉이면 몸통 위끝(HA시가) — 롱 돌파 기준선. 양봉이면 NaN.
+    top=False: 그 봉이 HA 양봉이면 몸통 아래끝(HA시가) — 숏 이탈 기준선. 음봉이면 NaN.
+    최근 window 봉 안에 도지가 없어도 NaN(조건 거짓).
+    """
+    doji = _ha_doji_mask(ho, hh, hl, hc, body).tolist()
+    hol, hcl = _d(ho).tolist(), _d(hc).tolist()
+    n = len(doji)
+    out = np.full(n, np.nan)
+    last_doji, ref = -1, float("nan")                   # 가장 최근 도지, 그 묶음 앞 봉의 기준값
+    for t in range(1, n):
+        p = t - 1                                       # 직전 봉까지 본다(지금 봉은 돌파 봉)
+        if doji[p]:
+            if not (p - 1 >= 0 and doji[p - 1]):        # 새 도지 묶음 — 그 앞 봉으로 기준값을 정한다
+                q = p - 1
+                ref = float("nan")
+                if q >= 0:
+                    red = hcl[q] < hol[q]
+                    green = hcl[q] > hol[q]
+                    if (top and red) or (not top and green):
+                        ref = hol[q]
+            last_doji = p
+        if last_doji >= 0 and t - last_doji <= window:
+            out[t] = ref
     return out
 
 

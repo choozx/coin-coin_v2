@@ -1,4 +1,4 @@
-"""이동평균 두 개 기법용 지표(SMA_SLOPE·MA_GAP·MA_CROSSES·BODY_ATR) + 방향별 청산(conditionBySide)."""
+"""이동평균 두 개 기법용 지표(SMA_SLOPE·MA_GAP·MA_CROSSES) + 방향별 청산(conditionBySide)."""
 from __future__ import annotations
 
 import os
@@ -35,13 +35,6 @@ def test_ma_crosses_counts_chop_not_trend():
     chop = 100 + np.sin(t / 3.0) * 5
     assert np.nanmax(ind.ma_crosses(trend, 22, 200, 20)) == 0
     assert np.nanmax(ind.ma_crosses(chop, 22, 200, 20)) >= 4
-
-
-def test_body_atr():
-    o = np.full(50, 100.0); c = o.copy(); c[-1] = 110.0
-    h = np.maximum(o, c) + 1; l = np.minimum(o, c) - 1
-    b = ind.body_atr(o, h, l, c, 14)
-    assert b[-1] > 3 and b[-2] == 0
 
 
 def _candles(close):

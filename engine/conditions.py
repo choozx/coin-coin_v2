@@ -41,9 +41,10 @@ def referenced_symbols(*nodes) -> set:
 class SeriesResolver:
     """operand → numpy 시계열. 지표는 키 기준 캐싱.
 
-    operand 확장 두 가지(어느 지표에나 붙는다):
-      params.htf = 상위 TF(분) — 그 TF 로 묶은 봉에서 계산하고, **다 닫힌** 상위 봉 값만 신호봉에 내린다(일봉 EMA21 수평선).
-      symbol     = 다른 심볼(예: BTCUSDT) — 그 심볼을 같은 TF 로 묶어 계산하고 같은 시각 봉에 맞춘다(알트 진입의 BTC 필터).
+    operand 확장 세 가지(어느 지표에나 붙는다):
+      params.htf   = 상위 TF(분) — 그 TF 로 묶은 봉에서 계산하고, **다 닫힌** 상위 봉 값만 신호봉에 내린다(일봉 EMA21 수평선).
+      symbol       = 다른 심볼(예: BTCUSDT) — 그 심볼을 같은 TF 로 묶어 계산하고 같은 시각 봉에 맞춘다(알트 진입의 BTC 필터).
+      params.shift = 신호봉 k 봉 전 값(파인의 x[k]) — '전봉 몸통보다 크다' = HA_BODY > HA_BODY{shift:1}.
     """
 
     def __init__(self, candles: Candles, symbol: str = None, loader=None):
@@ -121,6 +122,13 @@ class SeriesResolver:
 
     def _compute(self, operand: dict) -> np.ndarray:
         c = self.c
+        shift = int((operand.get("params") or {}).get("shift") or 0)
+        if shift > 0:                                       # k 봉 전 값 — 나머지(심볼·상위 TF)를 다 맞춘 신호봉 시계열을 민다
+            inner = dict(operand, params={k: v for k, v in operand["params"].items() if k != "shift"})
+            vals = self.resolve(inner)
+            out = np.full(len(c), np.nan)
+            out[shift:] = vals[:-shift] if shift < len(c) else out[shift:]
+            return out
         if operand.get("symbol") and operand["symbol"] != self.symbol:
             return self._other(operand)
         htf = int((operand.get("params") or {}).get("htf") or 0)
@@ -187,8 +195,6 @@ class SeriesResolver:
         if name == "MA_CROSSES":
             return ind.ma_crosses(c.close, int(params.get("fast", 22)), int(params.get("slow", period or 200)),
                                   int(params.get("window", 20)), bool(params.get("ma_only", 0)))
-        if name == "BODY_ATR":
-            return ind.body_atr(c.open, c.high, c.low, c.close, period or 14)
         if name == "VWAP_Z":
             return ind.session_vwap_z(c.open_time, c.high, c.low, c.close, c.volume)
         if name in ("TAKER_DELTA", "TAKER_DELTA_RATIO", "CVD", "CVD_EMA"):
@@ -244,8 +250,6 @@ class SeriesResolver:
         if name == "BB_PULLBACK":                           # 하단 터치 → 중간선 반등 → 고점 프랙탈: +1 롱 대기 · −1 숏 거울
             return ind.bb_pullback(c.high, c.low, c.close, period or 20, float(params.get("stddev", 2.0)),
                                    int(params.get("n", 2)), int(params.get("window", 60)))
-        if name == "MA_DIST":                               # 이평 괴리 (종가 − 이평) ÷ ATR. params sma 1/0 · atr
-            return ind.ma_dist(c.high, c.low, c.close, period or 22, bool(params.get("sma", 1)), int(params.get("atr", 14)))
         if name in ("RETRACE_UP", "RETRACE_DN"):            # 직전 파동 되돌림 %. UP=하락 뒤 반등 · DN=상승 뒤 눌림. period=창
             return ind.retrace(c.high, c.low, c.close, period or 50, name == "RETRACE_UP")
         if name in ("TRENDLINE_HIGH", "TRENDLINE_LOW"):     # 마지막 두 프랙탈 고점·저점을 이은 선을 지금 봉까지 연장. period=좌우 봉
@@ -266,6 +270,24 @@ class SeriesResolver:
         if name == "TRIANGLE_BREAK":                        # +1 위 추세선 돌파 · -1 아래 추세선 이탈 (period=피벗 좌우 봉수)
             return ind.triangle_breakout(c.high, c.low, c.close, period or 5, int(params.get("lookback", 100)),
                                          float(params.get("tol", 10)), int(params.get("within", 1)))
+        if name.startswith("HA_"):                          # 하이킨아시. params passes 2 = HA 에 HA 한 번 더(울트라 근사)
+            ho, hh, hl, hc = self._sub(("ha", int(params.get("passes", 1))),
+                                       lambda: ind.heikin_ashi(c.open, c.high, c.low, c.close, int(params.get("passes", 1))))
+            body = float(params.get("body", 30))
+            series = {
+                "HA_OPEN": lambda: ho, "HA_HIGH": lambda: hh, "HA_LOW": lambda: hl, "HA_CLOSE": lambda: hc,
+                "HA_COLOR": lambda: np.sign(hc - ho),                                   # +1 양봉 · −1 음봉
+                "HA_BODY": lambda: np.abs(hc - ho),
+                "HA_UWICK": lambda: hh - np.maximum(ho, hc), "HA_LWICK": lambda: np.minimum(ho, hc) - hl,
+                "HA_STREAK": lambda: ind.ha_streak(ho, hc),
+                "HA_DOJI": lambda: ind.ha_doji(ho, hh, hl, hc, body, int(params.get("within", 1))),
+                "HA_STRONG": lambda: ind.ha_strong(ho, hh, hl, hc, float(params.get("tol", 0))),
+                "HA_PREDOJI_TOP": lambda: ind.ha_predoji(ho, hh, hl, hc, body, int(params.get("window", 5)), True),
+                "HA_PREDOJI_BOT": lambda: ind.ha_predoji(ho, hh, hl, hc, body, int(params.get("window", 5)), False),
+            }.get(name)
+            if series is None:
+                raise ValueError(f"알 수 없는 지표: {name}")
+            return series()
         if name in ("SUPERTREND", "SUPERTREND_DIR"):
             line, d = ind.supertrend(c.high, c.low, c.close, period or 10,
                                      float(params.get("multiplier", 3.0)))
@@ -304,22 +326,29 @@ def dist_series(node: dict, resolver: SeriesResolver) -> np.ndarray:
 
 
 def evaluate(node: dict, resolver: SeriesResolver, i: int) -> bool:
-    """조건 노드를 인덱스 i에서 평가. NaN 포함 시 false."""
+    """조건 노드를 인덱스 i에서 평가. NaN 포함 시 false.
+    잎 노드(비교·교차·거리)의 within=N 은 '최근 N봉(현재 포함) 중 한 번이라도 참' — 도지가 나온 **뒤** 양봉 같은 순서 규칙용."""
     if node is None:
         return False
+    if "op" not in node and int(node.get("within") or 1) > 1:
+        return any(_leaf(node, resolver, j) for j in range(i, max(-1, i - int(node["within"])), -1))
+    return _leaf(node, resolver, i) if "op" not in node else _logic(node, resolver, i)
 
-    # 논리 노드
-    if "op" in node:
-        op = node["op"]
-        children = node["children"]
-        if op == "AND":
-            return all(evaluate(ch, resolver, i) for ch in children)
-        if op == "OR":
-            return any(evaluate(ch, resolver, i) for ch in children)
-        if op == "NOT":
-            return not evaluate(children[0], resolver, i)
-        raise ValueError(f"알 수 없는 op: {op}")
 
+def _logic(node: dict, resolver: SeriesResolver, i: int) -> bool:
+    op = node["op"]
+    children = node["children"]
+    if op == "AND":
+        return all(evaluate(ch, resolver, i) for ch in children)
+    if op == "OR":
+        return any(evaluate(ch, resolver, i) for ch in children)
+    if op == "NOT":
+        return not evaluate(children[0], resolver, i)
+    raise ValueError(f"알 수 없는 op: {op}")
+
+
+def _leaf(node: dict, resolver: SeriesResolver, i: int) -> bool:
+    """잎 노드 하나를 봉 i 에서 — within 은 evaluate 가 처리."""
     # 교차 노드
     if "cross" in node:
         if i < 1:
@@ -382,11 +411,14 @@ def operand_label(operand) -> str:
     # 차트에서 쓰는 표기와 같다. 'multiplier=3.0' 은 정확하지만 매분 찍히는 줄에선 자리만 먹는다.
     params = dict(operand.get("params") or {})
     htf = params.pop("htf", None)
+    shift = params.pop("shift", None)
     parts = [str(operand["period"])] if operand.get("period") else []
     parts += [str(v) for v in params.values()]
     lab = f"{name}({','.join(parts)})" if parts else name
     if htf:
         lab += f"@{_tf_label(int(htf))}"
+    if shift:
+        lab += f"[{int(shift)}]"                         # 파인 표기 — k 봉 전 값
     return f"{operand['symbol']}·{lab}" if operand.get("symbol") else lab
 
 
@@ -442,6 +474,19 @@ def explain(node: dict, resolver: SeriesResolver, i: int) -> dict:
         head = {"AND": "모두", "OR": "하나라도", "NOT": "아님"}[op]
         return {"ok": ok, "text": f"{head} ({met}/{len(kids)} 충족)", "children": kids}
 
+    w = int(node.get("within") or 1)
+    if w > 1:                                       # 최근 w 봉 중 가장 최근에 참이었던 봉을 보여 준다
+        for j in range(i, max(-1, i - w), -1):
+            e = _explain_leaf(node, resolver, j)
+            if e["ok"]:
+                ago = f"{i - j}봉 전" if j < i else "지금 봉"
+                return {"ok": True, "text": f"최근 {w}봉 안 — {ago}: {e['text']}", "children": []}
+        e = _explain_leaf(node, resolver, i)
+        return {"ok": False, "text": f"최근 {w}봉 안 없음 — 지금: {e['text']}", "children": []}
+    return _explain_leaf(node, resolver, i)
+
+
+def _explain_leaf(node: dict, resolver: SeriesResolver, i: int) -> dict:
     if "cross" in node:
         ln, rn = operand_label(node["left"]), operand_label(node["right"])
         arrow = "상향돌파" if node["cross"] == "crossOver" else "하향돌파"
@@ -510,7 +555,7 @@ def explain_lines(exp: dict, depth: int = 0) -> list:
 
 # 기간처럼 쓰이는 params 키(값이 클수록 더 긴 과거가 필요하다).
 _LOOKBACK_PARAMS = ("slow", "signal", "bb_length", "rsi_length", "smoothing", "smooth_k", "smooth_d",
-                    "lookback", "window")
+                    "lookback", "window", "within", "shift")
 
 # 재귀 지표(EMA·ADX·QQE·SuperTrend)는 기간만큼만 있으면 값이 나오지만 **수렴하지 않는다**
 # (TA-Lib 의 unstable period). 넉넉히 배수를 준다 — 창을 늘리는 비용보다 안 맞는 게 비싸다.
@@ -540,7 +585,15 @@ def max_lookback(*nodes, tf_min: int = None) -> int:
     for node in nodes:
         for op in collect_operands(node if isinstance(node, dict) else {}):
             best = max(best, operand_lookback(op, tf_min))
-    return best
+    return best + max((_max_within(n) for n in nodes), default=0)      # 잎의 within 만큼 더 과거를 본다
+
+
+def _max_within(node) -> int:
+    if not isinstance(node, dict):
+        return 0
+    if "op" in node:
+        return max((_max_within(ch) for ch in node["children"]), default=0)
+    return int(node.get("within") or 0)
 
 
 def required_warmup_bars(*nodes, tf_min: int = None) -> int:

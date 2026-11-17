@@ -55,6 +55,8 @@ def _node(n) -> str:
         sep = {"AND": " · ", "OR": " 또는 "}.get(n["op"], " ")
         inner = sep.join(_node(c) for c in n.get("children") or [])
         return f"NOT({inner})" if n["op"] == "NOT" else (f"({inner})" if n["op"] == "OR" else inner)
+    if int(n.get("within") or 1) > 1:
+        return f"최근 {n['within']}봉 안[{_node({k: v for k, v in n.items() if k != 'within'})}]"
     if "cross" in n:
         return f"{_opnd(n['left'])} {'▲' if n['cross'] == 'crossOver' else '▼'} {_opnd(n['right'])}"
     if "dist" in n:
@@ -112,8 +114,14 @@ def describe(p: dict) -> dict:
     lev = "동적 레버리지" if sz.get("leverageTiers") else f"{sz.get('leverage')}배"
     unit = {"equityPercent": "자본 {v:g}%", "riskPercent": "리스크 {v:g}%", "fixedQuote": "고정 ${v:g}",
             "fixedBase": "고정 {v:g}개"}.get(size.get("type"), "{v}")
+    si = sz.get("scaleIn")
+    split = ""
+    if si:
+        sp = si["spacing"]
+        split = (f" · 분할 1+{si['count']}회({sp['value']:g}{'%' if sp['type'] == 'percent' else 'ATR'} 간격"
+                 + (f", 비중×{si['multiplier']:g}" if si.get("multiplier", 1) != 1 else "") + ")")
     return {"entry": entry, "exit": " · ".join(parts) or "청산 없음",
-            "sizing": unit.format(v=size.get("value", 0)) + " · " + lev}
+            "sizing": unit.format(v=size.get("value", 0)) + " · " + lev + split}
 
 
 # ---- 저장·조회 ----

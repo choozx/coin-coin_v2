@@ -16,7 +16,7 @@
     ]
   },
   "exit": {
-    "stopLoss": { "type": "swingLow", "lookback": 20, "bufferPercent": 0.05 },
+    "stopLoss": { "type": "swing", "lookback": 20, "bufferPercent": 0.05 },
     "takeProfit": { "type": "atrMultiple", "value": 3.0 }
   },
   "sizing": {

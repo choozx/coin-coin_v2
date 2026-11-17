@@ -39,7 +39,7 @@ from .conditions import (SeriesResolver, collect_operands, operand_label,
                          referenced_symbols, required_warmup_bars)
 from .preset import Preset, load_preset_file, merge_bot_config
 from .executor import PaperExecutor, LiveExecutor
-from .backtest import BacktestConfig, Stepper
+from .backtest import BacktestConfig, Stepper, unsupported_reason
 from .binance_broker import RateLimited
 
 
@@ -194,6 +194,9 @@ class LiveTrader:
             return
         try:
             new = load_preset_file(desired, validate=True)
+            why = unsupported_reason(new, self.ex)      # 갈아끼우기 전에 — 반쯤 바뀐 상태로 남지 않게
+            if why:
+                raise ValueError(why)
         except Exception as e:
             self._strategy_error = f"{desired}: {e}"
             self._pending_strategy = desired

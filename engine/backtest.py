@@ -66,6 +66,9 @@ class _Position:
     funding_accum: float = 0.0
     be_moved: bool = False  # 본전 손절로 옮겼나 — 그 손절에 걸리면 사유를 'breakeven' 으로
     be_trigger: float = float("nan")   # 본전 트리거 가격(breakeven.type=retrace — 진입 때 파동으로 고정)
+    adds: list = None      # 분할 매수 남은 회차 [(가격, 수량), ...] — 첫 진입가에서 불리한 쪽으로 가까운 것부터
+    fills: int = 1         # 체결된 회차 수(첫 진입 포함)
+    atr_entry: float = float("nan")    # 첫 진입 때 ATR — 분할 뒤 ATR 배수 익절을 평균단가에서 다시 잡을 때
 
 
 def _size_position(sizing: dict, equity: float, price: float, leverage: int, stop_price: float):
@@ -226,6 +229,9 @@ class Stepper:
 
     def apply_preset(self, preset: Preset):
         """프리셋에서 파생되는 실행 파라미터 갱신(라이브의 전략 전환 시 재호출)."""
+        reason = unsupported_reason(preset, self.ex)
+        if reason:                             # 못 하는 걸 조용히 한 번에 사는 걸로 돌리지 않는다
+            raise ValueError(reason)
         self.preset = preset
         self.entry_rules = preset.data.get("entryRules")     # 방향별 진입 규칙(있으면 우선)
         self.entry_side = -1 if preset.direction == "short" else 1
@@ -279,24 +285,33 @@ class Stepper:
         if (pos.side == 1 and lo <= pos.liq_price) or (pos.side == -1 and hi >= pos.liq_price):
             self._close(pos.liq_price, "liquidation", ot, sb_time); return
 
+        # 2-1) 분할 매수 — 손절보다 먼저. 롱이 손절까지 내려가려면 그 위의 회차 가격을 먼저 지나므로
+        #      '더 산 뒤 손절'이 실제 순서다(반대로 하면 손실을 작게 잡는 낙관이 된다). 늘어난 수량으로 청산가를 다시 본다.
+        added = bool(pos.adds) and self._scale_in(pos, hi, lo)
+        if added and ((pos.side == 1 and lo <= pos.liq_price) or (pos.side == -1 and hi >= pos.liq_price)):
+            self._close(pos.liq_price, "liquidation", ot, sb_time); return
+
         # 3) 손절 / 트레일링 / 익절 (보수적으로 나쁜 것부터)
-        trailing = self.preset.exit.get("trailing")
+        #    분할 체결이 있던 봉은 익절·트레일링을 다음 봉부터 — 같은 1분봉 안에서 저가(추가 매수)와
+        #    고가(익절) 중 무엇이 먼저였는지 모른다. 손절은 그대로 본다.
+        trailing = self.preset.exit.get("trailing") if not added else None
+        tp = pos.tp_price if not added else float("nan")
         if pos.side == 1:
             pos.peak = max(pos.peak, hi)
             if not np.isnan(pos.stop_price) and lo <= pos.stop_price:
                 self._close(pos.stop_price, "breakeven" if pos.be_moved else "stop_loss", ot, sb_time)
             elif trailing and _trailing_hit(pos, trailing, lo, hi):
                 self._close(_trailing_stop(pos, trailing), "trailing", ot, sb_time)
-            elif not np.isnan(pos.tp_price) and hi >= pos.tp_price:
-                self._close(pos.tp_price, "take_profit", ot, sb_time, is_maker=True)
+            elif not np.isnan(tp) and hi >= tp:
+                self._close(tp, "take_profit", ot, sb_time, is_maker=True)
         else:
             pos.peak = min(pos.peak, lo)
             if not np.isnan(pos.stop_price) and hi >= pos.stop_price:
                 self._close(pos.stop_price, "breakeven" if pos.be_moved else "stop_loss", ot, sb_time)
             elif trailing and _trailing_hit(pos, trailing, lo, hi):
                 self._close(_trailing_stop(pos, trailing), "trailing", ot, sb_time)
-            elif not np.isnan(pos.tp_price) and lo <= pos.tp_price:
-                self._close(pos.tp_price, "take_profit", ot, sb_time, is_maker=True)
+            elif not np.isnan(tp) and lo <= tp:
+                self._close(tp, "take_profit", ot, sb_time, is_maker=True)
 
         # 4) 본전 손절 — 이 봉의 고·저로 트리거를 보고 옮긴다. 옮긴 손절은 **다음 봉부터** 걸린다
         #    (같은 봉 안에서 고가 뒤에 저가가 왔는지 1분봉으로는 모른다 — 낙관하지 않는다).
@@ -308,6 +323,30 @@ class Stepper:
                 save = getattr(self.ex, "_save_position", None)     # 라이브: 재시작해도 옮긴 손절을 살린다
                 if save:
                     save()
+
+    def _scale_in(self, pos, hi, lo) -> bool:
+        """이 1분봉이 닿은 분할 회차를 산다(가격 = 그 회차 지정가). 하나라도 샀으면 True.
+
+        손절 너머(롱이면 손절가 이하)의 회차는 손절이 먼저라 못 산다 — 남은 회차를 버린다.
+        산 뒤: 평균단가·수량·증거금은 주문기가, 청산가·익절가는 여기서 다시 잡는다(진입 때와 같은 식).
+        """
+        bought = False
+        while pos.adds:
+            level, q = pos.adds[0]
+            if not ((lo <= level) if pos.side == 1 else (hi >= level)):
+                break
+            if not np.isnan(pos.stop_price) and (level - pos.stop_price) * pos.side <= 0:
+                pos.adds = []
+                break
+            pos.adds = pos.adds[1:]
+            self.ex.scale_in(level, q, is_maker=True)       # 미리 걸어 둔 지정가 — 익절과 같은 maker 가정
+            pos.fills += 1
+            bought = True
+        if bought:
+            pos.liq_price = bm.liquidation_price(pos.entry_price, pos.qty, pos.leverage, pos.side,
+                                                 self.cfg.bracket, wallet_balance=pos.margin)
+            pos.tp_price = _retarget_tp(self.preset.exit.get("takeProfit"), pos)
+        return bought
 
     def entry_block(self, signal, resolver, sb, fill_time):
         """(진입 방향 or None, 막힌 사유 or None) — 진입 판정을 한 곳에 모은 것.
@@ -504,6 +543,43 @@ def _breakeven_level(pos: _Position, be: dict, close: float):
     return lvl
 
 
+def unsupported_reason(preset: Preset, executor) -> str | None:
+    """이 주문기로 못 돌리는 프리셋이면 사유. 실거래 주문기는 아직 분할 매수(추가 주문)를 못 낸다."""
+    if (preset.sizing or {}).get("scaleIn") and not callable(getattr(executor, "scale_in", None)):
+        return (f"'{preset.name}' 은 분할 매수(sizing.scaleIn)를 써요 — 실거래 주문기는 아직 분할 매수를 지원하지 않아요. "
+                "백테스트·페이퍼에서만 돌릴 수 있어요")
+    return None
+
+
+def _scale_plan(si: dict, price: float, side: int, atr_val: float):
+    """분할 계획 → (첫 회차 비중, [(k 회차 가격, 비중), ...]). 비중 합 = 1. 간격을 못 정하면 None."""
+    n = int(si["count"])
+    m = float(si.get("multiplier", 1.0))
+    w = [m ** k for k in range(n + 1)]
+    tot = sum(w)
+    sp = si["spacing"]
+    step = price * float(sp["value"]) / 100.0 if sp["type"] == "percent" else float(sp["value"]) * atr_val
+    if not np.isfinite(step) or step <= 0:
+        return None
+    return w[0] / tot, [(price - side * k * step, w[k] / tot) for k in range(1, n + 1)]
+
+
+def _retarget_tp(tp_cfg, pos: _Position) -> float:
+    """분할 체결 뒤 익절가 — 진입가 기준 익절(percent·atrMultiple·riskReward)은 평균단가에서 다시, 나머지는 그대로."""
+    if not tp_cfg:
+        return pos.tp_price
+    t, e, s = tp_cfg.get("type"), pos.entry_price, pos.side
+    if t == "percent":
+        lvl = e * (1 + s * float(tp_cfg["value"]) / 100.0)
+    elif t == "atrMultiple":
+        lvl = e + s * float(tp_cfg["value"]) * pos.atr_entry
+    elif t == "riskReward":
+        lvl = e + s * float(tp_cfg["value"]) * abs(e - pos.stop_price)
+    else:
+        return pos.tp_price
+    return _valid_level(lvl, e, s)
+
+
 def _trailing_stop(pos: _Position, trailing: dict) -> float:
     cb = trailing["callbackPercent"] / 100.0
     if pos.side == 1:
@@ -580,10 +656,6 @@ def _entry_block_reason(sb_time, tf_ms, ot, filt, last_exit_time, cfg):
     return None
 
 
-def _entry_allowed(sb, ot, filt, last_exit_idx, cfg) -> bool:
-    return _entry_block_reason(sb, ot, filt, last_exit_idx, cfg) is None
-
-
 def _open_position(preset, sizing, ex, price, ot, sb, side, lev, equity, cfg, atr_series, signal,
                    entry_maker=False, sb_time=None, resolver=None, scale=1.0):
     atr_val = atr_series[sb]
@@ -609,6 +681,15 @@ def _open_position(preset, sizing, ex, price, ot, sb, side, lev, equity, cfg, at
     if margin > cap:                         # 초과분은 상한으로 클램프(수수료·펀딩 여유 확보)
         margin = cap
         qty = margin * lev / price
+    adds = None
+    si = sizing.get("scaleIn")
+    if si:                                   # 분할 매수: 위 수량이 '다 샀을 때' 전체 — 회차 비중대로 나눈다
+        plan = _scale_plan(si, price, side, atr_val)
+        if plan is None:
+            return None                      # 간격을 못 정함(ATR 워밍업) — 한 번에 다 사지 않는다
+        w0, rest = plan
+        adds = [(lvl, qty * w) for lvl, w in rest]
+        qty, margin = qty * w0, margin * w0
 
     liq = bm.liquidation_price(price, qty, lev, side, cfg.bracket, wallet_balance=margin)
 
@@ -629,7 +710,7 @@ def _open_position(preset, sizing, ex, price, ot, sb, side, lev, equity, cfg, at
         side=side, entry_time=ot, entry_price=price, qty=qty, leverage=lev,
         margin=margin, liq_price=liq, stop_price=stop_price, tp_price=tp_price,
         # 진입 신호봉 '시각'. 호출부가 안 주면 signal 에서 뽑는다(signal=None 인 단위테스트 대비).
-        entry_fee=entry_fee, peak=price, be_trigger=be_trig,
+        entry_fee=entry_fee, peak=price, be_trigger=be_trig, adds=adds, atr_entry=atr_val,
         entry_signal_time=int(sb_time if sb_time is not None
                               else (signal.open_time[sb] if signal is not None else ot)),
     )

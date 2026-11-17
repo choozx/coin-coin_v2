@@ -49,6 +49,9 @@ class Executor:
     def accrue_funding(self, mark_price: float, funding_rate: float) -> None:
         """보유 중 펀딩 정산(8시간마다). 기본 구현 없음(페이퍼만 사용)."""
 
+    # scale_in(price, qty, is_maker) — 분할 매수 추가 체결. 지원하는 주문기만 정의한다:
+    # 없으면 backtest.unsupported_reason 이 분할 매수 프리셋을 시작 전에 거부한다(실거래는 아직 없음).
+
 
 class PaperExecutor(Executor):
     """페이퍼 트레이딩 — 로컬 잔고/포지션 시뮬레이션. 백테스트와 동일한 수수료·손익 공식."""
@@ -79,7 +82,7 @@ class PaperExecutor(Executor):
         exit_fee = bm.trade_fee(exit_price, pos.qty, taker=not is_maker,
                                 taker_fee=self.taker_fee, maker_fee=self.maker_fee,
                                 maker_fill_ratio=self.maker_fill_ratio)
-        gross = pos.side * (exit_price - pos.entry_price) * pos.qty
+        gross = pos.side * (exit_price - pos.entry_price) * pos.qty     # 분할 매수면 entry_price 가 평균단가
         fees = pos.entry_fee + exit_fee
         pnl = gross - fees + pos.funding_accum      # 진입+청산 수수료, 펀딩 누적 반영
         self._equity += pnl
@@ -87,10 +90,24 @@ class PaperExecutor(Executor):
             side=pos.side, entry_time=pos.entry_time, entry_price=pos.entry_price,
             exit_time=exit_time, exit_price=exit_price, qty=pos.qty, leverage=pos.leverage,
             pnl=pnl, fees=fees, funding=pos.funding_accum, exit_reason=reason,
-            stop_price=pos.stop_price, tp_price=pos.tp_price)      # 차트·원장용
+            stop_price=pos.stop_price, tp_price=pos.tp_price,      # 차트·원장용
+            adds=getattr(pos, "fills", 1) - 1)
         self.trades.append(trade)
         self.position = None
         return trade
+
+    def scale_in(self, price: float, qty: float, is_maker: bool = False) -> None:
+        """분할 매수 추가 체결 — 평균단가·수량·증거금·진입 수수료를 합친다(청산가·익절가는 엔진이 다시 잡는다)."""
+        pos = self.position
+        if pos is None:
+            raise RuntimeError("추가할 포지션 없음")
+        fee = bm.trade_fee(price, qty, taker=not is_maker, taker_fee=self.taker_fee, maker_fee=self.maker_fee,
+                           maker_fill_ratio=self.maker_fill_ratio)
+        total = pos.qty + qty
+        pos.entry_price = (pos.entry_price * pos.qty + price * qty) / total
+        pos.qty = total
+        pos.margin += price * qty / max(1, pos.leverage)
+        pos.entry_fee += fee
 
     def accrue_funding(self, mark_price: float, funding_rate: float) -> None:
         if self.position is None:

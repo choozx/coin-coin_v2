@@ -24,6 +24,7 @@ class Trade:
     exit_reason: str     # take_profit / stop_loss / breakeven / trailing / signal / time / liquidation
     stop_price: float = float("nan")   # 진입 시점 손절가 (차트용, nan 가능)
     tp_price: float = float("nan")     # 진입 시점 익절가 (차트용, nan 가능)
+    adds: int = 0                      # 분할 매수로 더 산 횟수(entry_price 는 평균단가, qty 는 합계)
 
 
 @dataclass

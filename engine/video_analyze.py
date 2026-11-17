@@ -146,7 +146,7 @@ def _engine_capabilities() -> str:
             f"- 지표: {', '.join(names)} (가격 source: open/high/low/close/volume)\n"
             "  (뜻: SMA_SLOPE=이평 기울기(%), MA_ANGLE=이평 각도(도, ATR 기준 — 봉당 0.22 ATR=45°, 75이평 상위 25%≈20°·상위 10%≈28°; "
             "차트 각도 'N도 이상' 규칙을 이걸로), MA_GAP=두 이평 간격, "
-            "MA_CROSSES=최근 window 봉 동안 교차 횟수(params ma_only=1 이면 두 이평끼리만 — 이평 엉킴=횡보 판정, 적을수록 추세장), RVOL=상대 거래량, BODY_ATR=몸통/ATR, "
+            "MA_CROSSES=최근 window 봉 동안 교차 횟수(params ma_only=1 이면 두 이평끼리만 — 이평 엉킴=횡보 판정, 적을수록 추세장), RVOL=상대 거래량, "
             "TAKER_DELTA·CVD=시장가 매수-매도, RSI_DIV=RSI 강세/약세 다이버전스(+CVD 확인 옵션), ATR_RANK=변동성 백분위, PIN_BAR=핀바(꼬리 긴 봉, ±1, 최근 N봉 옵션), "
             "TRIANGLE_BREAK=삼각형 수렴 돌파(확정 피벗 고점 둘·저점 둘의 추세선, ±1), "
             "FRACTAL=윌리엄스 프랙탈(확정 봉에 +1 저점/−1 고점, period=좌우 봉), "
@@ -161,25 +161,36 @@ def _engine_capabilities() -> str:
             "BB_PULLBACK=볼린저 눌림 상태(+1 롱 대기: 하단 터치 → 중간선 도달 → 고점 프랙탈 확정 후 종가가 그 고점을 넘을 때까지, −1 숏 거울; params stddev·n·window), "
             "PULLBACK_FRACTAL=눌림→프랙탈→이평 재돌파(롱 +1: 종가<이평 → 저점 프랙탈 확정 → 이평 상향 돌파, 숏 −1 거울; "
             "period=이평 기간, params sma(1=SMA, 0=EMA)·n 프랙탈 봉·window), "
-            "MA_DIST=이평 괴리 (종가 − 이평) ÷ ATR(부호 있음, params sma 1/0 — '22이평 아래로 크게 벌어짐'은 MA_DIST(22) < −2), "
             "RETRACE_UP·RETRACE_DN=직전 파동 되돌림 %(최근 period 봉: UP=최고가 → 그 뒤 최저가 사이에서 종가가 반등한 비율, "
             "DN=최저가 → 그 뒤 최고가 사이에서 눌린 비율 — '하락폭의 75% 이상 반등'은 RETRACE_UP > 75), "
             "TRENDLINE_HIGH·TRENDLINE_LOW=확정된 마지막 두 프랙탈 고점·저점을 이은 직선을 지금 봉까지 연장한 값(period=좌우 봉 — "
             "'하락 추세선 돌파'는 close crossOver TRENDLINE_HIGH AND PIVOT_HIGH{nth:0} < PIVOT_HIGH{nth:1}), "
+            "HA_*=하이킨아시(HA_OPEN·HA_HIGH·HA_LOW·HA_CLOSE=HA 시세, HA_COLOR=+1 양봉·−1 음봉, HA_BODY=몸통 크기, "
+            "HA_UWICK·HA_LWICK=위·아래 꼬리 길이, HA_STREAK=같은 색 연속 봉 수(양봉 +n·음봉 −n — '음봉으로 바뀐 두 번째 봉'은 HA_STREAK crossUnder −1.5), "
+            "HA_DOJI=최근 params within 봉 중 HA 도지 수(params body=몸통 ≤ 봉 길이 %, 기본 30 — '도지가 연달아'는 HA_DOJI{within:5} ≥ 2), "
+            "HA_STRONG=꼬리 없는 강한 봉(+1 아래꼬리 없는 양봉·−1 위꼬리 없는 음봉, params tol=허용 %), "
+            "HA_PREDOJI_TOP·HA_PREDOJI_BOT=최근 params window 봉 안 도지 묶음 바로 앞 HA 음봉의 몸통 위끝·HA 양봉의 몸통 아래끝"
+            "('도지 이전 음봉 몸통 돌파'는 HA_CLOSE > HA_PREDOJI_TOP), 모든 HA_* 에 params passes 2 = HA 에 HA 한 번 더(울트라 하이킨아시 근사 — 원본 공식 비공개), "
             "HAWKEYE·QQE_MOD=트레이딩뷰 공개 지표 재현, CDL_*=캔들 반전 패턴, PLUS_DI/MINUS_DI/ADX=DMI)\n"
             "- 어느 지표든: params htf=상위 TF 분(60·240·1440 — 그 TF 의 다 닫힌 봉 값. '일봉 EMA21 수평선을 5분봉에서'는 EMA(21){htf:1440}), "
-            "symbol=다른 코인(예: BTCUSDT — 같은 TF 같은 시각. '비트가 EMA21 위일 때만 알트 진입'은 BTCUSDT 종가 > BTCUSDT EMA(21))\n"
+            "symbol=다른 코인(예: BTCUSDT — 같은 TF 같은 시각. '비트가 EMA21 위일 때만 알트 진입'은 BTCUSDT 종가 > BTCUSDT EMA(21)), "
+            "params shift=k 봉 전 값('전봉 몸통보다 크다'=HA_BODY > HA_BODY{shift:1}, '직전 봉 거래량이 적었다'=RVOL{shift:1} < 1)\n"
             "- 조건: 비교(<,>,…), 교차(crossOver/crossUnder), AND/OR/NOT, 롱/숏 규칙 따로, "
             "거리 비교 (A − B) ÷ ATR(14) cmp k (절댓값 옵션 — '고가가 직전 고가보다 훨씬 높다'=(high − PREV_HIGH(1))÷ATR ≥ 0.3, "
-            "'두 선 사이가 좁아짐'=|EMA21 − 일봉 EMA21|÷ATR < 0.5)\n"
+            "'두 선 사이가 좁아짐'=|EMA21 − 일봉 EMA21|÷ATR < 0.5, "
+            "'22이평 아래로 크게 벌어짐(이평 괴리)'=(close − SMA(22))÷ATR < −2, '몸통이 긴 봉'=|close − open|÷ATR > 1.5), "
+            "조건마다 within=N(최근 N봉 중 한 번이라도 참 — '최근 5봉 안에 EMA20 을 터치했고 지금 양봉'은 HA_LOW ≤ EMA(20) within 5 AND HA_COLOR > 0)\n"
             f"- 손절·익절 가격: {', '.join(targets)} (swing=최근 N봉 전저/전고 — N=1 이면 진입 신호봉의 저가/고가, riskReward=손절폭 n배, "
             "indicator=진입 시점 지표 값 ± 여유% 에 손절 고정 — 예: EMA50 바로 아래, "
             "retrace=진입 때 직전 파동(lookback 봉)의 n% 되돌림 가격에 익절 — '직전 하락폭의 25% 반등에서 익절')\n"
             "- 청산: 조건 청산(지표 조건), 트레일링, 시간 청산(N봉), SuperTrend 뒤집힘 청산, "
             "본전 손절(수익이 손절폭 n배 · n% · 직전 파동 n% 되돌림 가격에 닿으면 손절을 진입가 ± 여유%로 옮김)\n"
             "- 필터: 쿨다운, 펀딩 시각 회피 · 사이징: 자본%·고정금액·리스크%, 진입 규칙마다 비중 배수(예: 평소 10% · 강한 신호 규칙 ×3) · 타임프레임 1m~1d\n"
+            "- 분할 매수(물타기, 가격 간격): 사이징 전체를 1+N 회차로 나눠 첫 회차는 신호 때, 나머지는 첫 진입가에서 불리한 쪽으로 "
+            "n%(또는 ATR×k)씩 갈 때마다 지정가로 산다(최대 10회차, 회차 비중 배수 — 1=균등). 손절은 첫 진입 때 값 고정, "
+            "익절(%·ATR·손익비)은 평균단가 기준. 백테스트 전용(실거래 봇은 아직 거부)\n"
             "- 없는 것: 손으로 고른 점을 잇는 사선(피벗 두 개를 잇는 TRENDLINE 은 있음), 거리 비교 말고 한 조건 안의 임의 산술, "
-            "분할 진입/청산, 물타기, 주식·지수(코스피 등) 데이터")
+            "신호가 다시 나올 때 더 사는 불타기, 분할 청산, 주식·지수(코스피 등) 데이터")
 
 
 def _claude(prompt: str, schema: dict, system: str, timeout: int = 600) -> tuple[dict, dict]:
@@ -513,8 +524,8 @@ def unexclude_channel(params: dict) -> dict:
 
 
 def search(params: dict) -> dict:
-    """{q, sort: relevance|date} → {items: [...], hidden: 제외 채널이라 뺀 개수}. 이미 분석한 영상은 analyzed=True,
-    폐기한 영상은 discarded={at, reason, presets}."""
+    """{q, sort: relevance|date} → {items: [...], hidden: 제외 채널이라 뺀 개수, seen: 이미 분석·폐기해서 뺀 개수}.
+    검색은 새 영상을 찾으려고 쓰니 분석한 영상(폐기 포함)은 빼고 개수만 알린다 — 다시 보려면 왼쪽 목록에서."""
     q = (params.get("q") or "").strip()[:200]
     if not q:
         raise ValueError("검색어를 넣어 주세요")
@@ -532,7 +543,7 @@ def search(params: dict) -> dict:
         tail = (r.stderr or "").strip().splitlines()[-1:] or [""]
         raise RuntimeError(f"검색 실패 — {tail[0][:200]}")
     ex = _excluded()
-    items, hidden = [], 0
+    items, hidden, seen = [], 0, 0
     for e in entries:
         vid = e.get("id") or ""
         if not re.fullmatch(r"[A-Za-z0-9_-]{11}", vid):
@@ -540,12 +551,14 @@ def search(params: dict) -> dict:
         if e.get("channel_id") in ex:
             hidden += 1
             continue
+        if os.path.exists(os.path.join(CACHE_DIR, vid, "analysis.json")) or discard_state(vid):
+            seen += 1
+            continue
         items.append({"id": vid, "url": f"https://www.youtube.com/watch?v={vid}", "title": e.get("title") or "",
                       "channel": e.get("channel") or "", "channelId": e.get("channel_id") or "",
                       "duration": e.get("duration"), "views": e.get("view_count"),
-                      "analyzed": os.path.exists(os.path.join(CACHE_DIR, vid, "analysis.json")),
-                      "discarded": discard_state(vid)})                 # 폐기한 영상은 검색에서도 표시(이유 포함)
-    return {"items": items, "hidden": hidden}
+                      "analyzed": False, "discarded": None})            # 이 검색 결과에서 분석·폐기하면 화면이 갱신
+    return {"items": items, "hidden": hidden, "seen": seen}
 
 
 def list_analyses() -> list:
@@ -645,6 +658,7 @@ def _draft_schema(indicators: list) -> dict:
         "dist": {"type": "string", "enum": ["none", "atr", "absAtr"],
                  "description": "거리 비교일 때: (left − right) ÷ ATR(absAtr 는 절댓값) op dist_value. 보통 비교면 none"},
         "dist_value": {"type": "number", "description": "dist 가 none 이 아닐 때 ATR 배수 k"},
+        "within_bars": {"type": "integer", "description": "최근 N봉 중 한 번이라도 참이면 참(0·1 = 지금 봉만)"},
         "note": {"type": "string", "description": "이 조건이 영상의 어떤 규칙인지 짧게"}},
         "required": ["left", "op", "right", "note"]}
     exit_group = {"type": "object", "properties": {"conds": {"type": "array", "items": leaf}}, "required": ["conds"]}
@@ -673,6 +687,12 @@ def _draft_schema(indicators: list) -> dict:
                                     "activation_pct": {"type": "number", "description": "이 수익 % 에 닿은 뒤부터 작동(0=즉시)"}},
                      "required": ["callback_pct"]},
         "time_stop_bars": {"type": "integer", "description": "N봉 뒤 청산, 0=없음"},
+        "scale_in": {"type": "object", "description": "분할 매수(영상에 '나눠서 산다'가 있을 때만). 없으면 생략",
+                     "properties": {"count": {"type": "integer", "description": "추가 회차 수(첫 진입 제외, 1~10)"},
+                                    "spacing_type": {"type": "string", "enum": ["percent", "atrMultiple"]},
+                                    "spacing_value": {"type": "number", "description": "회차 간격 — 첫 진입가의 % 또는 ATR 배수"},
+                                    "multiplier": {"type": "number", "description": "회차 비중 배수(1=균등)"}},
+                     "required": ["count", "spacing_type", "spacing_value"]},
         "breakeven": {"type": "object", "description": "본전 손절(영상에 있을 때만). 없으면 생략",
                       "properties": {"type": {"type": "string", "enum": ["riskReward", "percent", "retrace"]},
                                      "value": {"type": "number", "description": "riskReward=손절폭 n배 · percent=수익 % · retrace=직전 파동 n% 되돌림 가격"},
@@ -704,8 +724,12 @@ def _operand_node(o: dict):
 def _leaf_node(c: dict) -> dict:
     L, R = _operand_node(c["left"]), _operand_node(c["right"])
     if c.get("dist") in ("atr", "absAtr") and not c["op"].startswith("cross"):
-        return {"dist": c["dist"], "left": L, "right": R, "cmp": c["op"], "value": float(c.get("dist_value") or 0)}
-    return {"cross": c["op"], "left": L, "right": R} if c["op"].startswith("cross") else {"left": L, "cmp": c["op"], "right": R}
+        node = {"dist": c["dist"], "left": L, "right": R, "cmp": c["op"], "value": float(c.get("dist_value") or 0)}
+    else:
+        node = {"cross": c["op"], "left": L, "right": R} if c["op"].startswith("cross") else {"left": L, "cmp": c["op"], "right": R}
+    if int(c.get("within_bars") or 0) > 1:
+        node["within"] = int(c["within_bars"])
+    return node
 
 
 def _exit_node(x: dict):
@@ -724,11 +748,12 @@ def _custom_fields(c: dict) -> dict:
             return {pre: o.get("source") or "close", pre[0] + "p": "", pre[0] + "params": "", **sym}
         return {pre: o["indicator"], pre[0] + "p": str(int(o.get("period") or 0) or ""),
                 pre[0] + "params": (o.get("params_json") or "").strip(), **sym}
+    within = str(int(c.get("within_bars") or 0) or 1)
     if c.get("dist") in ("atr", "absAtr") and not c["op"].startswith("cross"):     # 거리 조건 → '직접 거리 조건(고급)'
         r = side(c["right"], "right")
-        return {"type": "customDist", "mode": c["dist"], "cmp": c["op"], "k": str(c.get("dist_value") or 0),
+        return {"type": "customDist", "mode": c["dist"], "cmp": c["op"], "k": str(c.get("dist_value") or 0), "within": within,
                 **side(c["left"], "left"), "right": r["right"], "rp": r["rp"], "rparams": r["rparams"], "rsym": r["rsym"]}
-    f = {"type": "custom", "op": c["op"], **side(c["left"], "left")}          # left · lp · lparams · lsym
+    f = {"type": "custom", "op": c["op"], "within": within, **side(c["left"], "left")}   # left · lp · lparams · lsym
     if c["right"].get("kind") == "number":
         f.update({"rk": "num", "rv": str(c["right"].get("value", 0))})
     else:
@@ -740,14 +765,14 @@ def _custom_fields(c: dict) -> dict:
 _FORM_DEFAULTS = {
     "symbol": "BTCUSDT", "days": "365", "equity": "10000",
     "slType": "off", "slValue": "1.5", "slLookback": "20", "slBuffer": "0", "slInd": "EMA", "slIndPeriod": "50",
-    "slStPeriod": "10", "slStMult": "3",
-    "tpType": "off", "tpValue": "3", "tpLookback": "20", "tpBuffer": "0", "tpStPeriod": "10", "tpStMult": "3",
+    "tpType": "off", "tpValue": "3", "tpLookback": "20", "tpBuffer": "0",
     "exitCondEnabled": False, "exitCondInd": "RSI", "exitCondPeriod": "14", "exitCondCmp": ">", "exitCondValue": "55",
     "exitCustom": "", "timeStopBars": "0", "exitStEnabled": False, "exitStPeriod": "14", "exitStMult": "2.5",
     "trailingEnabled": False, "trailingCallback": "0.8", "trailingActivation": "1",
     "beEnabled": False, "beType": "riskReward", "beValue": "1", "beOffset": "0", "beLookback": "50",
     "leverage": "10", "levTierEnabled": False, "sizeType": "equityPercent", "sizeValue": "10",
-    "minLiqBuffer": "0", "cooldownBars": "0", "avoidFundingMin": "2", "entryType": "taker", "makerTimeoutSeconds": "60",
+    "minLiqBuffer": "0", "siEnabled": False, "siCount": "2", "siType": "percent", "siValue": "1", "siMult": "1",
+    "cooldownBars": "0", "avoidFundingMin": "2", "entryType": "taker", "makerTimeoutSeconds": "60",
 }
 
 
@@ -779,6 +804,10 @@ def _draft_to_form(d: dict) -> tuple[dict, dict]:
     if float(tr.get("callback_pct") or 0) > 0:
         form.update(trailingEnabled=True, trailingCallback=str(tr["callback_pct"]),
                     trailingActivation=str(float(tr.get("activation_pct") or 0)))
+    si = d.get("scale_in") or {}
+    if int(si.get("count") or 0) > 0 and float(si.get("spacing_value") or 0) > 0:
+        form.update(siEnabled=True, siCount=str(min(10, int(si["count"]))), siType=si.get("spacing_type") or "percent",
+                    siValue=str(si["spacing_value"]), siMult=str(float(si.get("multiplier") or 1)))
     be = d.get("breakeven") or {}
     if float(be.get("value") or 0) > 0:
         form.update(beEnabled=True, beType=be.get("type") or "riskReward", beValue=str(be["value"]),
@@ -814,7 +843,7 @@ _DRAFT_RULES = (
     "- status 가 ready 인 규칙만 쓴다. buildable·impossible 규칙은 넣지 말고 excluded 에 '규칙 — 이유'로 적는다.\n"
     "- 진입: groups(그룹 안 AND). 방향이 both 면 롱 그룹과 숏 그룹을 따로(숏은 롱의 대칭, 해석이면 assumed 에).\n"
     "- 청산: exit_long / exit_short 는 그룹 목록(그룹끼리 OR, 그룹 안 AND) — '횡보일 때(ADX<20) RSI 가 직전 저점을 깨면 청산'처럼 "
-    "동시에 맞아야 하는 조건은 한 그룹에. 트레일링 손절(고점 대비 % 되돌림)은 trailing, 본전 손절은 breakeven. 가격 손절·익절은 stop / take (swing=최근 N봉 전저·전고, riskReward=손절폭 n배, "
+    "동시에 맞아야 하는 조건은 한 그룹에. 트레일링 손절(고점 대비 % 되돌림)은 trailing, 본전 손절은 breakeven, 분할 매수(나눠 사기·물타기)는 scale_in(수치가 없으면 2회 추가·1% 간격·균등을 가정하고 assumed 에). 가격 손절·익절은 stop / take (swing=최근 N봉 전저·전고, riskReward=손절폭 n배, "
     "stop.type=indicator 는 진입 때 이평(ind·ind_period) 값 ± buffer_pct 에 손절 — 'EMA50 바로 아래' 같은 규칙, "
     "take.type=retrace 는 진입 때 직전 파동(lookback 봉)의 value% 되돌림 가격 — '하락폭의 25% 반등에서 익절').\n"
     "- '크게·훨씬' 같은 거리 규칙은 dist(atr/absAtr) + dist_value(ATR 배수), 다른 코인 조건은 operand.symbol, 상위 TF 는 params_json 의 htf(분). "
