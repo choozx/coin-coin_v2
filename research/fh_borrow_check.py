@@ -18,6 +18,10 @@ FH3 결과: 정산을 1초만 걸치는 '선물 롱 + 현물 숏' 헤지는 수�
     python research/fh_borrow_check.py                  # 지금 펀딩 ≤ −0.1% 인 코인들
     python research/fh_borrow_check.py --th=0.05        # 기준 −0.05%
     python research/fh_borrow_check.py --assets=KAVA,AXS,ONT   # 지정 코인(펀딩 무관)
+    nohup python research/fh_borrow_check.py --watch=24 > ~/borrow_watch.log 2>&1 &   # 24시간 정시마다 반복 조회
+
+  --watch 판독: maxBorrowable 이 −3045 면 '없음'(풀 바닥), 오류 없이 수량이 오면 '있음'(담보 0 이면 0개여도 풀은 있음).
+  결과는 data/fh_probe/ 또는 ~/fh_probe/ 의 borrow_*.json(l).
 """
 from __future__ import annotations
 
@@ -210,15 +214,84 @@ def main():
               f"최고 {max(rates)*100:.3f}%   | 극단 펀딩 날: {cells}")
         time.sleep(0.2)
 
-    os.makedirs(os.path.join(ROOT, "data", "fh_probe"), exist_ok=True)
-    out = os.path.join(ROOT, "data", "fh_probe", f"borrow_{datetime.now(timezone.utc):%Y%m%d_%H%M}.json")
-    try:
-        json.dump(dict(t=now, collateral=coll, rows=rows), open(out, "w"), ensure_ascii=False, indent=1)
-    except OSError:
-        out = os.path.expanduser(f"~/fh_probe_borrow_{datetime.now(timezone.utc):%Y%m%d_%H%M}.json")
-        json.dump(dict(t=now, collateral=coll, rows=rows), open(out, "w"), ensure_ascii=False, indent=1)
+    out = _save(f"borrow_{datetime.now(timezone.utc):%Y%m%d_%H%M}.json",
+                json.dumps(dict(t=now, collateral=coll, rows=rows), ensure_ascii=False, indent=1))
     print(f"\n저장 {out}")
 
 
+def _save(name, text, append=False):
+    """data/fh_probe 에 못 쓰면(서버는 root 소유 도커 볼륨) ~/fh_probe 로."""
+    for d in (os.path.join(ROOT, "data", "fh_probe"), os.path.expanduser("~/fh_probe")):
+        try:
+            os.makedirs(d, exist_ok=True)
+            p = os.path.join(d, name)
+            with open(p, "a" if append else "w", encoding="utf-8") as f:
+                f.write(text)
+            return p
+        except OSError:
+            continue
+    raise OSError("저장할 곳이 없어요(data/fh_probe · ~/fh_probe 둘 다 쓰기 불가)")
+
+
+def _probe(api, th, borrowable):
+    """지금 펀딩 ≤ −th 이고 마진 상장된 코인마다 maxBorrowable 한 번. → [(코인, 펀딩, 상태, 수량)]"""
+    out = []
+    for c in candidates(api, th):
+        a = c["asset"]
+        if borrowable and a not in borrowable:
+            continue
+        try:
+            mb = api.get(SAPI, "/sapi/v1/margin/maxBorrowable", {"asset": a}, signed=True)
+            out.append((a, c["rate"], "ok", float(mb.get("amount", 0))))
+        except RuntimeError as e:
+            out.append((a, c["rate"], "empty" if "-3045" in str(e) else "err:" + str(e)[-60:], None))
+        time.sleep(0.3)
+        if len(out) >= MAX_ASSETS:
+            break
+    return out
+
+
+def watch(hours):
+    """정시(1h·4h·8h 정산은 전부 정시)마다 T−90초 와 T+5분 에 차입 물량을 조회해 JSONL 로 남긴다. 조회만."""
+    api = Api(*_env())
+    api.sync()
+    th = float(_arg("th", "0.1")) / 100
+    borrowable = {a["assetName"]: bool(a.get("isBorrowable")) for a in api.get(SAPI, "/sapi/v1/margin/allAssets")}
+    name = f"borrow_watch_{datetime.now(timezone.utc):%Y%m%d_%H%M}.jsonl"
+    end = time.time() + hours * 3600
+    H = 3600
+    tally = {}
+    print(f"감시 {hours:g}시간 · 펀딩 ≤ −{th*100:g}% · 정시마다 T−90초·T+5분 조회 (조회만, 주문·차입 없음)", flush=True)
+    while True:
+        T = (int(time.time()) // H + 1) * H
+        for off, tag in ((-90, "직전"), (300, "직후")):
+            at = T + off
+            if at > end:
+                break
+            while time.time() < at:
+                time.sleep(min(30, max(0.5, at - time.time())))
+            api.sync()
+            try:
+                res = _probe(api, th, borrowable)
+            except Exception as e:                                   # 네트워크 일시 오류로 감시가 죽지 않게
+                print(f"{datetime.fromtimestamp(T, timezone.utc):%m-%d %H:%M} {tag} 조회 실패 {e}", flush=True)
+                continue
+            for a, r, st, amt in res:
+                _save(name, json.dumps(dict(T=T * 1000, tag=tag, t=int(time.time() * 1000), asset=a, rate=r,
+                                            status=st, amount=amt), ensure_ascii=False) + "\n", append=True)
+                k = tally.setdefault(a, [0, 0])
+                k[0] += 1
+                k[1] += st == "ok"
+            cells = " · ".join(f"{a} {r*100:+.2f}% {'있음' if st == 'ok' else ('없음' if st == 'empty' else st)}"
+                               for a, r, st, _ in res) or "대상 없음"
+            print(f"{datetime.fromtimestamp(T, timezone.utc):%m-%d %H:%M} {tag}: {cells}", flush=True)
+        if T + 300 > end:
+            break
+    print("\n■ 코인별 '물량 있음' 비율: " + (" · ".join(f"{a} {ok}/{n}" for a, (n, ok) in
+                                                    sorted(tally.items(), key=lambda x: -x[1][0])) or "없음"))
+    print(f"기록 {_save(name, '', append=True)}")
+
+
 if __name__ == "__main__":
-    main()
+    w = _arg("watch")
+    watch(float(w)) if w else main()
