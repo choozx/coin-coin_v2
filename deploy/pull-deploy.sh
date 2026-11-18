@@ -27,7 +27,7 @@ set -euo pipefail
 # (bash는 함수 정의를 통째로 파싱한 뒤 실행 → 중간에 파일이 바뀌어도 영향 없음).
 main() {
     cd "${REPO_DIR:-$HOME/auto_trading}"
-    local state_file=".deploy-applied" fail_file=".deploy-pull-fails"
+    local state_file=".deploy-applied" fail_file=".deploy-pull-fails" partial_file=".deploy-partial"
 
     git fetch -q origin prod
     local remote applied image
@@ -88,9 +88,19 @@ main() {
     fi
     rm -f "$fail_file"
 
+    # ①' 트레이더만 연기된 채 나머지는 이미 이 커밋으로 올렸으면(.deploy-partial) 트레이더만 다시 본다.
+    #   예전엔 연기 중 2분마다 나머지를 다시 'up -d' 하고(변화 없음) 🚀·⏸ 알림을 매번 보냈다 — 연기가
+    #   며칠이면 디스코드가 그 두 줄로 덮인다(2026-11-18 d7760c7 배포에서 처음 드러남).
+    local partial
+    partial=$(cat "$partial_file" 2>/dev/null || true)
+    if [ "$partial" = "$remote" ]; then
+        if [[ " $targets " == *" trader "* ]]; then targets="trader"; else targets=""; fi
+    fi
+
     # ② 포지션 가드 — 돈이 걸려 있으면 트레이더만 빼고 배포한다.
     if [[ " $targets " == *" trader "* ]] && [ "${FORCE_TRADER:-0}" != "1" ] && has_open_position; then
-        targets=$(echo "$targets" | tr ' ' '\n' | grep -vx trader | tr '\n' ' ')
+        # 남는 게 없으면 grep 이 1 을 돌려 set -e·pipefail 로 스크립트가 죽는다 → '|| true'
+        targets=$(echo "$targets" | tr ' ' '\n' | { grep -vx trader || true; } | tr '\n' ' ')
         deferred=1
         echo "⏸ 트레이더 포지션 보유 중 — 교체 연기(무포지션 되면 자동 반영). 강제: FORCE_TRADER=1"
     fi
@@ -116,8 +126,12 @@ main() {
 
     if [ -n "$deferred" ]; then
         echo "트레이더 미반영 → .deploy-applied 갱신 안 함(다음 주기 재시도)"
-        dnotify "⏸ 트레이더 교체 연기(포지션 보유) → ${remote:0:7}. 무포지션 되면 자동 반영. 반영됨: ${targets:-없음}"
+        if [ "$partial" != "$remote" ]; then             # 연기 알림은 커밋당 한 번만
+            dnotify "⏸ 트레이더 교체 연기(포지션 보유) → ${remote:0:7}. 무포지션 되면 자동 반영. 반영됨: ${targets:-없음}"
+            echo "$remote" > "$partial_file"
+        fi
     else
+        rm -f "$partial_file"
         echo "$remote" > "$state_file"
         echo "배포 완료 ${remote:0:7}"
         dnotify "✅ 배포 완료 → ${remote:0:7} · 대상: ${targets:-없음}"
