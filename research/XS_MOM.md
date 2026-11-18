@@ -31,20 +31,18 @@
   - 숏: WLD, BAT, SOPH, RLC, PONS, MARSCOIN, GTC, HUMA, CT, AKE, AGT, BULLA, BTW, Q, UAI
 - 판정: 주 표준편차 ~5~6% → 몇 주로는 불가, **26주쯤** 지나야 방향이 보임.
 
-### EC2 에 올리기 (할 일)
-```
-sudo su - ec2-user
-cd ~/auto_trading
-git pull
-date                                          # UTC / KST 확인
-python3 research/xs_forward.py --record       # 위 첫 기록과 같은 목록이면 정상
-python3 research/xs_forward.py --report
-which python3
-crontab -e                                    # 없으면: sudo dnf install -y cronie && sudo systemctl enable --now crond
-#   UTC 면:  5 0 * * 2  cd ~/auto_trading && /usr/bin/python3 research/xs_forward.py --record >> ~/xs_forward.log 2>&1
-#   KST 면:  5 9 * * 2  (나머지 같음)
-crontab -l
-```
+### EC2 설정 — ✅ 완료 (2026-11-18)
+- 파일은 **scp 로 올림**(`xs_forward.py` · `exp_XS_cross_section.py` · `exp_FH5_post_trend.py` · `xv_data.py` → `~/auto_trading/research/`, git 미추적).
+  ⚠ 서버에서 `git pull` 금지 — `~/auto_trading` 은 배포 폴러가 `prod` 로 `git reset --hard` 하는 저장소. 스크립트를 고치면 다시 scp.
+- 파이썬은 **`~/fh_venv/bin/python`**(numpy 설치됨). 시스템 `/usr/bin/python3` 엔 numpy 가 없어 실패한다.
+- 서버 첫 기록: 월요일 봉 2026-11-16 · 대상 157 · 롱·숏 목록이 위 맥 기록과 **30/30 같음**. 장부 `~/xs_forward/xs_forward_book.jsonl`(서버 `data/` 는 root 소유라 홈으로).
+  → 이후 **서버 장부가 정본**(맥 장부는 더 쓰지 말 것).
+- cron: cronie 설치·`crond` enable(재부팅에도 유지). 서버 시계 UTC. 등록된 줄:
+  ```
+  5 0 * * 2 cd ~/auto_trading && ~/fh_venv/bin/python research/xs_forward.py --record >> ~/xs_forward.log 2>&1
+  ```
+  같은 명령을 최소 `sh` 환경에서 `--report` 로 확인함.
+- 보기: `ssh coincoin` → `cd ~/auto_trading && ~/fh_venv/bin/python research/xs_forward.py --report` · 로그 `~/xs_forward.log`
 
 ## 5. 실매매 계획 (아직 코드 없음)
 **포지션 수는 매주 바뀐다:** 대상 128~328개(중앙 235) → 롱·숏 각 12~32개(지금 15). 주문당 최소 금액 $5(수량 반올림 후 최대 ~$5.3).
