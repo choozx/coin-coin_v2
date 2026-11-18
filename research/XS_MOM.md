@@ -44,7 +44,13 @@
   같은 명령을 최소 `sh` 환경에서 `--report` 로 확인함.
 - 보기: `ssh coincoin` → `cd ~/auto_trading && ~/fh_venv/bin/python research/xs_forward.py --report` · 로그 `~/xs_forward.log`
 
-## 5. 실매매 계획 (아직 코드 없음)
+## 5. 실매매 계획 — 봇 `tools/xs_bot.py` (2026-11-18, 아직 실주문 0)
+- 기존 트레이더(engine.live)와 **별개 봇**: 주 1회 30개 내외 포트폴리오라 '심볼 하나·봉마다 판정' 구조에 안 맞는다. 목록은 전진 장부의 이번 주 기록을 그대로 씀(없으면 `xs_forward.signal()`).
+- EC2 에 scp 로 배치(`~/auto_trading/tools/xs_bot.py`, git 미추적) · 파이썬 `~/fh_venv/bin/python` · 상태 `~/xs_bot/state.json` · 주문 기록 `~/xs_bot/orders.jsonl`(체결가·수수료·신호 종가 대비 슬리피지 bp).
+- 명령: `--mainnet --plan`(미리보기) · `--go`(리밸런스) · `--check`(손실 한도, 매시간) · `--status` · `--flatten`(전량 청산·정지) · `--resume`. 옵션 `--gross=1|2` · `--capital=` · `--max-loss=0.30` · `--top=N`(체결 확인용, 규칙 아님).
+- 테스트 `tests/test_xs_bot.py`(가짜 거래소 9개). EC2 `--plan` 확인: 자본 $28 → 포지션당 $0.98 '이번 주 쉼' · `--top=3 --gross=2` 면 6개 × $9.4.
+- 아래 요구사항 1~6 반영. ⚠ 손실 한도는 계정 전체 마진 잔고 기준(같은 계정의 다른 실험 손익이 섞인다).
+
 **포지션 수는 매주 바뀐다:** 대상 128~328개(중앙 235) → 롱·숏 각 12~32개(지금 15). 주문당 최소 금액 $5(수량 반올림 후 최대 ~$5.3).
 
 | 총 노출 | 포지션당 | 지금(30개) 필요 자금 | 대상 많은 시기(64개) |
