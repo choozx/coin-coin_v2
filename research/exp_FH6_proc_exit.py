@@ -48,10 +48,14 @@ def conn():
     c.execute("CREATE TABLE IF NOT EXISTS fh6_agg (symbol TEXT, ft INTEGER, t INTEGER, price REAL)")
     c.execute("CREATE INDEX IF NOT EXISTS fh6_agg_i ON fh6_agg(symbol, ft)")
     c.execute("CREATE TABLE IF NOT EXISTS fh6_done (symbol TEXT, day TEXT, n INTEGER, PRIMARY KEY (symbol, day))")
+    # 규모 분석용(--collect-vol): 수량·방향까지
+    c.execute("CREATE TABLE IF NOT EXISTS fh6_vol (symbol TEXT, ft INTEGER, t INTEGER, price REAL, qty REAL, buyer_maker INTEGER)")
+    c.execute("CREATE INDEX IF NOT EXISTS fh6_vol_i ON fh6_vol(symbol, ft)")
+    c.execute("CREATE TABLE IF NOT EXISTS fh6_vol_done (symbol TEXT, day TEXT, n INTEGER, PRIMARY KEY (symbol, day))")
     return c
 
 
-def _file(sym, day, fts):
+def _file(sym, day, fts, full=False):
     u = f"https://data.binance.vision/data/futures/um/daily/aggTrades/{sym}/{sym}-aggTrades-{day}.zip"
     raw = None
     for i in range(4):
@@ -70,27 +74,48 @@ def _file(sym, day, fts):
                 raise
         time.sleep(3 * (i + 1))
     wins = sorted((ft - PRE, ft + POST, ft) for ft in fts)
-    lo, hi = wins[0][0], wins[-1][1]
-    out = []
     with zipfile.ZipFile(io.BytesIO(raw)) as z:
-        with z.open(z.namelist()[0]) as f:
-            for row in csv.reader(io.TextIOWrapper(f)):
-                if not row or not row[0].isdigit():
-                    continue
-                t = int(row[5])
-                if t < lo or t > hi:
-                    continue
-                for a, b, ft in wins:
-                    if a <= t <= b:
-                        out.append((sym, ft, t, float(row[1])))
+        lines = z.read(z.namelist()[0]).split(b"\n")
+    del raw
+    start = 1 if lines and not lines[0][:1].isdigit() else 0          # 머리줄
+    while lines and not lines[-1].strip():
+        lines.pop()
+
+    def tt(i):
+        return int(lines[i].split(b",", 6)[5])
+
+    def first_ge(t):                                                   # 체결은 시간순 → 이진 탐색
+        lo, hi = start, len(lines)
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if tt(mid) < t:
+                lo = mid + 1
+            else:
+                hi = mid
+        return lo
+
+    out = []
+    for a, b, ft in wins:
+        i = first_ge(a)
+        while i < len(lines):
+            f = lines[i].split(b",", 6)
+            t = int(f[5])
+            if t > b:
+                break
+            if full:
+                out.append((sym, ft, t, float(f[1]), float(f[2]), int(f[6][:1] in (b"t", b"T"))))
+            else:
+                out.append((sym, ft, t, float(f[1])))
+            i += 1
     return out
 
 
-def collect():
+def collect(full=False):
     from concurrent.futures import ThreadPoolExecutor, as_completed
     c = conn()
+    tbl, dtbl = ("fh6_vol", "fh6_vol_done") if full else ("fh6_agg", "fh6_done")
     f5 = fh5_conn()
-    done = {(s, d) for s, d in c.execute("SELECT symbol, day FROM fh6_done")}
+    done = {(s, d) for s, d in c.execute(f"SELECT symbol, day FROM {dtbl}")}
     by = defaultdict(list)
     for s, ft, r in fh5_events(f5):
         d = datetime.fromtimestamp(ft / 1000, timezone.utc).strftime("%Y-%m-%d")
@@ -99,8 +124,8 @@ def collect():
     f5.close()
     print(f"받을 파일 {len(by):,}개", flush=True)
     t0, n = time.time(), 0
-    with ThreadPoolExecutor(6) as ex:
-        futs = {ex.submit(_file, s, d, fts): (s, d) for (s, d), fts in by.items()}
+    with ThreadPoolExecutor(8) as ex:
+        futs = {ex.submit(_file, s, d, fts, full): (s, d) for (s, d), fts in by.items()}
         for fu in as_completed(futs):
             s, d = futs[fu]
             try:
@@ -109,8 +134,8 @@ def collect():
                 print(f"  {s} {d} 실패 {e}", flush=True)
                 continue
             if rows:
-                c.executemany("INSERT INTO fh6_agg VALUES (?,?,?,?)", rows)
-            c.execute("INSERT OR REPLACE INTO fh6_done VALUES (?,?,?)", (s, d, -1 if rows is None else len(rows)))
+                c.executemany(f"INSERT INTO {tbl} VALUES ({','.join('?' * len(rows[0]))})", rows)
+            c.execute(f"INSERT OR REPLACE INTO {dtbl} VALUES (?,?,?)", (s, d, -1 if rows is None else len(rows)))
             c.commit()
             n += 1
             if n % 100 == 0:
@@ -125,6 +150,8 @@ def _last(ts, ps, t):
 
 
 def main():
+    if "--collect-vol" in sys.argv:
+        return collect(full=True)
     if "--collect" in sys.argv:
         return collect()
     c = conn()

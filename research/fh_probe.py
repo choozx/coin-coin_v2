@@ -18,6 +18,8 @@ updateTime(거래소 시각)으로 기록한다. 사용자 데이터 스트림�
     python research/fh_probe.py --mainnet --smoke    # 지금 바로 최소 1건 열고 3초 뒤 닫기(주문·청산·웹소켓 확인)
     python research/fh_probe.py --mainnet --go       # 다음 측정 정산에 실행(진입 T−30초, 끝나면 정리)
     python research/fh_probe.py --mainnet --go --delays=100,500,1000   # 다른 지연 조합
+    python research/fh_probe.py --mainnet --fh6 --plan               # FH6 실거래: |펀딩|≥0.5% · 4h/8h · T−10초 → T+500ms
+    python research/fh_probe.py --mainnet --fh6 --go [--n=3 --exit-ms=500 --min-rate=0.5 --min-interval=4]
 결과: data/fh_probe/<망>_<정산시각>.json + 요약 표.  (websocket-client 필요 — 저장소 의존성 아님)
 """
 from __future__ import annotations
@@ -48,6 +50,23 @@ for _a in sys.argv:                                     # --delays=100,500,1000 
     if _a.startswith("--delays="):
         DELAYS = tuple(int(x) for x in _a.split("=", 1)[1].split(","))
 ENTRY_LEAD = 30_000
+# --fh6: 처리 직후 예약 청산 실거래(exp_FH6_proc_exit 검증 통과 규칙) — |펀딩| ≥ --min-rate(기본 0.5%) · 주기 ≥ --min-interval(기본 4h)
+#        · 진입 T−10초 · 청산 T+--exit-ms(기본 500) · 심볼 --n 개(기본 3) · 이미 포지션 있는 심볼은 건너뜀
+FH6 = "--fh6" in sys.argv
+
+
+def _opt(name, default):
+    for a in sys.argv:
+        if a.startswith(f"--{name}="):
+            return a.split("=", 1)[1]
+    return default
+
+
+if FH6:
+    ENTRY_LEAD = 10_000
+    DELAYS = (int(_opt("exit-ms", "500")),) * int(_opt("n", "3"))
+    FH6_MIN_RATE = float(_opt("min-rate", "0.5")) / 100
+    FH6_MIN_IVL = int(_opt("min-interval", "4"))
 LEVERAGE = 5                                            # 진입 전 심볼별로 min(이 값, 심볼 최대) 로 맞춘다
 MAX_NOTIONAL = 20.0 if MAINNET else 100.0               # 실서버는 포지션당 20 USDT 상한
 MIN_RATE = 0.0001 if MAINNET else 0.00001                # |펀딩| 큰 순으로 고르되, 심볼 수(지연 7종)를 채우려 0.01% 까지 허용
@@ -152,6 +171,8 @@ def plan(api):
         rate = float(p["lastFundingRate"])
         if T - now < ENTRY_LEAD + 60_000 or abs(rate) < MIN_RATE or qv.get(s, 1e18) < MIN_QVOL:
             continue
+        if FH6 and (abs(rate) < FH6_MIN_RATE or int(ivl.get(s, 8)) < FH6_MIN_IVL):
+            continue
         step, minq, mn = _filters(info, s)
         px = float(p["markPrice"])
         target = max(mn * 1.2, 6.0) if MAINNET else max(MAX_NOTIONAL, mn * 1.3)
@@ -166,7 +187,7 @@ def plan(api):
         return None, []
     # 가장 이른 정산 중 후보가 3개 이상인 것(없으면 가장 많은 것)
     Ts = sorted(cand)
-    T = next((t for t in Ts if len(cand[t]) >= 3), max(Ts, key=lambda t: len(cand[t])))
+    T = Ts[0] if FH6 else next((t for t in Ts if len(cand[t]) >= 3), max(Ts, key=lambda t: len(cand[t])))
     picks = sorted(cand[T], key=lambda p: -abs(p["rate"]))[:len(DELAYS)]
     for p, d in zip(picks, DELAYS):
         p["delay"] = d
@@ -264,6 +285,12 @@ def main():
     if "--smoke" in sys.argv:
         return smoke(api, dual)
 
+    if FH6 and _opt("loop", None):
+        return _loop(api, dual, f)
+    return _once(api, dual, f)
+
+
+def _once(api, dual, f):
     T, picks = plan(api)
     if not picks:
         sys.exit("조건에 맞는 정산이 없어요(가까운 정산에 |펀딩| 기준을 넘는 심볼 없음)")
@@ -279,6 +306,10 @@ def main():
 
     pos = _positions(api)
     busy = [p["symbol"] for p in picks if abs(float(pos.get(p["symbol"], {}).get("positionAmt", 0))) > 0]
+    if busy and FH6:                                     # 다른 측정(fh_proc_watch 등)이 들고 있는 심볼은 빼고 진행
+        print(f"이미 포지션이 있어 뺌: {busy}")
+        picks = [p for p in picks if p["symbol"] not in busy]
+        busy = [] if picks else busy
     if busy:
         sys.exit(f"이미 포지션이 있는 심볼이 있어요: {busy} — 중단")
     # 심볼별 레버리지가 계정에 높게 남아 있으면(예: 50배인데 심볼 최대 10배) 최대 포지션이 0 → -2027 로 거절된다.
@@ -315,6 +346,31 @@ def main():
         _flatten(api, dual, [p["symbol"] for p in picks])
         raise
 
+
+
+def _loop(api, dual, f):
+    """--fh6 --go --loop=시간: 그동안 조건에 맞는 정산마다 반복(최대 --max-runs 회, 기본 6). 조건 없는 정시는 건너뛴다."""
+    end = time.time() + float(_opt("loop", "24")) * 3600
+    runs, max_runs = 0, int(_opt("max-runs", "6"))
+    print(f"FH6 반복: {_opt('loop', '24')}시간 · 최대 {max_runs}회", flush=True)
+    while time.time() < end and runs < max_runs:
+        api.sync(5)
+        try:
+            T, picks = plan(api)
+        except Exception as e:      # noqa: BLE001
+            print(f"계획 실패(다음 정시에 다시): {repr(e)[:120]}", flush=True)
+            T, picks = None, []
+        if picks:
+            try:
+                _once(api, dual, f)
+                runs += 1
+            except SystemExit as e:                      # 이번 정산만 건너뜀(조건 없음·포지션 겹침 등)
+                print(f"이번 정산 건너뜀: {e}", flush=True)
+            continue
+        nxt = (int(api.now()) // 3_600_000 + 1) * 3_600_000 - 150_000      # 다음 정시 2분 30초 전에 다시 본다
+        print(f"{datetime.now(timezone.utc):%m-%d %H:%M} 조건 맞는 정산 없음 → {f(nxt)} 에 다시", flush=True)
+        time.sleep(max(30, (nxt - api.now()) / 1000))
+    print(f"FH6 반복 끝: {runs}회 실행", flush=True)
 
 def _flatten(api, dual, symbols):
     pos = _positions(api)
@@ -404,6 +460,26 @@ def _run(api, dual, T, picks, events, ws_err):
               f"{(ex.get('updateTime') if ex.get('updateTime') is not None else float('nan')):+7.0f} {(g[0]['income'] if g else '없음'):>14} "
               f"{(str(g[0]['time']) + 'ms') if g else '':>9}" + (f"  ⚠ {(ex.get('error') or p['entry'].get('error'))[:60]}"
                  if ex.get("error") or p["entry"].get("error") else ""))
+    try:
+        allinc = api.call("GET", "/fapi/v1/income", dict(startTime=T - ENTRY_LEAD - 60_000, endTime=T + 300_000,
+                                                          limit=1000), signed=True)
+        pnl = {}
+        for x in allinc:
+            if x.get("symbol") in {p["symbol"] for p in picks} and x["incomeType"] in ("REALIZED_PNL", "COMMISSION", "FUNDING_FEE"):
+                pnl.setdefault(x["symbol"], {}).setdefault(x["incomeType"], 0.0)
+                pnl[x["symbol"]][x["incomeType"]] += float(x["income"])
+        print(f"   {'심볼':13} {'펀딩률':>8} {'가격':>9} {'수수료':>9} {'펀딩':>9} {'합(USDT)':>9} {'합(%)':>7}")
+        tot = 0.0
+        for p in picks:
+            d = pnl.get(p["symbol"], {})
+            a, b, c = d.get("REALIZED_PNL", 0.0), d.get("COMMISSION", 0.0), d.get("FUNDING_FEE", 0.0)
+            notion = p["qty"] * p["mark"]
+            tot += a + b + c
+            print(f"   {p['symbol']:13} {p['rate']*100:+7.3f}% {a:+9.4f} {b:+9.4f} {c:+9.4f} {a+b+c:+9.4f} "
+                  f"{(a+b+c)/notion*100:+6.2f}%")
+        print(f"   합계 {tot:+.4f} USDT")
+    except Exception as e:      # noqa: BLE001
+        print(f"   손익 조회 실패: {repr(e)[:120]}")
     print(f"   FUNDING_FEE 이벤트 {len(fee_ev)}개: " +
           ", ".join(f"{x['symbol']} 처리 T{x['T']:+.0f}ms·도착 T{x['recv']:+.0f}ms" for x in fee_ev[:10]))
     if ws_err:
