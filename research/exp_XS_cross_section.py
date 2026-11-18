@@ -38,9 +38,7 @@ D = 86_400_000
 START = int(datetime(2024, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
 END = int(datetime(2026, 11, 16, tzinfo=timezone.utc).timestamp() * 1000)
 FETCH_FROM = START - 60 * D
-COST = 0.0010
-MINQ, AGE = 5e6, 30
-STABLE = {"USDC", "FDUSD", "TUSD", "DAI", "USDP", "BUSD", "USDE", "USD1", "RLUSD", "XUSD", "PYUSD", "BFUSD"}
+from engine.xs_mom import AGE, COST, MINQ, STABLE  # noqa: E402  규칙 상수는 engine.xs_mom 한 곳에
 HALVES = [("2024-H1", 2024, 1), ("2024-H2", 2024, 7), ("2025-H1", 2025, 1), ("2025-H2", 2025, 7), ("2026-H1", 2026, 1), ("2026-H2", 2026, 7)]
 
 

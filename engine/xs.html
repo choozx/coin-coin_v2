@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XS MOM</title>
+<style>
+  :root { --bg:#0e1117; --panel:#161b22; --panel2:#1c2230; --line:#2a3140; --fg:#e6e9ef; --mut:#8a90a0;
+          --up:#26d07c; --down:#ff5c6c; --blue:#4c9be8; --warn:#e0a030; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font-family:system-ui,-apple-system,sans-serif; }
+  .wrap { max-width:1000px; margin:0 auto; padding:20px; }
+  header { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
+  h1 { font-size:18px; margin:0; }
+  .badge { padding:3px 10px; border-radius:20px; font-size:12px; font-weight:600; }
+  .live { background:rgba(38,208,124,.15); color:var(--up); }
+  .plan { background:rgba(76,155,232,.15); color:var(--blue); }
+  .off, .halt { background:rgba(255,92,108,.15); color:var(--down); }
+  .sub { color:var(--mut); font-size:13px; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:16px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
+  .card .k { color:var(--mut); font-size:12px; margin-bottom:6px; }
+  .card .v { font-size:20px; font-weight:700; }
+  .box { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin-bottom:16px; }
+  .box h3 { margin:0 0 10px; font-size:14px; color:var(--mut); font-weight:600; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:right; padding:6px 8px; border-bottom:1px solid var(--line); }
+  th:first-child, td:first-child { text-align:left; }
+  th { color:var(--mut); font-weight:600; font-size:12px; }
+  .g { color:var(--up); } .r { color:var(--down); }
+  .empty { color:var(--mut); padding:16px; text-align:center; }
+  .note { border-radius:8px; padding:10px 12px; margin-bottom:12px; font-size:13px; }
+  .note.err { background:rgba(255,92,108,.1); border:1px solid var(--down); color:var(--down); }
+  .note.warn { background:rgba(224,160,48,.1); border:1px solid var(--warn); color:var(--warn); }
+  .note.info { background:rgba(76,155,232,.08); border:1px solid var(--blue); color:var(--fg); }
+  .chips span { display:inline-block; background:var(--panel2); border:1px solid var(--line); border-radius:12px;
+                padding:2px 8px; margin:2px; font-size:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>🧭 XS MOM</h1>
+    <span id="mode" class="badge plan">…</span>
+    <a href="/" style="color:var(--blue);text-decoration:none;font-size:13px">🤖 매매</a>
+    <a href="/collector" style="color:var(--blue);text-decoration:none;font-size:13px">📥 데이터·수집기</a>
+    <a href="/settings" style="color:var(--blue);text-decoration:none;font-size:13px">⚙️ 설정</a>
+    <span class="sub" style="margin-left:auto">알트 28일 모멘텀 상·하위 10% 롱숏 · 주 1회(화 00:15 UTC)</span>
+  </header>
+  <div id="notes"></div>
+  <div class="cards" id="cards"></div>
+  <div class="box"><h3>이 봇 포지션</h3><div id="positions"><div class="empty">불러오는 중…</div></div></div>
+  <div class="box"><h3>이번 주 계획</h3><div id="plan"><div class="empty">아직 없음</div></div></div>
+  <div class="box"><h3>최근 체결</h3><div id="orders"><div class="empty">아직 없음</div></div></div>
+  <div class="sub" id="updated"></div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const usd = v => v == null ? "—" : (v < 0 ? "-$" : "$") + Math.abs(v).toFixed(2);
+const pct = v => v == null ? "—" : (v >= 0 ? "+" : "") + (v * 100).toFixed(2) + "%";
+const cls = v => v > 0 ? "g" : v < 0 ? "r" : "";
+const short = s => String(s).replace(/USDT$/, "");
+
+function render(d) {
+  if (d.error && !d.mode) { $("notes").innerHTML = `<div class="note err">${esc(d.error)}</div>`; return; }
+  const m = $("mode");
+  m.textContent = d.halted ? "정지" : {live: "실매매", plan: "계획만(주문 없음)", off: "꺼짐"}[d.mode] || d.mode;
+  m.className = "badge " + (d.halted ? "halt" : d.mode);
+  const notes = [];
+  if (d.halted) notes.push(`<div class="note err">⛔ 정지 — ${esc(d.halt_reason)} · 해제: <code>python -m engine.xs_bot --resume</code></div>`);
+  if (d.error) notes.push(`<div class="note err">⚠ ${esc(d.error)}</div>`);
+  if (d.mode === "plan") notes.push(`<div class="note info">계획만 보는 모드예요. 실주문은 <code>.env</code> 에 <code>XS_MODE=live</code> 를 넣고 xsbot 을 다시 띄워야 나갑니다.</div>`);
+  if (d.top) notes.push(`<div class="note warn">top=${d.top} — 체결 확인용 축소 설정(규칙 아님)</div>`);
+  const lp = d.last_plan;
+  if (lp && lp.warn) notes.push(`<div class="note warn">⏸ ${esc(lp.warn)}</div>`);
+  $("notes").innerHTML = notes.join("");
+
+  const cards = [
+    ["마진 잔고", usd(d.equity)],
+    ["시작 대비", `<span class="${cls(d.pnl_pct)}">${pct(d.pnl_pct)}</span>`],
+    ["손실 한도", d.max_loss != null ? "−" + (d.max_loss * 100).toFixed(0) + "%" : "—"],
+    ["롱 / 숏", `${usd(d.long_usd)} / ${usd(d.short_usd)}`],
+    ["미실현", `<span class="${cls(d.upnl)}">${usd(d.upnl)}</span>`],
+    ["총 노출 · 자본 상한", `${d.gross}배 · ${d.capital_cap ? "$" + d.capital_cap : "전액"}`],
+    ["마지막 리밸런스", esc(d.last_week || "없음")],
+    ["다음 리밸런스", esc(d.next_rebalance || "—")],
+  ];
+  $("cards").innerHTML = cards.map(([k, v]) => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
+
+  const ps = d.positions || [];
+  $("positions").innerHTML = ps.length ? `<table><tr><th>심볼</th><th>방향</th><th>수량</th><th>진입가</th><th>현재가</th><th>금액</th><th>미실현</th></tr>` +
+    ps.map(p => `<tr><td>${esc(short(p.symbol))}</td><td class="${p.qty > 0 ? "g" : "r"}">${esc(p.side)}</td><td>${p.qty}</td>
+      <td>${p.entry ?? "—"}</td><td>${p.mark ?? "—"}</td><td>${usd(p.value)}</td><td class="${cls(p.upnl)}">${usd(p.upnl)}</td></tr>`).join("") + `</table>`
+    : `<div class="empty">포지션 없음</div>`;
+
+  if (lp) {
+    const sk = Object.entries(lp.skipped || {});
+    $("plan").innerHTML = `<div class="sub" style="margin-bottom:8px">${esc(lp.at)} 기준 · 포지션당 ${usd(lp.per)} · 자본 ${usd(lp.capital)}</div>
+      <div class="chips"><b class="g">롱</b> ${(lp.long || []).map(s => `<span>${esc(short(s))}</span>`).join("")}</div>
+      <div class="chips" style="margin-top:4px"><b class="r">숏</b> ${(lp.short || []).map(s => `<span>${esc(short(s))}</span>`).join("")}</div>
+      ${sk.length ? `<div class="sub" style="margin-top:8px">뺌: ${sk.map(([s, w]) => `${esc(short(s))}(${esc(w)})`).join(" · ")}</div>` : ""}
+      ${(lp.orders || []).length ? `<table style="margin-top:10px"><tr><th>단계</th><th>심볼</th><th>수량 변화</th><th>목표</th><th>금액</th></tr>` +
+        lp.orders.map(o => `<tr><td>${esc(o.stage)}</td><td>${esc(short(o.symbol))}</td><td class="${cls(o.delta)}">${o.delta > 0 ? "+" : ""}${+o.delta.toFixed(6)}</td>
+          <td>${+o.target.toFixed(6)}</td><td>${usd(o.usd)}</td></tr>`).join("") + `</table>` : ""}`;
+  }
+
+  const os = (d.orders || []).slice().reverse();
+  $("orders").innerHTML = os.length ? `<table><tr><th>시각</th><th>단계</th><th>심볼</th><th>방향</th><th>수량</th><th>체결가</th><th>수수료</th><th>슬리피지</th></tr>` +
+    os.map(o => `<tr><td>${esc((o.at || "").replace(" UTC", ""))}</td><td>${esc(o.stage)}</td><td>${esc(short(o.symbol))}</td>
+      <td class="${o.side === "BUY" ? "g" : "r"}">${o.side === "BUY" ? "매수" : "매도"}</td><td>${o.qty}</td><td>${o.avgPrice || "—"}</td>
+      <td>${o.fee != null ? o.fee.toFixed(4) : "—"}</td><td class="${cls(-(o.slip_bp || 0))}">${o.slip_bp != null ? o.slip_bp + "bp" : "—"}</td></tr>`).join("") + `</table>`
+    : `<div class="empty">아직 체결 없음</div>`;
+  $("updated").textContent = d.updated ? `상태 갱신 ${d.updated} (서비스가 5분마다 기록)` : "";
+}
+
+async function load() {
+  try { render(await (await fetch("/api/xs")).json()); }
+  catch (e) { $("notes").innerHTML = `<div class="note err">불러오기 실패: ${esc(e)}</div>`; }
+}
+load();
+setInterval(load, 30000);
+</script>
+</body>
+</html>

@@ -938,6 +938,15 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path in ("/collector", "/collector/"):     # 데이터·수집기 관리 페이지
             with open(_COLLECTOR_HTML, "rb") as f:
                 self._send(200, f.read(), "text/html; charset=utf-8")
+        elif self.path in ("/xs", "/xs/"):                   # XS MOM 모니터(프로덕션 dashboard 와 같은 페이지)
+            with open(os.path.join(os.path.dirname(__file__), "xs.html"), "rb") as f:
+                self._send(200, f.read(), "text/html; charset=utf-8")
+        elif self.path == "/api/xs":
+            try:
+                with open(os.environ.get("XS_STATUS_PATH", "data/xs/status.json"), encoding="utf-8") as f:
+                    self._send(200, f.read())
+            except FileNotFoundError:
+                self._send(200, json.dumps({"error": "XS 상태 없음 — xsbot 서비스가 아직 안 돌았어요"}))
         elif self.path == "/api/state":
             try:
                 with open(STATE_PATH, encoding="utf-8") as f:

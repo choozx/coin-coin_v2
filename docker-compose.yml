@@ -84,6 +84,7 @@ services:
       SERVICE_NAME: dashboard                # api_weight 기록 파일명(누가 얼마나 썼나)
       API_WEIGHT_DIR: /app/data/api_weight
       STATE_PATH: /app/data/state.json      # trader가 기록한 상태를 읽음
+      XS_STATUS_PATH: /app/data/xs/status.json   # xsbot 이 기록한 상태(/xs 페이지)
       CONTROL_PATH: /app/data/control.json  # 멈춤/재개 제어 파일
       LEDGER_PATH: /app/data/trades.db      # 매매 원장 읽기(이력·통계·거래별 차트)
       PYTHONUNBUFFERED: 1
@@ -179,6 +180,36 @@ services:
       TZ: UTC
     volumes:
       - ./data:/app/data                    # state.json 읽기 전용
+    logging: { driver: json-file, options: { max-size: "10m", max-file: "3" } }
+
+  xsbot:                                    # XS MOM — 주 1회 알트 모멘텀 롱숏 리밸런스(research/XS_MOM.md). 트레이더와 별개.
+    build: .                                # 화 00:15 UTC 리밸런스 · 매시간 손실 한도 점검 · 자기 심볼만 만진다.
+    image: ${IMAGE:-auto-trading}
+    restart: unless-stopped
+    mem_limit: 150m                         # 표준 라이브러리 + numpy, 주 1회 600심볼 일봉 조회
+    mem_reservation: 48m
+    command: python -m engine.xs_bot --loop
+    environment:
+      SERVICE_NAME: xsbot
+      # ★ 기본 plan = 목록·주문 계획만 대시보드에(주문 없음). 실주문은 .env 에 XS_MODE=live 를 넣어야 나간다.
+      XS_MODE: ${XS_MODE:-plan}             # off | plan | live
+      XS_GROSS: ${XS_GROSS:-1}              # 총 노출 배수(문서: 1배 적정, 2배 상한)
+      XS_CAPITAL: ${XS_CAPITAL:-}           # 자본 상한 USDT(비우면 선물 지갑 USDT 마진 잔고 전체)
+      XS_MAX_LOSS: ${XS_MAX_LOSS:-0.30}     # 시작 자본 대비 이만큼 잃으면 전량 청산·정지
+      XS_TOP: ${XS_TOP:-}                   # 체결 확인용 축소(양쪽 상위 N개) — 규칙 아님, 평소엔 비움
+      XS_DIR: /app/data/xs                  # state.json · orders.jsonl · status.json(대시보드가 읽음)
+      # 메인넷 전용(이 전략은 테스트넷에 1h·4h 펀딩·알트가 없다). 출금 OFF·IP 화이트리스트 키.
+      BINANCE_MAINNET_API_KEY: ${BINANCE_MAINNET_API_KEY:-}
+      BINANCE_MAINNET_API_SECRET: ${BINANCE_MAINNET_API_SECRET:-}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+      DISCORD_CHANNEL_ID: ${DISCORD_CHANNEL_ID:-}
+      DISCORD_CHANNEL_TRADES: ${DISCORD_CHANNEL_TRADES:-}  # → #매매: 리밸런스 결과·쉼·손실 한도
+      DISCORD_CHANNEL_SYSTEM: ${DISCORD_CHANNEL_SYSTEM:-}  # → #모니터링: 기동·오류
+      NOTIFY_WEBHOOK: ${NOTIFY_WEBHOOK:-}
+      PYTHONUNBUFFERED: 1
+      TZ: UTC
+    volumes:
+      - ./data:/app/data
     logging: { driver: json-file, options: { max-size: "10m", max-file: "3" } }
 
 # ⚠️ 실거래(LiveExecutor) 시 BINANCE_API_KEY/SECRET은 .env(gitignore)/시크릿으로. compose에 직접 X.

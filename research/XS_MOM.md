@@ -44,12 +44,24 @@
   같은 명령을 최소 `sh` 환경에서 `--report` 로 확인함.
 - 보기: `ssh coincoin` → `cd ~/auto_trading && ~/fh_venv/bin/python research/xs_forward.py --report` · 로그 `~/xs_forward.log`
 
-## 5. 실매매 계획 — 봇 `tools/xs_bot.py` (2026-11-18, 아직 실주문 0)
-- 기존 트레이더(engine.live)와 **별개 봇**: 주 1회 30개 내외 포트폴리오라 '심볼 하나·봉마다 판정' 구조에 안 맞는다. 목록은 전진 장부의 이번 주 기록을 그대로 씀(없으면 `xs_forward.signal()`).
-- EC2 에 scp 로 배치(`~/auto_trading/tools/xs_bot.py`, git 미추적) · 파이썬 `~/fh_venv/bin/python` · 상태 `~/xs_bot/state.json` · 주문 기록 `~/xs_bot/orders.jsonl`(체결가·수수료·신호 종가 대비 슬리피지 bp).
-- 명령: `--mainnet --plan`(미리보기) · `--go`(리밸런스) · `--check`(손실 한도, 매시간) · `--status` · `--flatten`(전량 청산·정지) · `--resume`. 옵션 `--gross=1|2` · `--capital=` · `--max-loss=0.30` · `--top=N`(체결 확인용, 규칙 아님).
-- 테스트 `tests/test_xs_bot.py`(가짜 거래소 9개). EC2 `--plan` 확인: 자본 $28 → 포지션당 $0.98 '이번 주 쉼' · `--top=3 --gross=2` 면 6개 × $9.4.
-- 아래 요구사항 1~6 반영. ⚠ 손실 한도는 계정 전체 마진 잔고 기준(같은 계정의 다른 실험 손익이 섞인다).
+## 5. 실매매 — 서비스 `xsbot` (`engine/xs_bot.py`, 2026-11-18 · 아직 실주문 0)
+- 기존 시스템의 **한 서비스**(docker-compose `xsbot`, 트레이더·수집기·대시보드와 같은 이미지). 트레이더(engine.live)와는 별개 —
+  주 1회 30개 내외 포트폴리오라 '심볼 하나·봉마다 판정' 구조에 안 맞는다. 겹치는 건 메인넷 계정뿐 → 자기가 연 심볼만 만진다.
+- **규칙은 `engine/xs_mom.py` 한 곳**: `xs_bot`·`research/xs_forward.py`(전진 기록)·`exp_XS_cross_section.py`(상수)가 같이 쓴다.
+  옮긴 뒤 서버 장부 첫 주(2026-11-16 봉)와 대조 — 대상 157 · 롱·숏 30/30 순서까지 일치.
+- 동작: 화 00:15 UTC 이후 1회 리밸런스(빠진 것 청산 → 조정 → 진입, 시장가) · 매시간 손실 한도 점검 · 5분마다 `data/xs/status.json` 기록.
+  디스코드: #매매(리밸런스 결과·쉼·손실 한도) · #모니터링(기동·오류). 오류면 1시간 뒤 재시도. 컨테이너 재시작으로는 청산하지 않는다.
+- **설정(.env):** `XS_MODE=off|plan|live`(**기본 plan = 계획만, 주문 없음**) · `XS_GROSS=1`(≤2) · `XS_CAPITAL=`(자본 상한) ·
+  `XS_MAX_LOSS=0.30` · `XS_TOP=`(체결 확인용 축소, 평소 비움). 키는 `BINANCE_MAINNET_API_KEY/SECRET`.
+- **대시보드:** `/xs` 페이지(헤더 '🧭 XS MOM') — 모드·마진 잔고·시작 대비·롱/숏 노출·포지션·이번 주 계획·최근 체결(슬리피지 bp).
+- 수동(컨테이너 안): `docker compose exec xsbot python -m engine.xs_bot --plan | --go | --check | --status | --flatten | --resume`
+- 상태 파일: `data/xs/state.json`(자기 포지션·시작 자본·정지) · `orders.jsonl`(체결가·수수료·신호 종가 대비 슬리피지).
+- 배포: `deploy/service-deps.conf` 의 `xsbot_mods`(xs_bot·xs_mom 을 고치면 xsbot 만 재시작) · `xs.html` 은 dashboard 재시작.
+- ⚠ **live 로 처음 켜면 그 주 리밸런스를 바로 한다**(이번 주 기록이 없으므로 — 월요일 목록 기준, 화요일을 기다리지 않음).
+- ⚠ 손실 한도는 계정 전체 마진 잔고 기준(같은 메인넷 계정의 다른 실험 손익이 섞인다).
+- 테스트 `tests/test_xs_bot.py`(가짜 거래소 13개: 진입·쉼·청산/뒤집기/조정·실패·미리보기·상한·손실 한도·주기·루프).
+  EC2 실계정 `--plan`: 자본 $28 → 포지션당 $0.97 '이번 주 쉼' · `--top=3 --gross=2` 면 6개 × $9.3.
+- 이전 호스트 스크립트 `tools/xs_bot.py` 는 삭제(서버에 scp 해 둔 사본은 한 번도 실행 안 함 → 지워도 됨).
 
 **포지션 수는 매주 바뀐다:** 대상 128~328개(중앙 235) → 롱·숏 각 12~32개(지금 15). 주문당 최소 금액 $5(수량 반올림 후 최대 ~$5.3).
 

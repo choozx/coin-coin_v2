@@ -25,11 +25,9 @@ import numpy as np
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from research.exp_FH5_post_trend import _get  # noqa: E402
-from research.exp_XS_cross_section import AGE, COST, MINQ, STABLE  # noqa: E402
+# 규칙(대상·신호·목록)은 engine.xs_mom 한 곳에 — 실매매 서비스(engine.xs_bot)와 같은 함수를 쓴다.
+from engine.xs_mom import COST, D, _get, daily, last_monday_bar, signal  # noqa: E402
 
-D = 86_400_000
-LOOK, FRAC = 28, 0.10
 DIRS = (os.path.join(ROOT, "data", "xs_forward"), os.path.expanduser("~/xs_forward"))
 BOOK = "xs_forward_book.jsonl"
 EXPECT = (0.20, 0.40, 0.63)                     # 연 기대치: 보수 하한 · 보수 상한 · 백테스트
@@ -66,46 +64,12 @@ def _read():
         return [json.loads(x) for x in f if x.strip()]
 
 
-def last_monday_bar(now_ms):
-    o = now_ms // D * D - D                        # 마지막으로 끝난 일봉의 시작
-    while datetime.fromtimestamp(o / 1000, timezone.utc).weekday() != 0:
-        o -= D
-    return o
 
 
-def universe():
-    info = _get("exchangeInfo", {})
-    return [(s["symbol"], int(s.get("onboardDate", 0))) for s in info["symbols"]
-            if s.get("contractType") == "PERPETUAL" and s.get("quoteAsset") == "USDT" and s.get("underlyingType") == "COIN"
-            and s.get("status") == "TRADING" and s.get("baseAsset") not in STABLE]
 
 
-def daily(sym, start, end):
-    rows = _get("klines", {"symbol": sym, "interval": "1d", "startTime": start, "endTime": end, "limit": 1000})
-    time.sleep(0.12)
-    return {int(k[0]): (float(k[4]), float(k[7])) for k in rows}
 
 
-def signal(o):
-    syms = universe()
-    cand = []
-    for n, (s, ob) in enumerate(syms, 1):
-        if (o - ob) / D < AGE:
-            continue
-        k = daily(s, o - 29 * D, o)
-        if o not in k or (o - LOOK * D) not in k:
-            continue
-        q = [k[t][1] for t in range(o - 29 * D, o + D, D) if t in k]
-        if np.median(q) < MINQ:
-            continue
-        cand.append((k[o][0] / k[o - LOOK * D][0] - 1, s, k[o][0]))
-        if n % 200 == 0:
-            print(f"  {n}/{len(syms)}", flush=True)
-    cand.sort(reverse=True)
-    k = max(1, int(len(cand) * FRAC))
-    return dict(t=o, n=len(cand), k=k,
-                long={s: p for _, s, p in cand[:k]}, short={s: p for _, s, p in cand[-k:]},
-                sig_long=[round(x, 4) for x, _, _ in cand[:k]], sig_short=[round(x, 4) for x, _, _ in cand[-k:]])
 
 
 def _exit_price(sym, t0, o):

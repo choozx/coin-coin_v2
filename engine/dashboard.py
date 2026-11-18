@@ -23,6 +23,7 @@ from . import settings
 
 _HTML = os.path.join(os.path.dirname(__file__), "dashboard.html")
 _COLLECTOR_HTML = os.path.join(os.path.dirname(__file__), "collector.html")   # 데이터·수집기 관리
+_XS_HTML = os.path.join(os.path.dirname(__file__), "xs.html")                 # XS MOM(xsbot 서비스) 모니터
 _SETTINGS_HTML = os.path.join(os.path.dirname(__file__), "settings.html")     # 글로벌 설정(가드레일·레버리지 티어)
 _CHARTS_JS = os.path.join(os.path.dirname(__file__), "vendor",
                           "lightweight-charts.standalone.production.js")
@@ -30,6 +31,7 @@ _CHARTS_JS = os.path.join(os.path.dirname(__file__), "vendor",
 # 페이지가 그 링크를 감추도록 알려준다 — 안 그러면 헤더에 죽은 링크가 남는다.
 _NO_STUDIO = b"<script>window.__NO_STUDIO__=true</script>"
 STATE_PATH = os.environ.get("STATE_PATH", "data/state.json")
+XS_STATUS_PATH = os.environ.get("XS_STATUS_PATH", "data/xs/status.json")   # engine.xs_bot 이 5분마다 기록
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -72,6 +74,15 @@ class Handler(BaseHTTPRequestHandler):
             # 필요한 API(/api/candles·symbols·collect_symbols·heal·collect_chunk)는 여기 다 있다.
             with open(_COLLECTOR_HTML, "rb") as f:
                 self._send(200, _NO_STUDIO + f.read(), "text/html; charset=utf-8")
+        elif self.path in ("/xs", "/xs/"):
+            with open(_XS_HTML, "rb") as f:
+                self._send(200, _NO_STUDIO + f.read(), "text/html; charset=utf-8")
+        elif self.path == "/api/xs":
+            try:
+                with open(XS_STATUS_PATH, encoding="utf-8") as f:
+                    self._send(200, f.read())
+            except FileNotFoundError:
+                self._send(200, json.dumps({"error": "XS 상태 없음 — xsbot 서비스가 아직 안 돌았어요"}))
         elif self.path == "/vendor/lightweight-charts.js":
             with open(_CHARTS_JS, "rb") as f:
                 self._send(200, f.read(), "application/javascript; charset=utf-8")
