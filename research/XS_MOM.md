@@ -55,6 +55,10 @@
   `XS_MAX_LOSS=0.30` · `XS_TOP=`(체결 확인용 축소, 평소 비움). 키는 `BINANCE_MAINNET_API_KEY/SECRET`.
 - **대시보드:** `/xs` 페이지(헤더 '🧭 XS MOM') — 모드·마진 잔고·시작 대비·롱/숏 노출·포지션·이번 주 계획·최근 체결(슬리피지 bp).
 - 수동(컨테이너 안): `docker compose exec xsbot python -m engine.xs_bot --plan | --go | --check | --status | --flatten | --resume`
+- **대조(A1):** `... --compare` — 주별 실매매 ↔ 규칙(같은 목표 수량을 월요일 종가에 체결) 차이를
+  체결 지연(종가→주문 직전 호가, 운) · 슬리피지(호가 중간→체결가) · 수수료 · 수량 차이(내림·빠짐)로 쪼갠다. 펀딩은 따로.
+  핵심 숫자 = **회전 비용(슬리피지+수수료) bp vs 백테스트 가정 10bp**. live 면 화요일 리밸런스 뒤 지난주 확정분을 #매매 에 자동 게시.
+  기록: `orders.jsonl` 에 주문 직전 bid/ask(2026-11-19~, 그 전 주문은 1분봉 시가로 대신) · `weeks.jsonl` 주별 목표(없던 주는 주문으로 복원).
 - 상태 파일: `data/xs/state.json`(자기 포지션·시작 자본·정지) · `orders.jsonl`(체결가·수수료·신호 종가 대비 슬리피지).
 - 배포: `deploy/service-deps.conf` 의 `xsbot_mods`(xs_bot·xs_mom 을 고치면 xsbot 만 재시작) · `xs.html` 은 dashboard 재시작.
 - ⚠ **live 로 처음 켜면 그 주 리밸런스를 바로 한다**(이번 주 기록이 없으므로 — 월요일 목록 기준, 화요일을 기다리지 않음).

@@ -15,7 +15,9 @@
 
 서비스:  python -m engine.xs_bot --loop                (XS_MODE=off|plan|live)
 수동:    python -m engine.xs_bot --plan | --go | --check | --status | --flatten | --resume   [--top=N 체결 확인용 · 규칙 아님]
-상태:    $XS_DIR(기본 data/xs)/state.json · orders.jsonl · status.json(대시보드가 읽음)
+대조:    python -m engine.xs_bot --compare   주별 실매매 ↔ 규칙(월요일 종가 체결) 차이 = 체결 지연·슬리피지·수수료·수량 차이.
+         live 면 화요일 리밸런스 뒤 지난주 확정분을 #매매 에 자동으로 올린다.
+상태:    $XS_DIR(기본 data/xs)/state.json · orders.jsonl(호가 bid/ask 포함) · weeks.jsonl(주별 목표) · status.json(대시보드가 읽음)
 """
 from __future__ import annotations
 
@@ -296,6 +298,12 @@ def market_order(api, mk, s, delta, reduce, ctx):
                   quantity=_fmt_qty(abs(delta), m["step"]), newOrderRespType="RESULT")
     if reduce:
         params["reduceOnly"] = "true"
+    bid = ask = None
+    try:                                                   # 주문 직전 호가 — 슬리피지(호가 중간 → 체결) 측정용
+        bt = api.call("GET", "/fapi/v1/ticker/bookTicker", dict(symbol=s))
+        bid, ask = float(bt["bidPrice"]), float(bt["askPrice"])
+    except Exception:      # noqa: BLE001 — 측정용이라 실패해도 주문은 낸다
+        pass
     t0 = int(time.time() * 1000)
     r = api.call("POST", "/fapi/v1/order", params, signed=True)
     oid = r.get("orderId")
@@ -314,6 +322,8 @@ def market_order(api, mk, s, delta, reduce, ctx):
         time.sleep(0.5 * (i + 1))
     rec = dict(t=t0, at=_now(), symbol=s, side=params["side"], qty=float(params["quantity"]), reduce=reduce,
                orderId=oid, status=r.get("status"), avgPrice=avg, fee=fee, feeAsset=fee_asset, **ctx)
+    if bid and ask:
+        rec.update(bid=bid, ask=ask, mid=(bid + ask) / 2)
     if ctx.get("expect") and avg:
         rec["slip_bp"] = round((1 if delta > 0 else -1) * (avg / ctx["expect"] - 1) * 1e4, 1)   # +면 불리
     log_order(rec)
@@ -382,6 +392,8 @@ def rebalance(api, go, cfg, signal_fn=this_week_signal):
         st["start_equity"] = acct["total_margin"]
         st["started"] = _now()
     expect = {**long, **short}
+    log_week(dict(week=o, at=_now(), capital=p["capital"], gross=cfg["gross"], per=p["per"], top=cfg.get("top"),
+                  targets=p["targets"], expect={s: expect[s] for s in p["targets"] if s in expect}, skipped=p["skipped"]))
     fails = []
     for od in p["orders"]:
         s = od["symbol"]
@@ -420,6 +432,173 @@ def check(api, max_loss):
     st["halted"], st["halt_reason"] = True, f"손실 한도 {dd:+.1%} ({_now()})"
     save_state(st)
     return dict(dd=dd, closed=len(done), base=base, eq=eq)
+
+
+# ── 실매매 ↔ 규칙 대조 ─────────────────────────────────────────────────────
+# 규칙(종이) = 같은 목표 수량을 월요일 종가에 체결했다고 보고, 다음 월요일 종가(진행 중이면 현재 마크)까지의 가격 손익.
+# 실매매 = 실제 체결가·수수료. 항등식으로 쪼갠다(심볼 s, 구간 [화 00:00, 다음 화 00:00)):
+#   실매매 가격 손익 = 목표·(P1−C0) + (끝 수량−목표)·(P1−C0) + Σ체결수량·(C0−호가중간) + Σ체결수량·(호가중간−체결가)
+#                    = 규칙            + 수량 차이               + 체결 지연                  + 슬리피지
+#   + 수수료(실제). 펀딩은 양쪽에 거의 같이 붙으므로 차이에서 빼고 따로 보여 준다.
+def _read_jsonl(name):
+    p = _path(name)
+    if not os.path.exists(p):
+        return []
+    with open(p) as f:
+        return [json.loads(x) for x in f if x.strip()]
+
+
+def log_week(rec):
+    os.makedirs(_dir(), exist_ok=True)
+    with open(_path("weeks.jsonl"), "a") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+
+_CLOSE = {}
+
+
+def _day_close(s, t):
+    """일봉(시작 t) 종가 — 없으면 None."""
+    if (s, t) not in _CLOSE:
+        k = xs_mom.daily(s, t, t)
+        _CLOSE[(s, t)] = k[t][0] if t in k else None
+    return _CLOSE[(s, t)]
+
+
+def _ref_1m(s, t):
+    """호가 기록이 없던 주문의 기준가 — 주문 시각 1분봉 시가."""
+    rows = xs_mom._get("klines", {"symbol": s, "interval": "1m", "startTime": t // 60_000 * 60_000, "limit": 1})
+    return float(rows[0][1]) if rows else None
+
+
+def _funding(api, a, b):
+    """[a, b) 펀딩 수입, 심볼별 USDT(받으면 +)."""
+    out, seen, t = {}, set(), a
+    while t < b:
+        e, start = min(b, t + 3 * D) - 1, t
+        while True:
+            rows = api.call("GET", "/fapi/v1/income",
+                            dict(incomeType="FUNDING_FEE", startTime=start, endTime=e, limit=1000), signed=True) or []
+            new = [r for r in rows if r.get("tranId") not in seen]
+            for r in new:
+                seen.add(r.get("tranId"))
+                out[r["symbol"]] = out.get(r["symbol"], 0.0) + float(r["income"])
+            if len(rows) < 1000 or not new:
+                break
+            start = int(rows[-1]["time"])                 # 같은 시각 여러 건 → +1 하지 않고 tranId 로 중복 제거
+        t += 3 * D
+    return out
+
+
+def _weeks(orders):
+    """주별 목표 {월요일 봉: 기록}. weeks.jsonl(리밸런스 때 기록, 같은 주 두 번이면 나중 것) → 없던 주는 주문으로 복원."""
+    recs = {w["week"]: w for w in _read_jsonl("weeks.jsonl")}
+    lp = load_state().get("last_plan") or {}
+    by = {}
+    for o in orders:
+        if o.get("week") is not None and "target" in o:
+            by.setdefault(o["week"], []).append(o)
+    for w, rows in by.items():
+        if w in recs:
+            continue
+        tg, ex = {}, {}
+        for o in rows:
+            tg[o["symbol"]] = o["target"]
+            if o.get("expect"):
+                ex[o["symbol"]] = o["expect"]
+        rec = dict(week=w, targets={s: q for s, q in tg.items() if q}, expect=ex, rebuilt=True)
+        if lp.get("week") == w:
+            rec.update(capital=lp.get("capital"), skipped=lp.get("skipped"))
+        recs[w] = rec
+    return dict(sorted(recs.items()))
+
+
+def compare_week(api, rec, orders, now_ms, marks, funding=True):
+    w = rec["week"]
+    a, b = w + D, w + 8 * D
+    done = now_ms >= b
+    fills = sorted((o for o in orders if o.get("avgPrice") and o.get("qty")), key=lambda o: o["t"])
+
+    def sq(o):
+        return (1 if o["side"] == "BUY" else -1) * o["qty"]
+    q0 = {}
+    for o in fills:
+        if o["t"] < a:
+            q0[o["symbol"]] = q0.get(o["symbol"], 0.0) + sq(o)
+    win = [o for o in fills if a <= o["t"] < b]
+    tg = rec.get("targets") or {}
+    syms = set(tg) | {o["symbol"] for o in win} | {s for s, q in q0.items() if abs(q) > 1e-12}
+    r = dict(week=w, done=done, capital=rec.get("capital"), gross=rec.get("gross"), rebuilt=rec.get("rebuilt", False),
+             skipped=rec.get("skipped") or {}, paper=0.0, delay=0.0, slip=0.0, qty=0.0, fee=0.0, fund=0.0,
+             traded=0.0, notional=0.0, fills=len(win), miss=[], other_fee={}, worst=[])
+    for s in sorted(syms):
+        c0 = (rec.get("expect") or {}).get(s) or _day_close(s, w)
+        p1 = _day_close(s, w + 7 * D) if done else marks.get(s)
+        if c0 is None or p1 is None:
+            r["miss"].append(s)
+            continue
+        t = tg.get(s, 0.0)
+        mine = [o for o in win if o["symbol"] == s]
+        qend = q0.get(s, 0.0) + sum(sq(o) for o in mine)
+        r["paper"] += t * (p1 - c0)
+        r["qty"] += (qend - t) * (p1 - c0)
+        r["notional"] += abs(t) * c0
+        for o in mine:
+            ref = o.get("mid") or _ref_1m(s, o["t"]) or o["avgPrice"]
+            d, sl = sq(o) * (c0 - ref), sq(o) * (ref - o["avgPrice"])
+            r["delay"] += d
+            r["slip"] += sl
+            r["traded"] += o["qty"] * o["avgPrice"]
+            r["worst"].append((sl / (o["qty"] * o["avgPrice"]) * 1e4, s))
+    for o in win:
+        fa = o.get("feeAsset") or "USDT"
+        if fa == "USDT":
+            r["fee"] -= float(o.get("fee") or 0)
+        else:
+            r["other_fee"][fa] = r["other_fee"].get(fa, 0.0) + float(o.get("fee") or 0)
+    if funding:
+        r["fund"] = sum(v for s, v in _funding(api, a, min(b, now_ms)).items() if s in syms)
+    r["live"] = r["paper"] + r["qty"] + r["delay"] + r["slip"] + r["fee"]
+    r["worst"] = sorted(r["worst"])[:3]
+    return r
+
+
+def compare_all(api, now_ms=None, funding=True):
+    now_ms = now_ms or int(time.time() * 1000)
+    orders = _read_jsonl("orders.jsonl")
+    weeks = _weeks(orders)
+    marks = {}
+    if any(now_ms < w + 8 * D for w in weeks):
+        marks = {x["symbol"]: float(x["markPrice"]) for x in api.call("GET", "/fapi/v1/premiumIndex")}
+    return [compare_week(api, rec, orders, now_ms, marks, funding) for rec in weeks.values() if rec["week"] + D <= now_ms]
+
+
+def fmt_compare(r, short=False):
+    base = r["capital"] or r["notional"]
+    pct = (lambda x: f"{x / base * 100:+.2f}%") if base else (lambda x: "—")
+    bp = (lambda x: f"{x / r['traded'] * 1e4:+.1f}bp") if r["traded"] else (lambda x: "—")
+    cost = r["slip"] + r["fee"]
+    head = (f"XS 대조 · 월요일 봉 {xs_mom.fmt_day(r['week'])} · {'확정' if r['done'] else '진행 중(현재 마크 기준)'}"
+            f" · 기준 {'자본' if r['capital'] else '목표 노출'} ${base:.2f}" + (" · 주문으로 복원" if r["rebuilt"] else ""))
+    lines = [head,
+             f"  규칙(월요일 종가 체결) {pct(r['paper'])} (${r['paper']:+.2f}) · 실매매 {pct(r['live'])} (${r['live']:+.2f})"
+             f" · 차이 {pct(r['live'] - r['paper'])} (${r['live'] - r['paper']:+.2f})",
+             f"  회전 비용(슬리피지+수수료) {bp(cost)} of 체결액 ${r['traded']:.2f} — 백테스트 가정 −{xs_mom.COST * 1e4:.0f}bp"]
+    if short:
+        return "\n".join(lines)
+    lines += [f"    체결 지연(월요일 종가 → 주문 직전 호가) ${r['delay']:+.2f} {bp(r['delay'])}  ← 운(평균 0 기대), 비용 아님",
+              f"    슬리피지(호가 중간 → 체결가)         ${r['slip']:+.2f} {bp(r['slip'])}",
+              f"    수수료                               ${r['fee']:+.2f} {bp(r['fee'])}"
+              + (f" (+ USDT 외 {r['other_fee']})" if r["other_fee"] else ""),
+              f"    수량 차이(내림·빠짐·작은 조정 생략)   ${r['qty']:+.2f}",
+              f"  펀딩(실제, 차이에서 뺌) ${r['fund']:+.2f} · 체결 {r['fills']}건"]
+    if r["worst"]:
+        lines.append("  슬리피지 큰 순: " + ", ".join(f"{s} {x:+.0f}bp" for x, s in r["worst"]))
+    if r["skipped"]:
+        lines.append("  뺀 심볼: " + ", ".join(f"{s}({why})" for s, why in r["skipped"].items()))
+    if r["miss"]:
+        lines.append(f"  가격 없음(계산 제외): {r['miss']}")
+    return "\n".join(lines)
 
 
 def snapshot(api, cfg, err=None):
@@ -495,6 +674,8 @@ def loop(cfg, api=None, sleep=time.sleep, now=lambda: int(time.time() * 1000), m
                         st["plan_week"] = res["week"]
                         save_state(st)
                     _announce(res, mode)
+                    if mode == "live":
+                        _announce_compare(api, t)
                 if mode == "live" and t - last_check >= H:
                     last_check = t
                     hit = check(api, cfg["max_loss"])
@@ -512,6 +693,16 @@ def loop(cfg, api=None, sleep=time.sleep, now=lambda: int(time.time() * 1000), m
                 last_snap = t
                 snapshot(api, cfg, err)
         sleep(60)
+
+
+def _announce_compare(api, now_ms):
+    """리밸런스 뒤 지난주(확정) 실매매 ↔ 규칙 대조를 #매매 에. 실패해도 매매엔 영향 없음."""
+    try:
+        done = [r for r in compare_all(api, now_ms) if r["done"]]
+        if done:
+            notify("🔍 " + fmt_compare(done[-1], short=True), "trade")
+    except Exception as e:      # noqa: BLE001
+        print(f"[{_now()}] 대조 실패(무시): {type(e).__name__}: {e}", flush=True)
 
 
 def _announce(res, mode):
@@ -559,10 +750,20 @@ def main():
             st["start_equity"] = None
         save_state(st)
         print("정지 해제")
+    elif "--compare" in sys.argv:
+        rs = compare_all(api)
+        if not rs:
+            print("대조할 주가 없어요(실주문 기록 없음)")
+        for r in rs:
+            print(fmt_compare(r))
+        if len(rs) > 1:
+            pp, lv = sum(r["paper"] for r in rs), sum(r["live"] for r in rs)
+            print(f"합계 {len(rs)}주 · 규칙 ${pp:+.2f} · 실매매 ${lv:+.2f} · 차이 ${lv - pp:+.2f}"
+                  f" · 펀딩 ${sum(r['fund'] for r in rs):+.2f}")
     elif "--go" in sys.argv or "--plan" in sys.argv:
         rebalance(api, "--go" in sys.argv, cfg)
     else:
-        raise SystemExit("--loop | --plan | --go | --check | --status | --flatten | --resume")
+        raise SystemExit("--loop | --plan | --go | --check | --status | --flatten | --resume | --compare")
 
 
 if __name__ == "__main__":
