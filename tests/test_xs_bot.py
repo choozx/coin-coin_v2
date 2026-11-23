@@ -473,3 +473,22 @@ def test_weekly_merges_daily_periods():
     wk = xb.weekly(rs)
     assert [r["n"] for r in wk] == [7, 2] and wk[0]["paper"] == pytest.approx(7.0) and wk[0]["fills"] == 14
     assert "7구간" in xb.fmt_compare(wk[0]) and xb.weekly([dict(base, week=W, hold=7)])[0]["n"] == 1
+
+
+def test_halted_announces_once_per_turn_not_hourly(monkeypatch):
+    """손실 한도로 정지된 동안 '리밸런스 안 함' 알림은 교체 차례마다 한 번 — 매시간 반복하지 않는다."""
+    api = FakeApi({"A": 1.0, "B": 1.0}, margin=30.0)
+    rb(api, True, CFG, sig({"A": 1}, {"B": 1}))
+    st = xb.load_state()
+    st["halted"], st["halt_reason"] = True, "손실 한도"
+    xb.save_state(st)
+    n0 = len(api.orders)
+    said = []
+    monkeypatch.setattr(xb, "notify", lambda msg, cat=None: said.append(msg))
+    monkeypatch.setattr(xb, "bar_signal", lambda o: ({"A": 1.0}, {"B": 1.0}))
+    t = NOW + 7 * DAY                                      # 다음 주 화 00:16 — 차례
+    ts = [t + i * xb.H for i in range(5)] + [t + 7 * DAY + i * xb.H for i in range(3)]
+    it = iter(ts)
+    xb.loop(dict(CFG), api=api, sleep=lambda s: None, now=lambda: next(it), max_iter=len(ts))
+    halted = [m for m in said if "정지 상태" in m]
+    assert len(halted) == 2 and len(api.orders) == n0     # 5시간 동안 1번 + 다음 주 1번 · 주문 없음

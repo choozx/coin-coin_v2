@@ -832,6 +832,7 @@ def loop(cfg, api=None, sleep=time.sleep, now=lambda: int(time.time() * 1000), m
     notify(f"🧭 XS MOM 서비스 시작 · 모드 **{mode}** · {cfg['gross']:g}배 · 손실 한도 −{cfg['max_loss']:.0%} · "
            + ("요일 분산 7몫" if split_on(st0) else "월요일 하나" + (" (요일 분산 켤 차례 기다림)" if cfg.get("split") else "")), "system")
     last_check = last_snap = last_try = 0
+    halt_said = None                                       # 정지 알림을 낸 차례 — 차례마다 한 번만(정지 중엔 차례가 안 넘어가 매시간 반복됐다)
     it = 0
     while max_iter is None or it < max_iter:
         it += 1
@@ -849,7 +850,14 @@ def loop(cfg, api=None, sleep=time.sleep, now=lambda: int(time.time() * 1000), m
                     notify(msg, "trade")
                 if due(st, t, plan_mode) and t - last_try >= H:
                     last_try = t
+                    turn = tuple(due_slices(st, t, plan_mode))
                     res = rebalance(api, mode == "live", cfg, bar_signal, now_ms=t)
+                    if res.get("status") == "halted":
+                        if turn == halt_said:
+                            res = dict(status="halted_quiet")
+                        halt_said = turn
+                    else:
+                        halt_said = None
                     if mode == "plan" and res.get("picks"):
                         st = load_state()
                         for k, ob in res["picks"]:
@@ -903,7 +911,7 @@ def _announce(res, mode):
     elif s == "preview":
         msg = f"👀 {res['head']} (모드 plan — 주문 없음) · 계획 주문 {res['n']}건 · 대시보드에서 확인"
     elif s == "halted":
-        msg = "⛔ XS MOM 정지 상태라 이번 주 리밸런스 안 함(해제: --resume)"
+        msg = "⛔ XS MOM 정지 상태라 이번 차례 리밸런스 안 함(해제: --resume)"
     else:
         return
     notify(msg, "trade")
