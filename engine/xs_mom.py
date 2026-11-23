@@ -3,6 +3,7 @@
 쓰는 곳: engine.xs_bot(실매매 서비스) · research/xs_forward.py(종이 전진 기록) · research/exp_XS_cross_section.py(상수).
 사전 고정(research/XS_MOM.md · exp_XS_cross_section 머리말) — 바꾸지 말 것:
   리밸런스  월요일 일봉 종가(= 화 00:00 UTC). 그 종가가 신호·기대 체결가.
+            요일 분산(XSD, xs_bot --split-on)이면 몫 k 가 요일 k 의 종가에 같은 규칙으로 — signal(o) 는 봉 요일과 무관하다.
   대상      USDT 무기한 COIN 거래 중 · 상장 ≥ 30일 · 최근 30개 일봉 거래대금 중앙 ≥ $5M · 스테이블 제외.
   신호      월요일 종가 / 28일 전 종가 − 1. 상위 10% 롱 · 하위 10% 숏 · 동일 가중.
 공개 API 만 쓴다(키 불필요).
@@ -53,12 +54,25 @@ def fmt_day(t):
     return datetime.fromtimestamp(t / 1000, timezone.utc).strftime("%Y-%m-%d")
 
 
-def last_monday_bar(now_ms):
-    """마지막으로 '끝난' 월요일 일봉의 시작 시각(ms)."""
+WEEKDAYS = ("월", "화", "수", "목", "금", "토", "일")
+
+
+def weekday(t):
+    """봉 시작 시각(ms)의 요일(0=월)."""
+    return datetime.fromtimestamp(t / 1000, timezone.utc).weekday()
+
+
+def last_bar(now_ms, wd=0):
+    """마지막으로 '끝난' 요일 wd(0=월) 일봉의 시작 시각(ms)."""
     o = now_ms // D * D - D
-    while datetime.fromtimestamp(o / 1000, timezone.utc).weekday() != 0:
+    while weekday(o) != wd:
         o -= D
     return o
+
+
+def last_monday_bar(now_ms):
+    """마지막으로 '끝난' 월요일 일봉의 시작 시각(ms)."""
+    return last_bar(now_ms, 0)
 
 
 def universe():

@@ -69,39 +69,56 @@ def tmp_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(xb.time, "sleep", lambda s: None)
     monkeypatch.setattr(xb, "notify", lambda *a, **k: None)
 
+    def no_net(*a, **k):
+        raise AssertionError("테스트가 실제 바이낸스 API 를 부름")
+    monkeypatch.setattr(xs_mom, "_get", no_net)
 
-CFG = dict(mode="live", gross=1.0, capital=None, max_loss=0.30, top=None)
+
+CFG = dict(mode="live", gross=1.0, capital=None, max_loss=0.30, top=None, split=False)
+DAY = 86_400_000
 
 
-def sig(long, short, o=1000):
-    return lambda: (o, long, short)
+def _ms(*a):
+    return int(datetime(*a, tzinfo=timezone.utc).timestamp() * 1000)
+
+
+MON = _ms(2026, 11, 16)                                    # 월요일 봉 시작
+NOW = _ms(2026, 11, 17, 0, 16)                             # 화 00:16 UTC — 리밸런스 차례
+
+
+def sig(long, short):
+    return lambda o: (long, short)
+
+
+def rb(api, go, cfg, signal_fn, now=NOW):
+    return xb.rebalance(api, go, cfg, signal_fn, now_ms=now)
 
 
 def test_first_week_enters_equal_weight_and_skips_foreign():
     api = FakeApi({"A": 1.0, "B": 2.0, "C": 1.0, "D": 4.0, "BTCUSDC": 1.0}, pos={"C": 3.0}, margin=40.0)
-    res = xb.rebalance(api, True, CFG, sig({"A": 1, "B": 2, "BTCUSDC": 1}, {"C": 1, "D": 4}))
+    res = rb(api, True, CFG, sig({"A": 1, "B": 2, "BTCUSDC": 1}, {"C": 1, "D": 4}))
     # C 는 남의 포지션 · BTCUSDC 는 제외 → A·B 롱, D 숏 3개, 포지션당 40/3 = 13.33
     assert api.pos == {"A": 13.3, "B": 6.6, "C": 3.0, "D": -3.3}
     st = xb.load_state()
     assert set(st["positions"]) == {"A", "B", "D"}
-    assert st["start_equity"] == 40.0 and st["week"] == 1000 and res["status"] == "done"
+    assert st["start_equity"] == 40.0 and st["week"] == MON and res["status"] == "done"
 
 
 def test_too_small_skips_week_without_orders():
     api = FakeApi({s: 1.0 for s in "ABCDEF"}, margin=20.0)
-    res = xb.rebalance(api, True, CFG, sig({"A": 1, "B": 1, "C": 1}, {"D": 1, "E": 1, "F": 1}))   # 20/6 = 3.33 < 5
+    res = rb(api, True, CFG, sig({"A": 1, "B": 1, "C": 1}, {"D": 1, "E": 1, "F": 1}))   # 20/6 = 3.33 < 5
     assert api.orders == [] and api.pos == {} and res["status"] == "skip"
-    assert xb.load_state()["week"] == 1000                 # 그 주는 쉼으로 확정
+    assert xb.load_state()["week"] == MON                  # 그 주는 쉼으로 확정
 
 
 def test_second_week_closes_dropped_flips_and_skips_tiny_adjust():
     api = FakeApi({"A": 1.0, "B": 1.0, "C": 1.0, "D": 1.0, "E": 1.0}, margin=80.0)
-    xb.rebalance(api, True, CFG, sig({"A": 1, "B": 1}, {"C": 1, "D": 1}))       # 각 20
+    rb(api, True, CFG, sig({"A": 1, "B": 1}, {"C": 1, "D": 1}))       # 각 20
     assert api.pos == {"A": 20.0, "B": 20.0, "C": -20.0, "D": -20.0}
     api.margin = 84.0
     api.orders.clear()
     # B 빠짐 · C 숏→롱 · A 유지(84/4=21 → +1, 5% 라 건너뜀) · D 유지 · E 새 숏
-    xb.rebalance(api, True, CFG, sig({"A": 1, "C": 1}, {"D": 1, "E": 1}, o=2000))
+    rb(api, True, CFG, sig({"A": 1, "C": 1}, {"D": 1, "E": 1}), now=NOW + 7 * DAY)
     stages = [(s, side, red) for s, side, _, red in api.orders]
     assert stages[0] == ("B", "SELL", "true")              # 빠진 것 먼저, reduceOnly
     assert stages[-1][0] == "E"                            # 새 진입은 마지막
@@ -111,14 +128,14 @@ def test_second_week_closes_dropped_flips_and_skips_tiny_adjust():
 
 def test_failed_order_continues_and_state_matches_exchange():
     api = FakeApi({"A": 1.0, "B": 1.0, "C": 1.0}, margin=30.0, fail={"B"})
-    res = xb.rebalance(api, True, CFG, sig({"A": 1, "B": 1}, {"C": 1}))
+    res = rb(api, True, CFG, sig({"A": 1, "B": 1}, {"C": 1}))
     assert api.pos == {"A": 10.0, "C": -10.0}
     assert set(xb.load_state()["positions"]) == {"A", "C"} and len(res["fails"]) == 1
 
 
 def test_preview_sends_nothing_but_records_plan():
     api = FakeApi({"A": 1.0, "B": 1.0}, margin=30.0)
-    res = xb.rebalance(api, False, CFG, sig({"A": 1}, {"B": 1}))
+    res = rb(api, False, CFG, sig({"A": 1}, {"B": 1}))
     st = xb.load_state()
     assert api.orders == [] and res["status"] == "preview"
     assert [o["symbol"] for o in st["last_plan"]["orders"]] == ["A", "B"] and not st.get("positions")
@@ -126,26 +143,26 @@ def test_preview_sends_nothing_but_records_plan():
 
 def test_capital_cap_and_gross():
     api = FakeApi({"A": 1.0, "B": 1.0}, margin=1000.0)
-    xb.rebalance(api, True, dict(CFG, capital=20.0, gross=2.0), sig({"A": 1}, {"B": 1}))   # 20 × 2 ÷ 2
+    rb(api, True, dict(CFG, capital=20.0, gross=2.0), sig({"A": 1}, {"B": 1}))   # 20 × 2 ÷ 2
     assert api.pos == {"A": 20.0, "B": -20.0}
 
 
 def test_loss_limit_flattens_only_own_and_halts():
     api = FakeApi({"A": 1.0, "B": 1.0, "X": 1.0}, pos={"X": 5.0}, margin=30.0)
-    xb.rebalance(api, True, CFG, sig({"A": 1}, {"B": 1}))
+    rb(api, True, CFG, sig({"A": 1}, {"B": 1}))
     api.margin = 20.0                                      # −33%
     hit = xb.check(api, 0.30)
     assert hit and api.pos == {"X": 5.0}                   # 남의 포지션은 그대로
     st = xb.load_state()
     assert st["halted"] and st["positions"] == {}
     api.orders.clear()
-    assert xb.rebalance(api, True, CFG, sig({"A": 1}, {"B": 1}))["status"] == "halted"
+    assert rb(api, True, CFG, sig({"A": 1}, {"B": 1}))["status"] == "halted"
     assert api.orders == []
 
 
 def test_loss_within_limit_does_nothing():
     api = FakeApi({"A": 1.0, "B": 1.0}, margin=30.0)
-    xb.rebalance(api, True, CFG, sig({"A": 1}, {"B": 1}))
+    rb(api, True, CFG, sig({"A": 1}, {"B": 1}))
     api.margin = 25.0                                      # −17%
     api.orders.clear()
     assert xb.check(api, 0.30) is None and api.orders == [] and not xb.load_state()["halted"]
@@ -157,12 +174,8 @@ def test_qty_format_uses_step_decimals():
     assert xb._fmt_qty(0.0123, 0.001) == "0.012"
 
 
-def _ms(*a):
-    return int(datetime(*a, tzinfo=timezone.utc).timestamp() * 1000)
-
-
 def test_due_only_after_tuesday_0015_once_per_week():
-    mon = _ms(2026, 11, 16)                                # 월요일 봉 시작
+    mon = MON
     assert xs_mom.last_monday_bar(_ms(2026, 11, 17, 0, 20)) == mon
     assert not xb.due({}, _ms(2026, 11, 17, 0, 10))        # 화 00:10 — 아직
     assert xb.due({}, _ms(2026, 11, 17, 0, 16))
@@ -172,12 +185,12 @@ def test_due_only_after_tuesday_0015_once_per_week():
 
 def _run_loop(monkeypatch, api, mode, times):
     calls = []
-    monkeypatch.setattr(xb, "this_week_signal", lambda: (xs_mom.last_monday_bar(times[0]), {"A": 1.0}, {"B": 1.0}))
+    monkeypatch.setattr(xb, "bar_signal", lambda o: ({"A": 1.0}, {"B": 1.0}))
     real = xb.rebalance
 
-    def spy(api_, go, cfg, signal_fn=None):
+    def spy(api_, go, cfg, signal_fn=None, now_ms=None):
         calls.append(go)
-        return real(api_, go, cfg, xb.this_week_signal)
+        return real(api_, go, cfg, signal_fn, now_ms=now_ms)
     monkeypatch.setattr(xb, "rebalance", spy)
     it = iter(times)
     xb.loop(dict(CFG, mode=mode), api=api, sleep=lambda s: None, now=lambda: next(it), max_iter=len(times))
@@ -210,7 +223,6 @@ def test_loop_before_tuesday_does_nothing(monkeypatch):
 
 # ── 실매매 ↔ 규칙 대조 ────────────────────────────────────────────────────
 W = _ms(2026, 11, 16)
-DAY = 86_400_000
 
 
 def _jl(name, rows):
@@ -264,7 +276,200 @@ def test_compare_rebuilds_week_from_orders_and_carries_positions(monkeypatch):
 
 def test_rebalance_logs_week_targets_and_book_mid():
     api = FakeApi({"A": 1.0, "B": 2.0}, margin=40.0)
-    xb.rebalance(api, True, CFG, sig({"A": 1.0}, {"B": 2.0}))
+    rb(api, True, CFG, sig({"A": 1.0}, {"B": 2.0}))
     (wk,) = xb._read_jsonl("weeks.jsonl")
-    assert wk["week"] == 1000 and wk["targets"] == {"A": 20.0, "B": -10.0} and wk["expect"] == {"A": 1.0, "B": 2.0}
+    assert wk["week"] == MON and wk["hold"] == 7 and wk["targets"] == {"A": 20.0, "B": -10.0} and wk["expect"] == {"A": 1.0, "B": 2.0}
     assert all(o["mid"] for o in xb._read_jsonl("orders.jsonl"))
+
+
+# ── 몫(요일 분산 XSD) ─────────────────────────────────────────────────────
+def test_old_state_migrates_to_seven_monday_slices_without_orders():
+    """옛 state.json(몫 없음) — 7몫이 같은 월요일 목록을 1/7 씩. 같은 목록이면 다음 주 주문이 생기지 않는다."""
+    os.makedirs(os.environ["XS_DIR"], exist_ok=True)
+    with open(os.path.join(os.environ["XS_DIR"], "state.json"), "w") as f:
+        json.dump(dict(start_equity=40.0, halted=False, week=MON, positions={"A": 20.0, "B": -20.0}, plan_week=MON), f)
+    st = xb.load_state()
+    assert [sl["day"] for sl in st["slices"]] == [0] * 7 and all(sl["bar"] == MON for sl in st["slices"])
+    assert sum(sl["qty"]["A"] for sl in st["slices"]) == pytest.approx(20.0) and st["plan_bars"] == [MON] * 7
+    assert not xb.due(st, NOW) and xb.due(st, NOW + 7 * DAY)
+    api = FakeApi({"A": 1.0, "B": 1.0}, pos={"A": 20.0, "B": -20.0}, margin=40.0)
+    res = rb(api, True, CFG, sig({"A": 1}, {"B": 1}), now=NOW + 7 * DAY)
+    assert res["status"] == "done" and api.orders == [] and api.pos == {"A": 20.0, "B": -20.0}
+
+
+def test_monday_mode_170_at_2x_sizes_per_coin_not_per_slice():
+    """$170 · 2배 · 30개 → 코인당 $11.33(몫 하나분 $1.6 으로 판정하면 매주 쉬게 된다)."""
+    longs = {f"L{i}": 1.0 for i in range(15)}
+    shorts = {f"S{i}": 1.0 for i in range(15)}
+    api = FakeApi({**longs, **shorts}, margin=170.0)
+    res = rb(api, True, dict(CFG, gross=2.0), sig(longs, shorts))
+    assert res["status"] == "done" and res["per"] == pytest.approx(170 * 2 / 30)
+    assert api.pos["L0"] == 11.3 and api.pos["S0"] == -11.3 and len(api.pos) == 30
+
+
+def _wd_sig(o):
+    """요일마다 다른 목록 + 늘 롱인 A."""
+    k = xs_mom.weekday(o)
+    return {"A": 1.0, f"L{k}": 1.0}, {f"S{k}": 1.0}
+
+
+def _wd_marks():
+    return {"A": 1.0, **{f"L{k}": 1.0 for k in range(7)}, **{f"S{k}": 1.0 for k in range(7)}}
+
+
+def _step(api, cfg, t):
+    """서비스 루프 한 바퀴(분산 전환 → 차례면 교체)."""
+    st = xb.load_state()
+    msg = xb.apply_split(st, cfg, t)
+    if msg:
+        xb.save_state(st)
+    if xb.due(st, t):
+        return rb(api, True, cfg, _wd_sig, now=t)
+    return None
+
+
+def test_switch_to_split_no_orders_then_one_slice_per_day():
+    api = FakeApi(_wd_marks(), margin=700.0)
+    rb(api, True, CFG, _wd_sig)                            # 화 11-17: 월요일 하나 — 7몫 모두 월요일 목록
+    full = 700 / 3
+    assert api.pos == {"A": 233.3, "L0": 233.3, "S0": -233.3}
+    on = dict(CFG, split=True)
+    api.orders.clear()
+    assert _step(api, on, _ms(2026, 11, 18, 12)) is None   # 수 12:00 켬 — 주문 없음 · 오늘 차례인 몫 없음
+    st = xb.load_state()
+    assert api.orders == [] and st["split_since"] and [sl["day"] for sl in st["slices"]] == list(range(7))
+    # 목 00:16(수요일 봉) → 금(목) → 토(금) → 일(토) → 월(일) → 화(월) → 수(화): 하루 한 몫씩
+    order = [2, 3, 4, 5, 6, 0, 1]
+    for i, k in enumerate(order):
+        api.orders.clear()
+        t = _ms(2026, 11, 19, 0, 16) + i * DAY
+        res = _step(api, on, t)
+        assert res["status"] == "done" and res["picks"] == [(k, xs_mom.last_bar(t, k))]
+        assert not xb.due(xb.load_state(), t + 3_600_000)  # 같은 날 두 번 안 한다
+        touched = {s for s, *_ in api.orders}
+        if k == 0:                                         # 월요일 몫은 같은 목록(L0·S0·A) → 크기 그대로
+            assert touched == set()
+        else:
+            assert touched == {"L0", "S0", f"L{k}", f"S{k}"}   # 월요일 목록 1/7 줄이고 그 요일 목록 1/7 진입 · A 그대로
+    assert api.pos["A"] == pytest.approx(233.3)
+    for k in range(7):
+        assert api.pos[f"L{k}"] == pytest.approx(full / 7, abs=0.1) and api.pos[f"S{k}"] == pytest.approx(-full / 7, abs=0.1)
+    assert xb._read_jsonl("weeks.jsonl")[-1]["hold"] == 1
+
+
+def test_switch_waits_until_due_monday_rebalance_is_done():
+    """화 00:16 — 월요일 리밸런스 차례면 그걸 먼저(7몫 모두 새 월요일 목록) 하고 그다음에 분산으로."""
+    api = FakeApi(_wd_marks(), margin=700.0)
+    rb(api, True, CFG, _wd_sig)
+    on = dict(CFG, split=True)
+    t = NOW + 7 * DAY                                      # 다음 주 화 00:16
+    st = xb.load_state()
+    assert xb.apply_split(st, on, t) is None and not st.get("split_since")
+    _step(api, on, t)                                      # 이 바퀴는 월요일 하나로 교체
+    st = xb.load_state()
+    assert not st.get("split_since") and all(sl["bar"] == MON + 7 * DAY for sl in st["slices"])
+    api.orders.clear()
+    assert _step(api, on, t + 60_000) is None and xb.load_state()["split_since"] and api.orders == []
+
+
+def test_split_request_file_is_one_way(monkeypatch):
+    """--split-on --yes 는 요청 파일만 남긴다 → 서비스가 바꾼 뒤엔 파일이 없어져도 7몫으로 계속."""
+    api = FakeApi(_wd_marks(), margin=700.0)
+    rb(api, True, CFG, _wd_sig)
+    monkeypatch.setattr(xb.sys, "argv", ["xs_bot", "--split-on", "--yes"])
+    monkeypatch.setattr(xb.Api, "from_env", classmethod(lambda cls: api))
+    monkeypatch.setattr("engine.env.load_dotenv", lambda *a, **k: 0)
+    xb.main()
+    assert xb.split_requested() and not xb.load_state().get("split_since")    # 파일만 — state.json 은 서비스가 쓴다
+    assert xb.config()["split"]
+    _step(api, xb.config(), _ms(2026, 11, 18, 12))
+    os.remove(os.path.join(os.environ["XS_DIR"], "split_on"))
+    res = _step(api, CFG, _ms(2026, 11, 19, 0, 16))         # 요청이 없어도 수요일 몫만 교체(월요일 하나로 되돌아가지 않음)
+    st = xb.load_state()
+    assert [sl["day"] for sl in st["slices"]] == list(range(7)) and res["picks"] == [(2, _ms(2026, 11, 18))]
+    snap = xb.snapshot(api, dict(CFG, mode="live"))
+    assert snap["split"] and snap["schedule"].startswith("요일 분산") and len(snap["slices"]) == 7
+
+
+def test_loop_picks_up_split_request(monkeypatch):
+    api = FakeApi(_wd_marks(), margin=700.0)
+    rb(api, True, CFG, _wd_sig)
+    os.makedirs(os.environ["XS_DIR"], exist_ok=True)
+    open(os.path.join(os.environ["XS_DIR"], "split_on"), "w").close()
+    monkeypatch.setattr(xb, "bar_signal", _wd_sig)
+    api.orders.clear()
+    ts = iter([_ms(2026, 11, 18, 12), _ms(2026, 11, 19, 0, 16)])
+    xb.loop(dict(CFG), api=api, sleep=lambda s: None, now=lambda: next(ts), max_iter=2)
+    assert xb.load_state()["split_since"] and {s for s, *_ in api.orders} == {"L0", "S0", "L2", "S2"}
+
+
+def test_split_slice_too_small_rests_and_keeps_old_holdings():
+    api = FakeApi(_wd_marks(), margin=70.0)                # 70/3 = 23.3 — 월요일 하나는 돌고, 몫 하나분 3.3 은 $5 미만
+    rb(api, True, CFG, _wd_sig)
+    on = dict(CFG, split=True)
+    _step(api, on, _ms(2026, 11, 18, 12))
+    api.orders.clear()
+    t = _ms(2026, 11, 19, 0, 16)
+    res = _step(api, on, t)
+    assert res["status"] == "skip" and "이 몫" in res["warn"] and api.orders == []
+    st = xb.load_state()
+    assert st["slices"][2]["bar"] == _ms(2026, 11, 18) and set(st["slices"][2]["qty"]) == {"A", "L0", "S0"}
+    assert not xb.due(st, t + 3_600_000)
+
+
+def test_crash_mid_orders_reruns_only_remaining():
+    """주문 중간에 죽으면 몫을 확정하지 않는다 → 다시 돌면 남은 차이만 주문(이미 낸 건 다시 안 냄)."""
+    api = FakeApi({"A": 1.0, "B": 1.0, "C": 1.0}, margin=30.0)
+
+    class Boom(Exception):
+        pass
+    real = api.call
+
+    def call(method, path, params=None, signed=False, retries=3):
+        if path == "/fapi/v1/order" and params["symbol"] == "C" and not api.boomed:
+            api.boomed = True
+            raise Boom("네트워크 끊김")
+        return real(method, path, params, signed, retries)
+    api.boomed = False
+    api.call = call
+    with pytest.raises(Boom):
+        rb(api, True, CFG, sig({"A": 1, "B": 1}, {"C": 1}))
+    st = xb.load_state()
+    assert api.pos == {"A": 10.0, "B": 10.0} and xb.due(st, NOW) and st["slices"][0]["qty"] == {}
+    api.orders.clear()
+    rb(api, True, CFG, sig({"A": 1, "B": 1}, {"C": 1}))
+    assert [s for s, *_ in api.orders] == ["C"] and api.pos == {"A": 10.0, "B": 10.0, "C": -10.0}
+    assert not xb.due(xb.load_state(), NOW)
+
+
+def test_first_live_in_split_mode_enters_monday_list_then_splits():
+    """처음 켤 때(몫 기록 없음)도 같은 규칙 — 차례인 월요일 하나로 먼저 전부 진입(묵은 요일 신호로 들어가지 않음), 그 뒤 분산."""
+    api = FakeApi(_wd_marks(), margin=700.0)
+    on = dict(CFG, split=True)
+    t = _ms(2026, 11, 19, 12)
+    st = xb.load_state()
+    assert xb.apply_split(st, on, t) is None               # 기록이 없어 7몫 모두 차례 → 먼저 진입
+    res = rb(api, True, on, _wd_sig, now=t)
+    assert sorted(k for k, _ in res["picks"]) == list(range(7))
+    assert api.pos == {"A": 233.3, "L0": 233.3, "S0": -233.3}
+    st = xb.load_state()
+    assert xb.apply_split(st, on, t + 60_000)
+    assert [sl["bar"] for sl in st["slices"]] == [MON] + [xs_mom.last_bar(t, k) for k in range(1, 7)]
+    assert not xb.due(st, t + 60_000)
+
+
+def test_flatten_clears_slices():
+    api = FakeApi({"A": 1.0, "B": 1.0}, margin=30.0)
+    rb(api, True, CFG, sig({"A": 1}, {"B": 1}))
+    st = xb.load_state()
+    xb.flatten(api, xb.Market(api), st, "수동")
+    assert all(sl["qty"] == {} for sl in xb.load_state()["slices"]) and api.pos == {}
+
+
+def test_weekly_merges_daily_periods():
+    base = dict(capital=100.0, notional=0.0, done=True, rebuilt=False, miss=[], skipped={}, worst=[], other_fee={},
+                paper=1.0, delay=0.1, slip=-0.1, qty=0.0, fee=-0.05, fund=0.0, traded=10.0, live=0.85, fills=2, n=1)
+    rs = [dict(base, week=W + i * DAY, hold=1) for i in range(9)]
+    wk = xb.weekly(rs)
+    assert [r["n"] for r in wk] == [7, 2] and wk[0]["paper"] == pytest.approx(7.0) and wk[0]["fills"] == 14
+    assert "7구간" in xb.fmt_compare(wk[0]) and xb.weekly([dict(base, week=W, hold=7)])[0]["n"] == 1

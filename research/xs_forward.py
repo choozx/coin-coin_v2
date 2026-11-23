@@ -9,8 +9,14 @@
 
     python3 research/xs_forward.py --record     # 화요일 00:00 UTC 이후 1회(놓쳤으면 아무 때나 — 가장 최근 월요일 봉 기준)
     python3 research/xs_forward.py --report     # 주별 결과 · 누적 · 이번 주 미실현
+
+요일 분산(XSD) 장부 --split: 자금 7몫, 몫 k 는 요일 k(0=월) 종가에 같은 규칙으로 교체 · 7일 보유. 매일 1회.
+  몫마다 자기 자금으로 굴린다(합계 = 7몫 평균). 월요일 장부(위)는 사전 고정 기록이라 그대로 두고 따로 쌓는다.
+    python3 research/xs_forward.py --record --split   # 매일 00:00 UTC 이후 1회(어제 봉 = 그 요일 몫)
+    python3 research/xs_forward.py --report --split
+  cron(EC2, UTC): 5 0 * * *  cd ~/auto_trading && ~/fh_venv/bin/python research/xs_forward.py --record --split >> ~/xsd_forward.log 2>&1
   cron(EC2, UTC): 5 0 * * 2  cd ~/auto_trading && python3 research/xs_forward.py --record >> ~/xs_forward.log 2>&1
-결과: data/xs_forward/ (못 쓰면 ~/xs_forward/) 의 xs_forward_book.jsonl. 키 불필요(공개 API 만).
+결과: data/xs_forward/ (못 쓰면 ~/xs_forward/) 의 xs_forward_book.jsonl · 요일 분산은 xsd_forward_book.jsonl. 키 불필요(공개 API 만).
 """
 from __future__ import annotations
 
@@ -30,6 +36,8 @@ from engine.xs_mom import COST, D, _get, daily, last_monday_bar, signal  # noqa:
 
 DIRS = (os.path.join(ROOT, "data", "xs_forward"), os.path.expanduser("~/xs_forward"))
 BOOK = "xs_forward_book.jsonl"
+SPLIT_BOOK = "xsd_forward_book.jsonl"
+WD = ("월", "화", "수", "목", "금", "토", "일")
 EXPECT = (0.20, 0.40, 0.63)                     # 연 기대치: 보수 하한 · 보수 상한 · 백테스트
 
 
@@ -37,9 +45,9 @@ def _fmt(t):
     return datetime.fromtimestamp(t / 1000, timezone.utc).strftime("%Y-%m-%d")
 
 
-def _book_path(write=False):
+def _book_path(write=False, name=BOOK):
     for d in DIRS:
-        p = os.path.join(d, BOOK)
+        p = os.path.join(d, name)
         if os.path.exists(p):
             return p
     if not write:
@@ -47,7 +55,7 @@ def _book_path(write=False):
     for d in DIRS:
         try:
             os.makedirs(d, exist_ok=True)
-            p = os.path.join(d, BOOK)
+            p = os.path.join(d, name)
             with open(p, "a"):
                 pass
             return p
@@ -56,8 +64,8 @@ def _book_path(write=False):
     sys.exit("기록할 곳이 없어요(data/xs_forward, ~/xs_forward 둘 다 못 씀)")
 
 
-def _read():
-    p = _book_path()
+def _read(name=BOOK):
+    p = _book_path(name=name)
     if not p:
         return []
     with open(p) as f:
@@ -176,11 +184,86 @@ def report():
         print(f"  이번 주 미실현: 시세 조회 실패 {e}")
 
 
+def _wd(t):
+    return datetime.fromtimestamp(t / 1000, timezone.utc).weekday()
+
+
+def record_split(now_ms=None):
+    """어제(마지막으로 끝난) 봉 = 그 요일 몫의 교체. 같은 몫의 지난 기록(7일 전)을 이 봉 종가로 확정."""
+    book = _read(SPLIT_BOOK)
+    o = (now_ms or int(time.time() * 1000)) // D * D - D
+    if any(r["t"] == o for r in book):
+        print(f"이미 기록됨: {WD[_wd(o)]}요일 봉 {_fmt(o)} (다음 {_fmt(o + D)} 봉 → {_fmt(o + 2 * D)} 00:00 UTC 이후)")
+        return
+    k = _wd(o)
+    prev = next((r for r in reversed(book) if r["day"] == k), None)
+    print(f"몫 {k}({WD[k]}) 교체: {_fmt(o)} 봉 종가(= {_fmt(o + D)} 00:00 UTC)", flush=True)
+    res = settle(prev, o) if prev else None
+    rec = signal(o)
+    w0, w1 = _weights(prev), _weights(rec)
+    turn = sum(abs(w1.get(s, 0) - w0.get(s, 0)) for s in set(w0) | set(w1))
+    rec.update(day=k, turn=round(turn, 4), cost=round(turn * COST, 6), recorded=int(time.time() * 1000), prev_result=res)
+    p = _book_path(write=True, name=SPLIT_BOOK)
+    with open(p, "a") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    if res:
+        net = res["gross"] - prev["cost"]
+        print(f"이 몫 지난 기간({_fmt(prev['t'])}~) 확정: 순 {net*100:+.2f}% · 롱 {res['long']*100:+.2f} · 숏 {res['short']*100:+.2f}"
+              + (f" · 폐지 {res['delisted']}" if res["delisted"] else ""))
+    print(f"이번: 대상 {rec['n']}개 · 롱 {rec['k']} · 숏 {rec['k']} · 회전 {turn:.2f}")
+    print(f"저장: {p}")
+
+
+def report_split():
+    """몫마다 자기 자금으로 굴린 결과 + 합계(7몫 평균). 합계 곡선은 몫이 확정될 때마다 갱신."""
+    book = _read(SPLIT_BOOK)
+    if not book:
+        print("요일 분산 기록 없음 — --record --split 먼저")
+        return
+    eq = {}                                       # 몫 → 누적
+    curve, rows = [], []
+    for cur in book:
+        r = cur.get("prev_result")
+        if r is None:
+            eq.setdefault(cur["day"], 1.0)
+            continue
+        prev = next(x for x in reversed(book[:book.index(cur)]) if x["day"] == cur["day"])
+        net = r["gross"] - prev["cost"]
+        eq[cur["day"]] = eq.get(cur["day"], 1.0) * (1 + net)
+        rows.append((cur["day"], prev["t"], net))
+        curve.append(sum(eq.get(d, 1.0) for d in range(7)) / 7)   # 아직 시작 안 한 몫은 현금(1.0)
+    print(f"XS MOM 요일 분산 전진 기록 · 시작 {_fmt(book[0]['t'])} 봉 · 기록 {len(book)}건 · 확정 {len(rows)}건")
+    for d in range(7):
+        mine = [x for x in rows if x[0] == d]
+        started = any(b["day"] == d for b in book)
+        print(f"  몫 {d}({WD[d]}) " + (f"확정 {len(mine)}주 · 누적 {eq.get(d, 1.0)*100-100:+6.1f}%"
+                                         + (f" · 최근 {mine[-1][2]*100:+.2f}%" if mine else "") if started else "아직 시작 전"))
+    if curve:
+        c = np.array(curve)
+        mdd = (c / np.maximum.accumulate(np.r_[1.0, c])[1:] - 1).min()
+        print(f"  합계(7몫 평균) 누적 {c[-1]*100-100:+.1f}% · 최대낙폭 {min(mdd, 0)*100:+.1f}% · 확정 {len(rows)}건(≈ {len(rows)/7:.1f}주)")
+        print(f"  기대치(연, 1배): 단일 요일 평균 +45% · 보수 +{EXPECT[0]:.0%}~+{EXPECT[1]:.0%} — 26주는 지나야 대략적인 방향")
+    try:
+        px = {x["symbol"]: float(x["price"]) for x in _get("ticker/price", {})}
+        last = {}
+        for b in book:
+            last[b["day"]] = b
+        un = []
+        for b in last.values():
+            lg = np.mean([px[s] / p - 1 for s, p in b["long"].items() if s in px])
+            sh = np.mean([-(px[s] / p - 1) for s, p in b["short"].items() if s in px])
+            un.append(0.5 * lg + 0.5 * sh)
+        print(f"  지금 든 몫 {len(un)}개 미실현(가격만, 몫 평균): {np.mean(un)*100:+.2f}%")
+    except Exception as e:                         # 시세 조회 실패해도 기록 요약은 보여 준다
+        print(f"  미실현: 시세 조회 실패 {e}")
+
+
 def main():
+    split = "--split" in sys.argv
     if "--record" in sys.argv:
-        record()
+        record_split() if split else record()
     elif "--report" in sys.argv:
-        report()
+        report_split() if split else report()
     else:
         print(__doc__)
 

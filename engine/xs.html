@@ -71,6 +71,7 @@ function render(d) {
   if (d.halted) notes.push(`<div class="note err">⛔ 정지 — ${esc(d.halt_reason)} · 해제: <code>python -m engine.xs_bot --resume</code></div>`);
   if (d.error) notes.push(`<div class="note err">⚠ ${esc(d.error)}</div>`);
   if (d.mode === "plan") notes.push(`<div class="note info">계획만 보는 모드예요. 실주문은 <code>.env</code> 에 <code>XS_MODE=live</code> 를 넣고 xsbot 을 다시 띄워야 나갑니다.</div>`);
+  if (d.slices) notes.push(`<div class="note info">몫(요일 · 마지막 교체 봉 · 코인 수): ${d.slices.map(x => `${esc(x.day)} ${esc(x.bar || "—")} · ${x.n}`).join(" / ")}</div>`);
   if (d.top) notes.push(`<div class="note warn">top=${d.top} — 체결 확인용 축소 설정(규칙 아님)</div>`);
   const lp = d.last_plan;
   if (lp && lp.warn) notes.push(`<div class="note warn">⏸ ${esc(lp.warn)}</div>`);
@@ -83,6 +84,7 @@ function render(d) {
     ["롱 / 숏", `${usd(d.long_usd)} / ${usd(d.short_usd)}`],
     ["미실현", `<span class="${cls(d.upnl)}">${usd(d.upnl)}</span>`],
     ["총 노출 · 자본 상한", `${d.gross}배 · ${d.capital_cap ? "$" + d.capital_cap : "전액"}`],
+    ["운영", esc(d.schedule || "월요일 하나(주 1회)")],
     ["마지막 리밸런스", esc(d.last_week || "없음")],
     ["다음 리밸런스", esc(d.next_rebalance || "—")],
   ];
