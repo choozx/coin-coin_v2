@@ -17,11 +17,13 @@
 안전: XS_MODE=live 일 때만 실주문(기본 plan = 목록·주문 계획만 대시보드에) · 헤지 모드면 중단 ·
   다른 포지션이 있는 심볼·BTCUSDC 는 뺀다 · 심볼별 교차 마진 + 레버리지 min(5, 심볼 최대) · 컨테이너가 재시작돼도 청산하지 않는다.
 ⚠ 손실 한도는 계정 전체 마진 잔고 기준 → 같은 메인넷 계정에서 다른 실험이 돌면 그 손익도 섞인다.
-  입출금도 손익과 구분하지 못한다 → 입금 뒤 --rebase(안 하면 한도가 늦게 걸림) · 출금 전 --rebase --by=-금액(안 하면 손실로 보고 청산).
+  입출금은 매시간 거래소 이체 기록(income TRANSFER)으로 감지해 기준을 그만큼 옮긴다(입금 → 올림 · 출금 → 내림, #매매 알림).
+  --rebase 는 기준을 지금 잔고로 다시 잡는 것(수익을 지키고 싶을 때 등, 선택).
 
 서비스:  python -m engine.xs_bot --loop                (XS_MODE=off|plan|live)
 분산:    python -m engine.xs_bot --split-on --yes     요일 분산으로 바꾸기(한 번 · 되돌리지 않음). --yes 없으면 설명만
-기준:    python -m engine.xs_bot --rebase [--by=±금액]  손실 한도 기준(시작 자본)을 지금 잔고로(입금 뒤) · 금액만큼 옮기기(출금 전)
+기준:    python -m engine.xs_bot --rebase             손실 한도 기준(시작 자본)을 지금 잔고로(입출금은 자동 감지라 보통 필요 없음)
+원격:    디스코드 /xs status|compare|resume|flatten|rebase|split-on → $XS_DIR/cmd/ 요청 파일 → 서비스가 1분 안에 실행(engine/xs_cmd.py)
 수동:    python -m engine.xs_bot --plan | --go | --check | --status | --flatten | --resume   [--top=N 체결 확인용 · 규칙 아님]
 대조:    python -m engine.xs_bot --compare   주별 실매매 ↔ 규칙(월요일 종가 체결) 차이 = 체결 지연·슬리피지·수수료·수량 차이.
          live 면 화요일 리밸런스 뒤 지난주 확정분을 #매매 에 자동으로 올린다.
@@ -43,7 +45,7 @@ import urllib.request
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from . import xs_mom
+from . import xs_cmd, xs_mom
 from .notifier import notify
 
 REST = "https://fapi.binance.com"
@@ -519,6 +521,7 @@ def rebalance(api, go, cfg, signal_fn=bar_signal, now_ms=None):
     if st.get("start_equity") is None:
         st["start_equity"] = acct["total_margin"]
         st["started"] = _now()
+        mark_transfers(api, st, now_ms)                    # 이 잔고에 이미 들어 있는 이체는 다시 세지 않게
     expect = {}
     for _, _, lg, sh in groups:
         expect.update(lg)
@@ -554,10 +557,74 @@ def rebalance(api, go, cfg, signal_fn=bar_signal, now_ms=None):
                 head=head, notes=p["notes"])
 
 
-def check(api, max_loss):
-    """손실 한도 점검. 반환: 발동했으면 dict, 아니면 None."""
+# ── 입출금 감지 ─────────────────────────────────────────────────────────────
+# 손실 한도는 '기준(start_equity) 대비 잔고'라 입출금을 손익으로 착각한다(출금하면 1시간 안에 전량 청산).
+# 거래소 이체 기록(income TRANSFER: + 선물 지갑으로 들어옴 · − 나감)만큼 기준을 옮긴다.
+# 이체 기록이 늦게 잡힐 수 있어 매번 TRANSFER_LAG 만큼 겹쳐 읽고, 이미 센 tranId 는 건너뛴다.
+TRANSFER_LAG = 15 * 60_000
+TRANSFER_ASSETS = ("USDT", "USDC", "FDUSD", "BFUSD")          # 달러로 셈. 그 밖의 자산 이체는 알리기만
+
+
+def _transfers(api, start, end):
+    out = []
+    while start < end:                                     # income 은 한 번에 7일 안쪽으로
+        e = min(end, start + 7 * D - 1)
+        out += api.call("GET", "/fapi/v1/income", dict(incomeType="TRANSFER", startTime=start, endTime=e, limit=1000),
+                        signed=True) or []
+        start = e + 1
+    return out
+
+
+def mark_transfers(api, st, now_ms):
+    """지금까지의 이체는 이미 잔고(=기준)에 들어 있다고 표시. 기준을 새로 잡을 때마다 부른다."""
+    st["transfer_seen"] = now_ms
+    st["transfer_ids"] = sorted({str(r.get("tranId")) for r in _transfers(api, now_ms - TRANSFER_LAG, now_ms)})
+
+
+def sync_transfers(api, st, now_ms):
+    """새 이체만큼 기준을 옮긴다. 반환: 새로 반영한 이체 목록(없으면 []). 저장은 부르는 쪽."""
+    if not st.get("start_equity"):
+        return []
+    if st.get("transfer_seen") is None:                    # 이 기능 전부터 돌던 상태 — 지난 이체는 소급하지 않음
+        mark_transfers(api, st, now_ms)
+        return []
+    seen = set(st.get("transfer_ids") or [])
+    rows = [r for r in _transfers(api, st["transfer_seen"] - TRANSFER_LAG, now_ms) if str(r.get("tranId")) not in seen]
+    st["transfer_seen"] = now_ms
+    if not rows:
+        return []
+    st["transfer_ids"] = sorted(seen | {str(r.get("tranId")) for r in rows})[-200:]
+    usd = [r for r in rows if r.get("asset", "USDT") in TRANSFER_ASSETS]
+    other = [r for r in rows if r not in usd]
+    amt = math.fsum(float(r["income"]) for r in usd)
+    old = st["start_equity"]
+    new = old + amt
+    st["start_equity"] = new if new > 0 else None
+    msg = (f"💸 XS MOM 입출금 감지 {amt:+,.2f} USD ({len(usd)}건) → 손실 한도 기준 ${old:,.2f} → "
+           + (f"**${new:,.2f}**" if new > 0 else "없음(다음 진입 때 다시 잡힘)"))
+    if other:
+        msg += " · ⚠ 달러 아닌 이체는 기준에 안 넣음: " + ", ".join(f"{r.get('asset')} {r.get('income')}" for r in other)
+    print(f"[{_now()}] {msg}", flush=True)
+    notify(msg, "trade")
+    return rows
+
+
+def check(api, max_loss, now_ms=None):
+    """손실 한도 점검. 반환: 발동했으면 dict, 아니면 None. 입출금(이체)은 먼저 기준에 반영한다."""
+    now_ms = now_ms or int(time.time() * 1000)
     st = load_state()
+    if not st.get("halted") and sync_transfers(api, st, now_ms):
+        save_state(st)
     if st.get("halted") or not st.get("positions") or not st.get("start_equity"):
+        return None
+    eq, base = account(api)["total_margin"], st["start_equity"]
+    dd = eq / base - 1
+    if dd > -max_loss:
+        return None
+    time.sleep(20)                                         # 방금 한 출금이 이체 기록에 늦게 잡혔을 수 있다 → 한 번 더
+    if sync_transfers(api, st, now_ms + 20_000):
+        save_state(st)
+    if not st.get("start_equity"):
         return None
     eq, base = account(api)["total_margin"], st["start_equity"]
     dd = eq / base - 1
@@ -570,19 +637,111 @@ def check(api, max_loss):
     return dict(dd=dd, closed=len(done), base=base, eq=eq)
 
 
-def rebase(st, equity, by=None):
-    """손실 한도 기준(start_equity) 다시 잡기. by 없으면 지금 잔고로, 있으면 기준 ± by. 반환 (전, 후). 저장은 부르는 쪽."""
+def rebase(api, cfg, now_ms=None):
+    """손실 한도 기준(start_equity)을 지금 잔고로. 저장하고 안내문을 돌려준다."""
+    now_ms = now_ms or int(time.time() * 1000)
+    st = load_state()
+    eq = account(api)["total_margin"]
+    if not eq or eq <= 0:
+        raise SystemExit(f"잔고 ${eq or 0:.2f} — 기준으로 쓸 수 없어요")
     old = st.get("start_equity")
-    if by is None:
-        new = equity
-    elif old is None:
-        raise SystemExit("기준이 아직 없어요(첫 진입 때 잡힘) — --by 는 기준이 있을 때만")
-    else:
-        new = old + by
-    if not new or new <= 0:
-        raise SystemExit(f"새 기준 ${new or 0:.2f} 는 0 보다 커야 해요")
-    st["start_equity"] = new
-    return old, new
+    st["start_equity"] = eq
+    mark_transfers(api, st, now_ms)                        # 이 잔고에 들어 있는 이체를 나중에 또 세지 않게
+    save_state(st)
+    return (f"📏 XS MOM 손실 한도 기준 {'없음' if old is None else f'${old:,.2f}'} → **${eq:,.2f}**(지금 잔고)"
+            f" · 이제 ${eq * (1 - cfg['max_loss']):,.2f} 아래(−{cfg['max_loss']:.0%})면 청산·정지")
+
+
+def resume():
+    """정지 해제. 포지션이 없으면 기준·몫도 비운다(다음 진입 때 그 잔고로 기준). 안내문을 돌려준다."""
+    st = load_state()
+    was = st.get("halted")
+    st["halted"], st["halt_reason"] = False, None
+    fresh = not st.get("positions")
+    if fresh:
+        st["start_equity"] = None
+        for sl in st["slices"]:
+            sl["qty"] = {}
+    save_state(st)
+    return ("정지 해제" if was else "정지 상태가 아니었어요(그대로)") + (" · 기준은 다음 진입 때 그 잔고로" if fresh else "")
+
+
+def flatten_halt(api, why):
+    st = load_state()
+    done = flatten(api, Market(api), st, why)
+    st["halted"], st["halt_reason"] = True, f"{why} 청산 ({_now()})"
+    save_state(st)
+    return f"청산 {len(done)}개 · 정지(해제: /xs resume)" + (f" · ⚠ 못 닫은 것 {sorted(st['positions'])}" if st["positions"] else "")
+
+
+def request_split():
+    os.makedirs(_dir(), exist_ok=True)
+    with open(_path("split_on"), "w") as f:
+        f.write(_now() + "\n")
+
+
+def compare_text(api, last=2):
+    rs = weekly(compare_all(api))
+    if not rs:
+        return "대조할 주가 없어요(실주문 기록 없음)"
+    out = [fmt_compare(r, short=True) for r in rs[-last:]]
+    if len(rs) > 1:
+        pp, lv = sum(r["paper"] for r in rs), sum(r["live"] for r in rs)
+        out.append(f"합계 {len(rs)}주 · 규칙 ${pp:+.2f} · 실매매 ${lv:+.2f} · 차이 ${lv - pp:+.2f} · 펀딩 ${sum(r['fund'] for r in rs):+.2f}")
+    return "\n".join(out)
+
+
+HALT_BUTTONS = ["xs_compare", "xs_resume"]             # 정지 알림에 붙는 버튼(디스코드 봇이 처리)
+
+
+def run_cmds(api, cfg, now_ms):
+    """디스코드에서 온 명령(xs_cmd)을 실행하고 결과를 #매매 에. 반환: 실행한 명령 이름 목록."""
+    ran = []
+    for req in xs_cmd.take(now_ms):
+        cmd, who = req.get("cmd"), req.get("who") or "?"
+        label = xs_cmd.CMDS.get(cmd, cmd)
+        if req.get("error"):
+            msg = f"⚠️ 디스코드 명령을 못 읽었어요: {req['error']}"
+        elif req.get("expired"):
+            msg = f"⌛ 디스코드 명령 '{label}' 만료(10분 넘게 처리 못 함 — 실행 안 함). 필요하면 다시 보내 주세요."
+        else:
+            try:
+                msg = _run_cmd(api, cfg, cmd, now_ms)
+                ran.append(cmd)
+            except SystemExit as e:
+                msg = f"⚠️ {e}"
+            except Exception as e:      # noqa: BLE001 — 명령 하나 실패가 서비스를 죽이면 안 된다
+                print(traceback.format_exc(), flush=True)
+                msg = f"⚠️ 실패: {type(e).__name__}: {str(e)[:200]}"
+            msg = f"🎛 /xs {label} ({who})\n{msg}"
+        print(f"[{_now()}] {msg}", flush=True)
+        notify(msg[:1900], "trade")
+        xs_cmd.log(dict(at=_now(), cmd=cmd, who=who, expired=req.get("expired"), result=msg[:500]))
+    return ran
+
+
+def _run_cmd(api, cfg, cmd, now_ms):
+    if cmd == "compare":
+        return compare_text(api)
+    if cmd in ("resume", "resume_go"):
+        msg = resume()
+        if cmd == "resume_go":
+            if cfg["mode"] != "live":
+                return msg + f" · 모드 {cfg['mode']} 라 진입 안 함"
+            res = rebalance(api, True, cfg, bar_signal, now_ms=now_ms)
+            _announce(res, cfg["mode"])
+            msg += f" · 진입 {res.get('status')}"
+        return msg
+    if cmd == "flatten":
+        return flatten_halt(api, "디스코드")
+    if cmd == "rebase":
+        return rebase(api, cfg, now_ms)
+    if cmd == "split_on":
+        if split_on(load_state()):
+            return "이미 요일 분산이에요"
+        request_split()
+        return "요청 기록 — 다음 바퀴(1분 안, 교체 차례면 그걸 끝낸 뒤)에 바꾸고 알립니다"
+    raise SystemExit(f"모르는 명령 {cmd}")
 
 
 # ── 실매매 ↔ 규칙 대조 ─────────────────────────────────────────────────────
@@ -865,6 +1024,8 @@ def loop(cfg, api=None, sleep=time.sleep, now=lambda: int(time.time() * 1000), m
                     save_state(st)
                     print(f"[{_now()}] {msg}", flush=True)
                     notify(msg, "trade")
+                if run_cmds(api, cfg, t):
+                    st = load_state()
                 if due(st, t, plan_mode) and t - last_try >= H:
                     last_try = t
                     turn = tuple(due_slices(st, t, plan_mode))
@@ -885,10 +1046,11 @@ def loop(cfg, api=None, sleep=time.sleep, now=lambda: int(time.time() * 1000), m
                         _announce_compare(api, t, res.get("week"))
                 if mode == "live" and t - last_check >= H:
                     last_check = t
-                    hit = check(api, cfg["max_loss"])
+                    hit = check(api, cfg["max_loss"], now_ms=t)
                     if hit:
-                        notify(f"⛔ XS MOM 손실 한도 — 시작 ${hit['base']:.2f} → ${hit['eq']:.2f} ({hit['dd']:+.1%}) · "
-                               f"{hit['closed']}개 청산 · 정지(해제: --resume)", "trade")
+                        notify(f"⛔ XS MOM 손실 한도 — 기준 ${hit['base']:.2f} → ${hit['eq']:.2f} ({hit['dd']:+.1%}) · "
+                               f"{hit['closed']}개 청산 · 정지\n먼저 [대조] 로 실매매가 규칙만큼만 빠졌는지 확인 → 그렇다면 [재개]"
+                               f"(봇·체결 문제면 정지 유지)", "trade", buttons=HALT_BUTTONS)
             except SystemExit as e:
                 err = str(e)
                 notify(f"⚠️ XS MOM 중단 사유: {err}", "system")
@@ -928,7 +1090,9 @@ def _announce(res, mode):
     elif s == "preview":
         msg = f"👀 {res['head']} (모드 plan — 주문 없음) · 계획 주문 {res['n']}건 · 대시보드에서 확인"
     elif s == "halted":
-        msg = "⛔ XS MOM 정지 상태라 이번 차례 리밸런스 안 함(해제: --resume)"
+        notify("⛔ XS MOM 정지 상태라 이번 차례 리밸런스 안 함(해제: /xs resume 또는 아래 [재개])", "trade",
+               buttons=HALT_BUTTONS)
+        return
     else:
         return
     notify(msg, "trade")
@@ -951,33 +1115,12 @@ def main():
         for p in out["positions"]:
             print(f"   {p['symbol']:16} {p['side']} {p['qty']:+.6g} · ${p['value']:+.2f} · 미실현 {p['upnl']:+.4f}")
     elif "--flatten" in sys.argv:
-        st = load_state()
-        done = flatten(api, Market(api), st, "수동")
-        st["halted"], st["halt_reason"] = True, f"수동 청산 ({_now()})"
-        save_state(st)
-        print(f"청산 {len(done)}개 · 정지(해제: --resume)")
+        print(flatten_halt(api, "수동"))
     elif "--resume" in sys.argv:
-        st = load_state()
-        st["halted"], st["halt_reason"] = False, None
-        if not st.get("positions"):
-            st["start_equity"] = None
-            for sl in st["slices"]:
-                sl["qty"] = {}
-        save_state(st)
-        print("정지 해제")
+        print(resume())
     elif "--rebase" in sys.argv:
-        st = load_state()
-        by = _arg("by")
-        eq = account(api)["total_margin"]
-        old, new = rebase(st, eq, float(by) if by is not None else None)
-        save_state(st)
-        lim = new * (1 - cfg["max_loss"])
-        msg = (f"📏 XS MOM 손실 한도 기준 {'없음' if old is None else f'${old:.2f}'} → **${new:.2f}**"
-               + (f" ({float(by):+.2f})" if by is not None else " (지금 잔고)")
-               + f" · 이제 ${lim:.2f} 아래(−{cfg['max_loss']:.0%})면 청산·정지 · 지금 잔고 ${eq:.2f}")
+        msg = rebase(api, cfg)
         print(msg)
-        if eq <= lim:
-            print("⚠ 지금 잔고가 이미 한도 아래예요 — 다음 점검(1시간 안)에 청산됩니다. 출금 전이면 출금 금액을 확인하세요.")
         notify(msg, "trade")
     elif "--split-on" in sys.argv:
         st = load_state()
@@ -988,12 +1131,10 @@ def main():
                   "  · 바꾸는 순간 주문 없음. 그다음 7일 동안 매일 00:15 UTC 에 그 요일 몫 1/7 만 교체\n"
                   "  · 한 몫분 주문이 $5 미만이면 그 몫은 쉼(2배 · 30개 기준 자본 ≥ ~$530, 대상 많은 주 ~$1,100)\n"
                   f"  · 지금 마진 잔고 ${account(api)['margin']:.2f}\n"
-                  "  · 자금을 넣었다면 먼저 --rebase(손실 한도 기준을 지금 잔고로 — 안 하면 한도가 늦게 걸림)\n"
+                  "  · 입금은 손실 한도 기준에 자동 반영(매시간 이체 기록 확인 · #매매 알림)\n"
                   "진행하려면: python -m engine.xs_bot --split-on --yes")
         else:
-            os.makedirs(_dir(), exist_ok=True)
-            with open(_path("split_on"), "w") as f:
-                f.write(_now() + "\n")
+            request_split()
             print("요청 기록 — 서비스가 다음 바퀴(1분 안, 교체 차례면 그걸 끝낸 뒤)에 바꾸고 #매매 에 알립니다")
     elif "--compare" in sys.argv:
         rs = weekly(compare_all(api))
@@ -1009,7 +1150,7 @@ def main():
         rebalance(api, "--go" in sys.argv, cfg)
     else:
         raise SystemExit("--loop | --plan | --go | --check | --status | --flatten | --resume | --compare | --split-on [--yes] | "
-                         "--rebase [--by=±금액]")
+                         "--rebase")
 
 
 if __name__ == "__main__":

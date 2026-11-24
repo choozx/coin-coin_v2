@@ -18,6 +18,8 @@
     STATE_PATH / LEDGER_PATH / CONTROL_PATH 대시보드와 동일(data/state.json·trades.db·control.json)
 
 명령: /status /position /stats /info /collect (조회) · /control (시작/정지) · /flat (즉시청산) · /strategy /config (변경).
+XS MOM: /xs status|compare|resume|flatten|rebase|split-on — 여긴 키가 없다. 요청 파일만 남기고(engine.xs_cmd)
+  xsbot 이 1분 안에 실행해 #매매 에 결과를 올린다. 실돈 명령(resume·flatten·rebase·split-on)은 확인 버튼을 한 번 더.
 알림 버튼: 트레이더가 보낸 알림(진입·에러·워치독)의 [정지]/[즉시청산]/[상태] 버튼을 여기서 처리
 (persistent view, custom_id 는 engine.notifier 와 일치 → 재시작·프로세스 경계 넘어 동작).
 보안: 모든 응답 ephemeral(요청자만) + 유저 화이트리스트(버튼·선택·모달 모두 재검문).
@@ -36,6 +38,7 @@ from . import discord_views as views
 from . import ledger
 from . import notifier
 from . import preset
+from . import xs_cmd
 
 
 def load_state(path: str) -> dict:
@@ -149,6 +152,58 @@ def run() -> None:
                 c.disabled = True
             await interaction.response.edit_message(content="취소됨.", view=self)
 
+    def _who(interaction):
+        return getattr(interaction.user, "name", None) or str(interaction.user)
+
+    def _xs_send(cmd, who):
+        xs_cmd.request(cmd, who=who)
+
+    XS_QUEUED = "요청됨 — xsbot 이 1분 안에 실행하고 결과를 #매매 에 올립니다."
+
+    def xs_resume_text():
+        d = xs_cmd.load_status()
+        head = (f"지금 **정지** — {d.get('halt_reason') or '사유 없음'}" if d.get("halted")
+                else "지금 정지 상태가 아니에요(눌러도 그대로).")
+        return (f"**XS MOM 정지 해제** · {head}\n먼저 /xs compare 로 실매매가 규칙만큼만 빠졌는지 확인하세요"
+                f"(훨씬 더 빠졌으면 봇·체결 문제 — 정지 유지).\n"
+                f"· **재개**: 다음 리밸런스({d.get('next_rebalance', '?')})부터 진입\n· **재개 + 지금 진입**: 바로 최근 목록으로 진입")
+
+    class XsResumeView(discord.ui.View):
+        """XS 정지 해제 — [재개] [재개 + 지금 진입] [취소]."""
+
+        def __init__(self):
+            super().__init__(timeout=300)
+
+        async def interaction_check(self, interaction) -> bool:
+            if interaction.user.id in allowed:
+                return True
+            await interaction.response.send_message("⛔ 권한 없음", ephemeral=True)
+            return False
+
+        async def _done(self, interaction, cmd):
+            try:
+                _xs_send(cmd, _who(interaction))
+                msg = f"✅ {xs_cmd.CMDS[cmd]} — {XS_QUEUED}"
+            except Exception as e:
+                msg = f"⚠️ 실패: {e}"
+            for c in self.children:
+                c.disabled = True
+            await interaction.response.edit_message(content=msg, view=self)
+
+        @discord.ui.button(label="재개", emoji="▶️", style=discord.ButtonStyle.success)
+        async def resume(self, interaction, button):
+            await self._done(interaction, "resume")
+
+        @discord.ui.button(label="재개 + 지금 진입", emoji="⏩", style=discord.ButtonStyle.primary)
+        async def resume_go(self, interaction, button):
+            await self._done(interaction, "resume_go")
+
+        @discord.ui.button(label="취소", style=discord.ButtonStyle.secondary)
+        async def cancel(self, interaction, button):
+            for c in self.children:
+                c.disabled = True
+            await interaction.response.edit_message(content="취소됨.", view=self)
+
     class AlertActionView(discord.ui.View):
         """알림 메시지에 붙는 버튼들의 처리기(persistent). 트레이더가 보낸 알림의 버튼을 눌러도
         여기(discordbot)가 custom_id 로 라우팅해 처리한다. timeout=None + 고정 custom_id 라
@@ -187,6 +242,17 @@ def run() -> None:
                 "**즉시청산 확인** — 지금 포지션을 시장가로 닫고 정지합니다.",
                 view=ConfirmView(lambda: control.request_flatten(control_path), "즉시청산 요청됨 — 다음 폴에 청산"),
                 ephemeral=True)
+
+        @discord.ui.button(label="대조", emoji="🔍", style=discord.ButtonStyle.primary,
+                           custom_id=notifier.CID_XS_COMPARE)
+        async def xs_compare_btn(self, interaction, button):
+            _xs_send("compare", _who(interaction))
+            await interaction.response.send_message(f"🔍 XS 대조 {XS_QUEUED}", ephemeral=True)
+
+        @discord.ui.button(label="재개", emoji="▶️", style=discord.ButtonStyle.success,
+                           custom_id=notifier.CID_XS_RESUME)
+        async def xs_resume_btn(self, interaction, button):
+            await interaction.response.send_message(xs_resume_text(), view=XsResumeView(), ephemeral=True)
 
     class StrategySelect(discord.ui.Select):
         """전략 선택 드롭다운 → 고르면 확인 단계로. Discord 옵션 상한 25개."""
@@ -338,6 +404,69 @@ def run() -> None:
             return
         eff = views.effective_config(preset.bot_config_info())
         await interaction.response.send_modal(ConfigModal(eff))
+
+    # ── XS MOM (/xs …) — 요청 파일만 남기고 xsbot 이 실행 ──
+    xs = app_commands.Group(name="xs", description="XS MOM(알트 롱숏) — 상태·대조·재개·청산·기준·요일 분산")
+
+    @xs.command(name="status", description="XS 잔고·기준·노출·다음 리밸런스(5분마다 갱신된 값)")
+    async def xs_status(interaction: "discord.Interaction"):
+        if not await guard(interaction):
+            return
+        await interaction.response.send_message(xs_cmd.status_text(xs_cmd.load_status()), ephemeral=True)
+
+    @xs.command(name="compare", description="실매매 ↔ 규칙 대조(회전 비용 bp) — 결과는 #매매 에")
+    async def xs_compare(interaction: "discord.Interaction"):
+        if not await guard(interaction):
+            return
+        _xs_send("compare", _who(interaction))
+        await interaction.response.send_message(f"🔍 {XS_QUEUED}", ephemeral=True)
+
+    @xs.command(name="resume", description="XS 정지 해제(다음 리밸런스부터 · 또는 지금 진입)")
+    async def xs_resume(interaction: "discord.Interaction"):
+        if not await guard(interaction):
+            return
+        await interaction.response.send_message(xs_resume_text(), view=XsResumeView(), ephemeral=True)
+
+    @xs.command(name="flatten", description="XS 포지션 전량 시장가 청산 + 정지(긴급)")
+    async def xs_flatten(interaction: "discord.Interaction"):
+        if not await guard(interaction):
+            return
+        d = xs_cmd.load_status()
+        who = _who(interaction)
+        await interaction.response.send_message(
+            f"**XS 전량 청산 확인** — 포지션 {len(d.get('positions') or [])}개를 시장가로 닫고 정지합니다"
+            f"(다른 봇 포지션은 안 건드림). 다시 시작은 /xs resume.",
+            view=ConfirmView(lambda: _xs_send("flatten", who), f"청산 {XS_QUEUED}"), ephemeral=True)
+
+    @xs.command(name="rebase", description="손실 한도 기준을 지금 잔고로(입출금은 자동 반영 — 수익을 지킬 때 등)")
+    async def xs_rebase(interaction: "discord.Interaction"):
+        if not await guard(interaction):
+            return
+        d = xs_cmd.load_status()
+        eq, base, ml = d.get("equity"), d.get("start_equity"), d.get("max_loss") or 0.30
+        who = _who(interaction)
+        now = (f"지금 기준 ${base:,.2f} → 잔고 ${eq:,.2f} 로 · 한도 ${eq * (1 - ml):,.2f}" if eq and base
+               else "기준·잔고를 아직 몰라요(status.json) — 실행 때 xsbot 이 실제 잔고로 잡습니다")
+        await interaction.response.send_message(
+            f"**XS 손실 한도 기준 다시 잡기** — {now}.\n입출금은 매시간 자동으로 반영되니 보통은 필요 없어요. "
+            f"수익이 쌓였을 때 올리면 번 돈을 지키는 대신 더 자주 멈춥니다.",
+            view=ConfirmView(lambda: _xs_send("rebase", who), f"기준 변경 {XS_QUEUED}"), ephemeral=True)
+
+    @xs.command(name="split-on", description="요일 분산 켜기(7몫 · 매일 1/7 교체) — 한 번 켜면 되돌리지 않음")
+    async def xs_split_on(interaction: "discord.Interaction"):
+        if not await guard(interaction):
+            return
+        d = xs_cmd.load_status()
+        who = _who(interaction)
+        if d.get("split"):
+            await interaction.response.send_message(f"이미 요일 분산이에요({d.get('split_since')} 부터).", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            f"**요일 분산 켜기 확인** — 되돌리는 기능은 없어요.\n· 켜는 순간 주문 없음, 그다음 7일 동안 매일 00:15 UTC 에 1/7 씩 교체\n"
+            f"· 한 몫 주문이 $5 미만이면 그 몫은 쉼 — 2배 기준 자본 ≥ ~$530(지금 잔고 ${d.get('equity') or 0:,.2f})",
+            view=ConfirmView(lambda: _xs_send("split_on", who), f"요일 분산 {XS_QUEUED}"), ephemeral=True)
+
+    tree.add_command(xs)
 
     # ── 정기 요약: 매일 지정 시각에 지난 24시간 거래를 채널로 push ──
     import datetime as _dt

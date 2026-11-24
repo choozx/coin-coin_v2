@@ -23,11 +23,14 @@ _CATEGORY_LABEL = {"trade": "매매", "system": "모니터링", "digest": "일�
 # 알림 버튼(components). custom_id 는 discord_bot 의 persistent view 와 일치해야 클릭이 라우팅된다.
 # 웹훅 모드에선 버튼이 무시된다(웹훅 메시지엔 인터랙티브 컴포넌트를 못 붙임).
 CID_PAUSE, CID_RESUME, CID_FLATTEN, CID_STATUS = "act_pause", "act_resume", "act_flatten", "act_status"
+CID_XS_COMPARE, CID_XS_RESUME = "xs_compare", "xs_resume"   # XS MOM 정지 알림(engine.xs_bot) — 처리는 discord_bot
 _BUTTON_SPEC = {                                   # friendly key → 디스코드 버튼 스펙(style: 2=회색,3=초록,4=빨강,1=파랑)
     "pause":   {"cid": CID_PAUSE,   "label": "정지",     "emoji": "⏸", "style": 2},
     "resume":  {"cid": CID_RESUME,  "label": "재개",     "emoji": "▶️", "style": 3},
     "flatten": {"cid": CID_FLATTEN, "label": "즉시청산", "emoji": "🛑", "style": 4},
     "status":  {"cid": CID_STATUS,  "label": "상태",     "emoji": "📊", "style": 1},
+    "xs_compare": {"cid": CID_XS_COMPARE, "label": "대조", "emoji": "🔍", "style": 1},
+    "xs_resume":  {"cid": CID_XS_RESUME,  "label": "재개", "emoji": "▶️", "style": 3},
 }
 
 

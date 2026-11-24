@@ -57,7 +57,8 @@ class FakeApi:
             m = self.marks[p["symbol"]]
             return {"bidPrice": str(m * 0.999), "askPrice": str(m * 1.001)}
         if path == "/fapi/v1/income":
-            return [r for r in self.income if p["startTime"] <= r["time"] <= p["endTime"]]
+            return [r for r in self.income if p["startTime"] <= r["time"] <= p["endTime"]
+                    and r.get("incomeType", "FUNDING_FEE") == p.get("incomeType", r.get("incomeType", "FUNDING_FEE"))]
         if path == "/fapi/v1/userTrades":
             return [{"qty": "1", "price": "1", "commission": "0.001", "commissionAsset": "USDT"}]
         raise KeyError(path)
@@ -484,7 +485,7 @@ def test_halted_announces_once_per_turn_not_hourly(monkeypatch):
     xb.save_state(st)
     n0 = len(api.orders)
     said = []
-    monkeypatch.setattr(xb, "notify", lambda msg, cat=None: said.append(msg))
+    monkeypatch.setattr(xb, "notify", lambda msg, cat=None, **k: said.append(msg))
     monkeypatch.setattr(xb, "bar_signal", lambda o: ({"A": 1.0}, {"B": 1.0}))
     t = NOW + 7 * DAY                                      # 다음 주 화 00:16 — 차례
     ts = [t + i * xb.H for i in range(5)] + [t + 7 * DAY + i * xb.H for i in range(3)]
@@ -501,37 +502,163 @@ def _cli(monkeypatch, api, *args):
     xb.main()
 
 
-def test_rebase_after_deposit_moves_loss_limit_to_new_equity(monkeypatch):
-    """입금($30 → $100) 뒤 --rebase 안 하면 −30% 가 $21 에서야 걸린다 → 기준을 지금 잔고로."""
+def test_rebase_sets_base_to_current_equity_and_notifies(monkeypatch):
+    """--rebase = 기준을 지금 잔고로(수익을 지킬 때 등). 바뀐 기준·한도 금액을 알린다."""
     api = FakeApi({"A": 1.0, "B": 1.0}, margin=30.0)
     rb(api, True, CFG, sig({"A": 1}, {"B": 1}))
     api.margin = 100.0
     said = []
     monkeypatch.setattr(xb, "notify", lambda m, *a, **k: said.append(m))
     _cli(monkeypatch, api, "--rebase")
-    assert xb.load_state()["start_equity"] == 100.0 and "$30.00 → **$100.00**" in said[0]
+    assert xb.load_state()["start_equity"] == 100.0 and "$30.00 → **$100.00**" in said[0] and "$70.00 아래" in said[0]
     api.margin = 65.0                                      # 새 기준 대비 −35%
     assert xb.check(api, 0.30) and xb.load_state()["halted"]
 
 
-def test_rebase_by_before_withdrawal_prevents_false_loss_halt(monkeypatch):
-    """출금 전 --by=-금액 → 출금으로 잔고가 줄어도 손실로 보지 않는다. 기준·포지션 외엔 건드리지 않음."""
+def _xfer(tid, amt, t, asset="USDT"):
+    return dict(incomeType="TRANSFER", income=str(amt), asset=asset, time=t, tranId=tid, symbol="")
+
+
+def test_deposit_is_detected_and_raises_base(monkeypatch):
+    """입금이 자동으로 기준에 더해진다 → 한도가 새 잔고 기준으로 걸린다. 같은 이체는 두 번 세지 않는다."""
+    api = FakeApi({"A": 1.0, "B": 1.0}, margin=30.0)
+    rb(api, True, CFG, sig({"A": 1}, {"B": 1}))            # 기준 $30 · 이체 기록 시작점 = NOW
+    said = []
+    monkeypatch.setattr(xb, "notify", lambda m, *a, **k: said.append(m))
+    api.income = [_xfer(7, 70, NOW + 3_600_000)]
+    api.margin = 100.0
+    assert xb.check(api, 0.30, now_ms=NOW + 2 * 3_600_000) is None
+    assert xb.load_state()["start_equity"] == 100.0 and "+70.00" in said[0] and "**$100.00**" in said[0]
+    assert xb.check(api, 0.30, now_ms=NOW + 3 * 3_600_000) is None
+    assert xb.load_state()["start_equity"] == 100.0 and len(said) == 1          # 겹쳐 읽어도 tranId 로 한 번만
+    api.margin = 65.0
+    assert xb.check(api, 0.30, now_ms=NOW + 4 * 3_600_000) and xb.load_state()["halted"]
+
+
+def test_withdrawal_lowers_base_instead_of_false_loss_halt(monkeypatch):
+    """출금($12 / $30 = −40%)을 손실로 보고 청산하던 것 → 기준을 내리고 아무것도 안 판다. 늦게 잡힌 출금도(20초 뒤 재확인)."""
     api = FakeApi({"A": 1.0, "B": 1.0}, margin=30.0)
     rb(api, True, CFG, sig({"A": 1}, {"B": 1}))
-    before = xb.load_state()
-    _cli(monkeypatch, api, "--rebase", "--by=-12")
-    st = xb.load_state()
-    assert st["start_equity"] == 18.0 and st["positions"] == before["positions"] and st["slices"] == before["slices"]
-    api.margin = 18.0                                      # $12 출금 — 그냥 두면 −40% 로 청산됐다
     api.orders.clear()
-    assert xb.check(api, 0.30) is None and api.orders == []
+    api.margin = 18.0
+    api.income = [_xfer(8, -12, NOW + 3_600_000)]
+    assert xb.check(api, 0.30, now_ms=NOW + 2 * 3_600_000) is None
+    st = xb.load_state()
+    assert st["start_equity"] == 18.0 and not st["halted"] and api.orders == []
+    # 이체 기록이 늦게 잡힌 경우: 첫 조회엔 없고 한도 직전 재확인 때 보인다
+    late = []
+
+    def call(method, path, params=None, signed=False, retries=3, _real=api.call):
+        if path == "/fapi/v1/income" and params.get("incomeType") == "TRANSFER":
+            late.append(1)
+            return [_xfer(9, -9, NOW + 4 * 3_600_000)] if len(late) > 1 else []
+        return _real(method, path, params, signed, retries)
+    monkeypatch.setattr(api, "call", call)
+    api.margin = 9.0                                       # $18 → $9: 출금 $9
+    assert xb.check(api, 0.30, now_ms=NOW + 5 * 3_600_000) is None and api.orders == []
+    assert xb.load_state()["start_equity"] == 9.0
 
 
-def test_rebase_by_needs_existing_base_and_positive_result(monkeypatch):
+def test_old_transfers_are_not_applied_retroactively_or_after_rebase(monkeypatch):
+    """이 기능 전부터 돌던 상태(transfer_seen 없음) · --rebase 직후엔 이미 잔고에 든 이체를 다시 세지 않는다."""
     api = FakeApi({"A": 1.0, "B": 1.0}, margin=30.0)
-    with pytest.raises(SystemExit):
-        _cli(monkeypatch, api, "--rebase", "--by=-5")      # 첫 진입 전엔 기준 없음
     rb(api, True, CFG, sig({"A": 1}, {"B": 1}))
-    with pytest.raises(SystemExit):
-        _cli(monkeypatch, api, "--rebase", "--by=-30")     # 기준 0 이하
+    st = xb.load_state()
+    st.pop("transfer_seen")
+    xb.save_state(st)
+    api.income = [_xfer(1, 50, NOW - 5 * 60_000)]           # 예전 이체(이미 기준에 들어 있음)
+    assert xb.check(api, 0.30, now_ms=NOW + 60_000) is None
     assert xb.load_state()["start_equity"] == 30.0
+    api.income.append(_xfer(2, 40, NOW + 10 * 60_000))
+    api.margin = 70.0
+    xb.rebase(api, CFG, now_ms=NOW + 11 * 60_000)          # 지금 잔고 $70 에 방금 이체 $40 이 이미 들어 있다
+    st = xb.load_state()
+    assert st["start_equity"] == 70.0 and "2" in st["transfer_ids"]
+    assert xb.check(api, 0.30, now_ms=NOW + 20 * 60_000) is None and xb.load_state()["start_equity"] == 70.0
+
+
+def test_non_usd_transfer_is_reported_not_counted(monkeypatch):
+    api = FakeApi({"A": 1.0, "B": 1.0}, margin=30.0)
+    rb(api, True, CFG, sig({"A": 1}, {"B": 1}))
+    said = []
+    monkeypatch.setattr(xb, "notify", lambda m, *a, **k: said.append(m))
+    api.income = [_xfer(5, 0.1, NOW + 60_000, asset="BNB"), _xfer(6, 10, NOW + 60_000)]
+    xb.check(api, 0.30, now_ms=NOW + 120_000)
+    assert xb.load_state()["start_equity"] == 40.0 and "BNB 0.1" in said[0]
+
+
+# ── 디스코드 명령(xs_cmd) ──
+def test_cmd_queue_roundtrip_expiry_and_bad_file():
+    from engine import xs_cmd
+    xs_cmd.request("compare", who="me", now_ms=NOW)
+    xs_cmd.request("flatten", who="me", now_ms=NOW - 11 * 60_000)
+    with open(os.path.join(xs_cmd.cmd_dir(), "0-bad.json"), "w") as f:
+        f.write("{not json")
+    with pytest.raises(ValueError):
+        xs_cmd.request("rm -rf")
+    got = xs_cmd.take(now_ms=NOW)
+    assert [(r.get("cmd"), r["expired"], bool(r.get("error"))) for r in got] == [
+        (None, False, True), ("flatten", True, False), ("compare", False, False)]
+    assert xs_cmd.take(now_ms=NOW) == []                   # 꺼내면 지워진다 — 두 번 실행 안 됨
+
+
+def test_run_cmds_flatten_resume_go_rebase_and_expired(monkeypatch):
+    from engine import xs_cmd
+    api = FakeApi({"A": 1.0, "B": 1.0, "X": 1.0}, pos={"X": 5.0}, margin=30.0)
+    rb(api, True, CFG, sig({"A": 1}, {"B": 1}))
+    said = []
+    monkeypatch.setattr(xb, "notify", lambda m, *a, **k: said.append(m))
+    monkeypatch.setattr(xb, "bar_signal", lambda o: ({"A": 1.0}, {"B": 1.0}))
+    t = NOW + 3_600_000
+    xs_cmd.request("flatten", who="me", now_ms=t)
+    assert xb.run_cmds(api, CFG, t) == ["flatten"]
+    st = xb.load_state()
+    assert st["halted"] and st["positions"] == {} and api.pos == {"X": 5.0} and "청산 2개" in said[-1]
+    xs_cmd.request("resume", who="me", now_ms=t - 11 * 60_000)    # 만료 — 실행 안 함
+    assert xb.run_cmds(api, CFG, t) == [] and xb.load_state()["halted"] and "만료" in said[-1]
+    xs_cmd.request("resume_go", who="me", now_ms=t)
+    api.orders.clear()
+    assert xb.run_cmds(api, CFG, t) == ["resume_go"]
+    st = xb.load_state()
+    assert not st["halted"] and set(st["positions"]) == {"A", "B"} and api.orders and "진입 done" in said[-1]
+    api.margin = 33.0
+    xs_cmd.request("rebase", who="me", now_ms=t)
+    xb.run_cmds(api, CFG, t)
+    assert xb.load_state()["start_equity"] == 33.0
+    lines = open(os.path.join(os.environ["XS_DIR"], "cmd_log.jsonl")).read().splitlines()
+    assert len(lines) == 4
+
+
+def test_run_cmds_resume_go_in_plan_mode_does_not_order(monkeypatch):
+    from engine import xs_cmd
+    api = FakeApi({"A": 1.0, "B": 1.0}, margin=30.0)
+    xs_cmd.request("resume_go", who="me", now_ms=NOW)
+    said = []
+    monkeypatch.setattr(xb, "notify", lambda m, *a, **k: said.append(m))
+    xb.run_cmds(api, dict(CFG, mode="plan"), NOW)
+    assert api.orders == [] and "진입 안 함" in said[-1]
+
+
+def test_loop_runs_discord_command_and_halt_alert_has_buttons(monkeypatch):
+    from engine import xs_cmd
+    api = FakeApi({"A": 1.0, "B": 1.0}, margin=30.0)
+    sent = []
+    monkeypatch.setattr(xb, "notify", lambda m, *a, **k: sent.append((m, k.get("buttons"))))
+    t = _ms(2026, 11, 17, 0, 16)
+    xs_cmd.request("split_on", who="me", now_ms=t)
+    _run_loop(monkeypatch, api, "live", [t])
+    assert xb.split_requested() and any("/xs 요일 분산" in m for m, _ in sent)
+    api.margin = 20.0                                      # −33% → 손실 한도 알림에 [대조][재개]
+    _run_loop(monkeypatch, api, "live", [t + 2 * 3_600_000])
+    halt = [b for m, b in sent if m.startswith("⛔ XS MOM 손실 한도")]
+    assert halt and halt[0] == ["xs_compare", "xs_resume"]
+
+
+def test_status_text_shows_base_limit_and_halt():
+    from engine import xs_cmd
+    txt = xs_cmd.status_text(dict(mode="live", gross=2, halted=True, halt_reason="손실 한도 −31%", equity=120.0,
+                                  start_equity=174.45, pnl_pct=-0.312, max_loss=0.30, long_usd=0, short_usd=0, upnl=0,
+                                  positions=[], schedule="월요일 하나(주 1회)", next_rebalance="2026-12-01 00:15 UTC",
+                                  updated="x"))
+    assert "정지" in txt and "$122.11 아래" in txt and "−31.2%" not in txt and "-31.2%" in txt
+    assert xs_cmd.status_text({"error": "없음"}).startswith("⚠️")
