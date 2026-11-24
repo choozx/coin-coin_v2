@@ -492,3 +492,46 @@ def test_halted_announces_once_per_turn_not_hourly(monkeypatch):
     xb.loop(dict(CFG), api=api, sleep=lambda s: None, now=lambda: next(it), max_iter=len(ts))
     halted = [m for m in said if "정지 상태" in m]
     assert len(halted) == 2 and len(api.orders) == n0     # 5시간 동안 1번 + 다음 주 1번 · 주문 없음
+
+
+def _cli(monkeypatch, api, *args):
+    monkeypatch.setattr(xb.sys, "argv", ["xs_bot", *args])
+    monkeypatch.setattr(xb.Api, "from_env", classmethod(lambda cls: api))
+    monkeypatch.setattr("engine.env.load_dotenv", lambda *a, **k: 0)
+    xb.main()
+
+
+def test_rebase_after_deposit_moves_loss_limit_to_new_equity(monkeypatch):
+    """입금($30 → $100) 뒤 --rebase 안 하면 −30% 가 $21 에서야 걸린다 → 기준을 지금 잔고로."""
+    api = FakeApi({"A": 1.0, "B": 1.0}, margin=30.0)
+    rb(api, True, CFG, sig({"A": 1}, {"B": 1}))
+    api.margin = 100.0
+    said = []
+    monkeypatch.setattr(xb, "notify", lambda m, *a, **k: said.append(m))
+    _cli(monkeypatch, api, "--rebase")
+    assert xb.load_state()["start_equity"] == 100.0 and "$30.00 → **$100.00**" in said[0]
+    api.margin = 65.0                                      # 새 기준 대비 −35%
+    assert xb.check(api, 0.30) and xb.load_state()["halted"]
+
+
+def test_rebase_by_before_withdrawal_prevents_false_loss_halt(monkeypatch):
+    """출금 전 --by=-금액 → 출금으로 잔고가 줄어도 손실로 보지 않는다. 기준·포지션 외엔 건드리지 않음."""
+    api = FakeApi({"A": 1.0, "B": 1.0}, margin=30.0)
+    rb(api, True, CFG, sig({"A": 1}, {"B": 1}))
+    before = xb.load_state()
+    _cli(monkeypatch, api, "--rebase", "--by=-12")
+    st = xb.load_state()
+    assert st["start_equity"] == 18.0 and st["positions"] == before["positions"] and st["slices"] == before["slices"]
+    api.margin = 18.0                                      # $12 출금 — 그냥 두면 −40% 로 청산됐다
+    api.orders.clear()
+    assert xb.check(api, 0.30) is None and api.orders == []
+
+
+def test_rebase_by_needs_existing_base_and_positive_result(monkeypatch):
+    api = FakeApi({"A": 1.0, "B": 1.0}, margin=30.0)
+    with pytest.raises(SystemExit):
+        _cli(monkeypatch, api, "--rebase", "--by=-5")      # 첫 진입 전엔 기준 없음
+    rb(api, True, CFG, sig({"A": 1}, {"B": 1}))
+    with pytest.raises(SystemExit):
+        _cli(monkeypatch, api, "--rebase", "--by=-30")     # 기준 0 이하
+    assert xb.load_state()["start_equity"] == 30.0

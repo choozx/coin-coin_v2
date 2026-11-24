@@ -17,9 +17,11 @@
 안전: XS_MODE=live 일 때만 실주문(기본 plan = 목록·주문 계획만 대시보드에) · 헤지 모드면 중단 ·
   다른 포지션이 있는 심볼·BTCUSDC 는 뺀다 · 심볼별 교차 마진 + 레버리지 min(5, 심볼 최대) · 컨테이너가 재시작돼도 청산하지 않는다.
 ⚠ 손실 한도는 계정 전체 마진 잔고 기준 → 같은 메인넷 계정에서 다른 실험이 돌면 그 손익도 섞인다.
+  입출금도 손익과 구분하지 못한다 → 입금 뒤 --rebase(안 하면 한도가 늦게 걸림) · 출금 전 --rebase --by=-금액(안 하면 손실로 보고 청산).
 
 서비스:  python -m engine.xs_bot --loop                (XS_MODE=off|plan|live)
 분산:    python -m engine.xs_bot --split-on --yes     요일 분산으로 바꾸기(한 번 · 되돌리지 않음). --yes 없으면 설명만
+기준:    python -m engine.xs_bot --rebase [--by=±금액]  손실 한도 기준(시작 자본)을 지금 잔고로(입금 뒤) · 금액만큼 옮기기(출금 전)
 수동:    python -m engine.xs_bot --plan | --go | --check | --status | --flatten | --resume   [--top=N 체결 확인용 · 규칙 아님]
 대조:    python -m engine.xs_bot --compare   주별 실매매 ↔ 규칙(월요일 종가 체결) 차이 = 체결 지연·슬리피지·수수료·수량 차이.
          live 면 화요일 리밸런스 뒤 지난주 확정분을 #매매 에 자동으로 올린다.
@@ -568,6 +570,21 @@ def check(api, max_loss):
     return dict(dd=dd, closed=len(done), base=base, eq=eq)
 
 
+def rebase(st, equity, by=None):
+    """손실 한도 기준(start_equity) 다시 잡기. by 없으면 지금 잔고로, 있으면 기준 ± by. 반환 (전, 후). 저장은 부르는 쪽."""
+    old = st.get("start_equity")
+    if by is None:
+        new = equity
+    elif old is None:
+        raise SystemExit("기준이 아직 없어요(첫 진입 때 잡힘) — --by 는 기준이 있을 때만")
+    else:
+        new = old + by
+    if not new or new <= 0:
+        raise SystemExit(f"새 기준 ${new or 0:.2f} 는 0 보다 커야 해요")
+    st["start_equity"] = new
+    return old, new
+
+
 # ── 실매매 ↔ 규칙 대조 ─────────────────────────────────────────────────────
 # 규칙(종이) = 같은 목표 수량을 신호 봉 종가에 체결했다고 보고, 다음 교체 봉 종가(진행 중이면 현재 마크)까지의 가격 손익.
 # 구간 = 리밸런스 기록 하나(hold 일: 월요일 하나 = 7 · 요일 분산 = 1 → 보여 줄 땐 주 단위로 합친다).
@@ -948,6 +965,20 @@ def main():
                 sl["qty"] = {}
         save_state(st)
         print("정지 해제")
+    elif "--rebase" in sys.argv:
+        st = load_state()
+        by = _arg("by")
+        eq = account(api)["total_margin"]
+        old, new = rebase(st, eq, float(by) if by is not None else None)
+        save_state(st)
+        lim = new * (1 - cfg["max_loss"])
+        msg = (f"📏 XS MOM 손실 한도 기준 {'없음' if old is None else f'${old:.2f}'} → **${new:.2f}**"
+               + (f" ({float(by):+.2f})" if by is not None else " (지금 잔고)")
+               + f" · 이제 ${lim:.2f} 아래(−{cfg['max_loss']:.0%})면 청산·정지 · 지금 잔고 ${eq:.2f}")
+        print(msg)
+        if eq <= lim:
+            print("⚠ 지금 잔고가 이미 한도 아래예요 — 다음 점검(1시간 안)에 청산됩니다. 출금 전이면 출금 금액을 확인하세요.")
+        notify(msg, "trade")
     elif "--split-on" in sys.argv:
         st = load_state()
         if split_on(st):
@@ -957,6 +988,7 @@ def main():
                   "  · 바꾸는 순간 주문 없음. 그다음 7일 동안 매일 00:15 UTC 에 그 요일 몫 1/7 만 교체\n"
                   "  · 한 몫분 주문이 $5 미만이면 그 몫은 쉼(2배 · 30개 기준 자본 ≥ ~$530, 대상 많은 주 ~$1,100)\n"
                   f"  · 지금 마진 잔고 ${account(api)['margin']:.2f}\n"
+                  "  · 자금을 넣었다면 먼저 --rebase(손실 한도 기준을 지금 잔고로 — 안 하면 한도가 늦게 걸림)\n"
                   "진행하려면: python -m engine.xs_bot --split-on --yes")
         else:
             os.makedirs(_dir(), exist_ok=True)
@@ -976,7 +1008,8 @@ def main():
     elif "--go" in sys.argv or "--plan" in sys.argv:
         rebalance(api, "--go" in sys.argv, cfg)
     else:
-        raise SystemExit("--loop | --plan | --go | --check | --status | --flatten | --resume | --compare | --split-on [--yes]")
+        raise SystemExit("--loop | --plan | --go | --check | --status | --flatten | --resume | --compare | --split-on [--yes] | "
+                         "--rebase [--by=±금액]")
 
 
 if __name__ == "__main__":
